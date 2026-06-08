@@ -87,7 +87,7 @@ class GhostRef(BaseModel):
     )
 
     def has_arg(self, arg_name: str) -> bool:
-        """Checks if a specific argument exists in the signature.
+        """Check if a specific argument exists in the signature.
 
         Args:
             arg_name: The argument name to find.

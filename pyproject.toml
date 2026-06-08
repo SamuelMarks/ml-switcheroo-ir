@@ -26,3 +26,8 @@ ml-switcheroo-ir = "ml_switcheroo_ir.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/ml-switcheroo/ml-switcheroo-ir"
+
+[tool.ruff]
+exclude = [
+    "third_party",
+]

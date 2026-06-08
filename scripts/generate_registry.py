@@ -183,7 +183,7 @@ def main():
         lines.append(f'    "{op_name}": OpSchema(')
         lines.append(f'        name="{op_name}",')
         lines.append(f'        domain="{op_data["domain"]}",')
-        lines.append(f'        version={op_data["version"]},')
+        lines.append(f"        version={op_data['version']},")
         lines.append("        attributes={")
         for attr_name, attr_data in sorted(op_data["attributes"].items()):
             req = str(attr_data["required"])

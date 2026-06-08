@@ -456,6 +456,15 @@ def test_cli_main_list_ops(capsys):
     assert "Abs" in out
 
 
+def test_cli_main_list_ops_no_filters(capsys):
+    from ml_switcheroo_ir.cli import main as cli_main
+
+    cli_main(["list-ops"])
+    out = capsys.readouterr().out
+    assert "Abs" in out
+    assert "Add" in out
+
+
 def test_cli_compliance_not_found(capsys):
     from ml_switcheroo_ir.cli import main as cli_main
     import pytest

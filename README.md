@@ -2,7 +2,7 @@ ml-switcheroo-ir
 ================
 
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-![Test Coverage](https://img.shields.io/badge/Test_Coverage-100.0%25-brightgreen)
+![Test Coverage](https://img.shields.io/badge/Test_Coverage-94.0%25-brightgreen)
 ![Doc Coverage](https://img.shields.io/badge/Doc_Coverage-100.0%25-brightgreen)
 > The universal, dependency-free intermediate representation for the `ml-switcheroo` ecosystem.
 

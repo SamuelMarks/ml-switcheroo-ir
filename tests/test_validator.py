@@ -175,6 +175,11 @@ def test_validator_list_type_check_errors(validator):
     errors3 = validator.validate_attribute_types(node3)
     assert errors3[0].attribute == "alpha"
 
+    # Float type with int value (should be valid)
+    node4 = LogicalNode(id="gemm2", kind="Gemm", metadata={"alpha": 2})
+    errors4 = validator.validate_attribute_types(node4)
+    assert not errors4
+
 
 def test_validator_various_types():
     """Test string, List[float], List[str], bool, etc."""
