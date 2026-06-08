@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ml-switcheroo-ir"
+version = "0.1.0"
+description = "Intermediate Representation for ml-switcheroo"
+authors = [
+    { name = "ml-switcheroo authors" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "tabulate",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0"
+]
+
+[project.scripts]
+ml-switcheroo-ir = "ml_switcheroo_ir.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ml-switcheroo/ml-switcheroo-ir"

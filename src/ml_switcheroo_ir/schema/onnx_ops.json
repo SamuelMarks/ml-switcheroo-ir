@@ -1,0 +1,4307 @@
+{
+  "Abs": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Acos": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Acosh": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Add": {
+    "domain": "ai.onnx",
+    "version": 14,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "AffineGrid": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {
+      "align_corners": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "theta",
+      "size"
+    ],
+    "outputs": [
+      "grid"
+    ]
+  },
+  "And": {
+    "domain": "ai.onnx",
+    "version": 7,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "ArgMax": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "select_last_index": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ArgMin": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "select_last_index": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "Asin": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Asinh": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Atan": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Atanh": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Attention": {
+    "domain": "ai.onnx",
+    "version": 24,
+    "attributes": {
+      "is_causal": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "kv_num_heads": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "q_num_heads": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "qk_matmul_output_mode": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "scale": {
+        "type": "float",
+        "required": false,
+        "default": null
+      },
+      "softcap": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "softmax_precision": {
+        "type": "int",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "Q",
+      "K",
+      "V",
+      "attn_mask",
+      "past_key",
+      "past_value",
+      "nonpad_kv_seqlen"
+    ],
+    "outputs": [
+      "Y",
+      "present_key",
+      "present_value",
+      "qk_matmul_output"
+    ]
+  },
+  "AveragePool": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "auto_pad": {
+        "type": "str",
+        "required": false,
+        "default": "NOTSET"
+      },
+      "ceil_mode": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "count_include_pad": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "dilations": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "kernel_shape": {
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "BatchNormalization": {
+    "domain": "ai.onnx",
+    "version": 15,
+    "attributes": {
+      "epsilon": {
+        "type": "float",
+        "required": false,
+        "default": 1e-05
+      },
+      "momentum": {
+        "type": "float",
+        "required": false,
+        "default": 0.9
+      },
+      "training_mode": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "X",
+      "scale",
+      "B",
+      "input_mean",
+      "input_var"
+    ],
+    "outputs": [
+      "Y",
+      "running_mean",
+      "running_var"
+    ]
+  },
+  "Bernoulli": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "dtype": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "seed": {
+        "type": "float",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "BitCast": {
+    "domain": "ai.onnx",
+    "version": 26,
+    "attributes": {
+      "to": {
+        "type": "int",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "BitShift": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {
+      "direction": {
+        "type": "str",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X",
+      "Y"
+    ],
+    "outputs": [
+      "Z"
+    ]
+  },
+  "BitwiseAnd": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "BitwiseNot": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "BitwiseOr": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "BitwiseXor": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "BlackmanWindow": {
+    "domain": "ai.onnx",
+    "version": 17,
+    "attributes": {
+      "output_datatype": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "periodic": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "size"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Cast": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "round_mode": {
+        "type": "str",
+        "required": false,
+        "default": "up"
+      },
+      "saturate": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "to": {
+        "type": "int",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "CastLike": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "round_mode": {
+        "type": "str",
+        "required": false,
+        "default": "up"
+      },
+      "saturate": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "input",
+      "target_type"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "CausalConvWithState": {
+    "domain": "ai.onnx",
+    "version": 27,
+    "attributes": {
+      "activation": {
+        "type": "str",
+        "required": false,
+        "default": "none"
+      }
+    },
+    "inputs": [
+      "input",
+      "weight",
+      "bias",
+      "past_state"
+    ],
+    "outputs": [
+      "output",
+      "present_state"
+    ]
+  },
+  "Ceil": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Celu": {
+    "domain": "ai.onnx",
+    "version": 12,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "CenterCropPad": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "axes": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input_data",
+      "shape"
+    ],
+    "outputs": [
+      "output_data"
+    ]
+  },
+  "Clip": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "input",
+      "min",
+      "max"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Col2Im": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "dilations": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input",
+      "image_shape",
+      "block_shape"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Compress": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input",
+      "condition"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Concat": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "inputs"
+    ],
+    "outputs": [
+      "concat_result"
+    ]
+  },
+  "ConcatFromSequence": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      "new_axis": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "input_sequence"
+    ],
+    "outputs": [
+      "concat_result"
+    ]
+  },
+  "Constant": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "sparse_value": {
+        "type": "Any",
+        "required": false,
+        "default": null
+      },
+      "value": {
+        "type": "Any",
+        "required": false,
+        "default": null
+      },
+      "value_float": {
+        "type": "float",
+        "required": false,
+        "default": null
+      },
+      "value_floats": {
+        "type": "List[float]",
+        "required": false,
+        "default": null
+      },
+      "value_int": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "value_ints": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "value_string": {
+        "type": "str",
+        "required": false,
+        "default": null
+      },
+      "value_strings": {
+        "type": "List[str]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "output"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "ConstantOfShape": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "value": {
+        "type": "Any",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Conv": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "auto_pad": {
+        "type": "str",
+        "required": false,
+        "default": "NOTSET"
+      },
+      "dilations": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "group": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "kernel_shape": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X",
+      "W",
+      "B"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "ConvInteger": {
+    "domain": "ai.onnx",
+    "version": 10,
+    "attributes": {
+      "auto_pad": {
+        "type": "str",
+        "required": false,
+        "default": "NOTSET"
+      },
+      "dilations": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "group": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "kernel_shape": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "x",
+      "w",
+      "x_zero_point",
+      "w_zero_point"
+    ],
+    "outputs": [
+      "y"
+    ]
+  },
+  "ConvTranspose": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "auto_pad": {
+        "type": "str",
+        "required": false,
+        "default": "NOTSET"
+      },
+      "dilations": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "group": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "kernel_shape": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "output_padding": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "output_shape": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X",
+      "W",
+      "B"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Cos": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Cosh": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "CumProd": {
+    "domain": "ai.onnx",
+    "version": 26,
+    "attributes": {
+      "exclusive": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "reverse": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "x",
+      "axis"
+    ],
+    "outputs": [
+      "y"
+    ]
+  },
+  "CumSum": {
+    "domain": "ai.onnx",
+    "version": 14,
+    "attributes": {
+      "exclusive": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "reverse": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "x",
+      "axis"
+    ],
+    "outputs": [
+      "y"
+    ]
+  },
+  "DFT": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {
+      "inverse": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "onesided": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "input",
+      "dft_length",
+      "axis"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "DeformConv": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "dilations": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "group": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "kernel_shape": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "offset_group": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X",
+      "W",
+      "offset",
+      "B",
+      "mask"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "DepthToSpace": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "blocksize": {
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      "mode": {
+        "type": "str",
+        "required": false,
+        "default": "DCR"
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "DequantizeLinear": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "block_size": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "output_dtype": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "x",
+      "x_scale",
+      "x_zero_point"
+    ],
+    "outputs": [
+      "y"
+    ]
+  },
+  "Det": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Div": {
+    "domain": "ai.onnx",
+    "version": 14,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "Dropout": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "seed": {
+        "type": "int",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "data",
+      "ratio",
+      "training_mode"
+    ],
+    "outputs": [
+      "output",
+      "mask"
+    ]
+  },
+  "DynamicQuantizeLinear": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {},
+    "inputs": [
+      "x"
+    ],
+    "outputs": [
+      "y",
+      "y_scale",
+      "y_zero_point"
+    ]
+  },
+  "Einsum": {
+    "domain": "ai.onnx",
+    "version": 12,
+    "attributes": {
+      "equation": {
+        "type": "str",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "Inputs"
+    ],
+    "outputs": [
+      "Output"
+    ]
+  },
+  "Elu": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Equal": {
+    "domain": "ai.onnx",
+    "version": 19,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "Erf": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Exp": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Expand": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "input",
+      "shape"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "EyeLike": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "dtype": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "k": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Flatten": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Floor": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "GRU": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "activation_alpha": {
+        "type": "List[float]",
+        "required": false,
+        "default": null
+      },
+      "activation_beta": {
+        "type": "List[float]",
+        "required": false,
+        "default": null
+      },
+      "activations": {
+        "type": "List[str]",
+        "required": false,
+        "default": null
+      },
+      "clip": {
+        "type": "float",
+        "required": false,
+        "default": null
+      },
+      "direction": {
+        "type": "str",
+        "required": false,
+        "default": "forward"
+      },
+      "hidden_size": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "layout": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "linear_before_reset": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "X",
+      "W",
+      "R",
+      "B",
+      "sequence_lens",
+      "initial_h"
+    ],
+    "outputs": [
+      "Y",
+      "Y_h"
+    ]
+  },
+  "Gather": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "indices"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "GatherElements": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "indices"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "GatherND": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "batch_dims": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "indices"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Gelu": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {
+      "approximate": {
+        "type": "str",
+        "required": false,
+        "default": "none"
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Gemm": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      },
+      "beta": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      },
+      "transA": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "transB": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "A",
+      "B",
+      "C"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "GlobalAveragePool": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "GlobalLpPool": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "p": {
+        "type": "int",
+        "required": false,
+        "default": 2
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "GlobalMaxPool": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Greater": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "GreaterOrEqual": {
+    "domain": "ai.onnx",
+    "version": 16,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "GridSample": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "align_corners": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "mode": {
+        "type": "str",
+        "required": false,
+        "default": "linear"
+      },
+      "padding_mode": {
+        "type": "str",
+        "required": false,
+        "default": "zeros"
+      }
+    },
+    "inputs": [
+      "X",
+      "grid"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "GroupNormalization": {
+    "domain": "ai.onnx",
+    "version": 21,
+    "attributes": {
+      "epsilon": {
+        "type": "float",
+        "required": false,
+        "default": 1e-05
+      },
+      "num_groups": {
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      "stash_type": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "X",
+      "scale",
+      "bias"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "HammingWindow": {
+    "domain": "ai.onnx",
+    "version": 17,
+    "attributes": {
+      "output_datatype": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "periodic": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "size"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "HannWindow": {
+    "domain": "ai.onnx",
+    "version": 17,
+    "attributes": {
+      "output_datatype": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "periodic": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "size"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "HardSigmoid": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 0.2
+      },
+      "beta": {
+        "type": "float",
+        "required": false,
+        "default": 0.5
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "HardSwish": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Hardmax": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": -1
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Identity": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "If": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "else_branch": {
+        "type": "Any",
+        "required": true,
+        "default": null
+      },
+      "then_branch": {
+        "type": "Any",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "cond"
+    ],
+    "outputs": [
+      "outputs"
+    ]
+  },
+  "ImageDecoder": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {
+      "pixel_format": {
+        "type": "str",
+        "required": false,
+        "default": "RGB"
+      }
+    },
+    "inputs": [
+      "encoded_stream"
+    ],
+    "outputs": [
+      "image"
+    ]
+  },
+  "InstanceNormalization": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "epsilon": {
+        "type": "float",
+        "required": false,
+        "default": 1e-05
+      }
+    },
+    "inputs": [
+      "input",
+      "scale",
+      "B"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "IsInf": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {
+      "detect_negative": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "detect_positive": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "IsNaN": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "LRN": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 0.0001
+      },
+      "beta": {
+        "type": "float",
+        "required": false,
+        "default": 0.75
+      },
+      "bias": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      },
+      "size": {
+        "type": "int",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "LSTM": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "activation_alpha": {
+        "type": "List[float]",
+        "required": false,
+        "default": null
+      },
+      "activation_beta": {
+        "type": "List[float]",
+        "required": false,
+        "default": null
+      },
+      "activations": {
+        "type": "List[str]",
+        "required": false,
+        "default": null
+      },
+      "clip": {
+        "type": "float",
+        "required": false,
+        "default": null
+      },
+      "direction": {
+        "type": "str",
+        "required": false,
+        "default": "forward"
+      },
+      "hidden_size": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "input_forget": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "layout": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "X",
+      "W",
+      "R",
+      "B",
+      "sequence_lens",
+      "initial_h",
+      "initial_c",
+      "P"
+    ],
+    "outputs": [
+      "Y",
+      "Y_h",
+      "Y_c"
+    ]
+  },
+  "LayerNormalization": {
+    "domain": "ai.onnx",
+    "version": 17,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": -1
+      },
+      "epsilon": {
+        "type": "float",
+        "required": false,
+        "default": 1e-05
+      },
+      "stash_type": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "X",
+      "Scale",
+      "B"
+    ],
+    "outputs": [
+      "Y",
+      "Mean",
+      "InvStdDev"
+    ]
+  },
+  "LeakyRelu": {
+    "domain": "ai.onnx",
+    "version": 16,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 0.01
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Less": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "LessOrEqual": {
+    "domain": "ai.onnx",
+    "version": 16,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "LinearAttention": {
+    "domain": "ai.onnx",
+    "version": 27,
+    "attributes": {
+      "chunk_size": {
+        "type": "int",
+        "required": false,
+        "default": 64
+      },
+      "kv_num_heads": {
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      "q_num_heads": {
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      "scale": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "update_rule": {
+        "type": "str",
+        "required": false,
+        "default": "gated_delta"
+      }
+    },
+    "inputs": [
+      "query",
+      "key",
+      "value",
+      "past_state",
+      "decay",
+      "beta"
+    ],
+    "outputs": [
+      "output",
+      "present_state"
+    ]
+  },
+  "Log": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "LogSoftmax": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": -1
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Loop": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "body": {
+        "type": "Any",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "M",
+      "cond",
+      "v_initial"
+    ],
+    "outputs": [
+      "v_final_and_scan_outputs"
+    ]
+  },
+  "LpNormalization": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": -1
+      },
+      "p": {
+        "type": "int",
+        "required": false,
+        "default": 2
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "LpPool": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "auto_pad": {
+        "type": "str",
+        "required": false,
+        "default": "NOTSET"
+      },
+      "ceil_mode": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "dilations": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "kernel_shape": {
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      },
+      "p": {
+        "type": "int",
+        "required": false,
+        "default": 2
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "MatMul": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "MatMulInteger": {
+    "domain": "ai.onnx",
+    "version": 10,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B",
+      "a_zero_point",
+      "b_zero_point"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Max": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "data_0"
+    ],
+    "outputs": [
+      "max"
+    ]
+  },
+  "MaxPool": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "auto_pad": {
+        "type": "str",
+        "required": false,
+        "default": "NOTSET"
+      },
+      "ceil_mode": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "dilations": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "kernel_shape": {
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "storage_order": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y",
+      "Indices"
+    ]
+  },
+  "MaxRoiPool": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "pooled_shape": {
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      },
+      "spatial_scale": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      }
+    },
+    "inputs": [
+      "X",
+      "rois"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "MaxUnpool": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "kernel_shape": {
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X",
+      "I",
+      "output_shape"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Mean": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "data_0"
+    ],
+    "outputs": [
+      "mean"
+    ]
+  },
+  "MeanVarianceNormalization": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "axes": {
+        "type": "List[int]",
+        "required": false,
+        "default": [
+          "0",
+          "2",
+          "3"
+        ]
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "MelWeightMatrix": {
+    "domain": "ai.onnx",
+    "version": 17,
+    "attributes": {
+      "output_datatype": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "num_mel_bins",
+      "dft_length",
+      "sample_rate",
+      "lower_edge_hertz",
+      "upper_edge_hertz"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Min": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "data_0"
+    ],
+    "outputs": [
+      "min"
+    ]
+  },
+  "Mish": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Mod": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "fmod": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "Mul": {
+    "domain": "ai.onnx",
+    "version": 14,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "Multinomial": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "dtype": {
+        "type": "int",
+        "required": false,
+        "default": 6
+      },
+      "sample_size": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "seed": {
+        "type": "float",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Neg": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "NegativeLogLikelihoodLoss": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "ignore_index": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "reduction": {
+        "type": "str",
+        "required": false,
+        "default": "mean"
+      }
+    },
+    "inputs": [
+      "input",
+      "target",
+      "weight"
+    ],
+    "outputs": [
+      "loss"
+    ]
+  },
+  "NonMaxSuppression": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {
+      "center_point_box": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "boxes",
+      "scores",
+      "max_output_boxes_per_class",
+      "iou_threshold",
+      "score_threshold"
+    ],
+    "outputs": [
+      "selected_indices"
+    ]
+  },
+  "NonZero": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Not": {
+    "domain": "ai.onnx",
+    "version": 1,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "OneHot": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": -1
+      }
+    },
+    "inputs": [
+      "indices",
+      "depth",
+      "values"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Optional": {
+    "domain": "ai.onnx",
+    "version": 15,
+    "attributes": {
+      "type": {
+        "type": "Any",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "OptionalGetElement": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "OptionalHasElement": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Or": {
+    "domain": "ai.onnx",
+    "version": 7,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "PRelu": {
+    "domain": "ai.onnx",
+    "version": 16,
+    "attributes": {},
+    "inputs": [
+      "X",
+      "slope"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Pad": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "mode": {
+        "type": "str",
+        "required": false,
+        "default": "constant"
+      }
+    },
+    "inputs": [
+      "data",
+      "pads",
+      "constant_value",
+      "axes"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Pow": {
+    "domain": "ai.onnx",
+    "version": 15,
+    "attributes": {},
+    "inputs": [
+      "X",
+      "Y"
+    ],
+    "outputs": [
+      "Z"
+    ]
+  },
+  "QLinearConv": {
+    "domain": "ai.onnx",
+    "version": 10,
+    "attributes": {
+      "auto_pad": {
+        "type": "str",
+        "required": false,
+        "default": "NOTSET"
+      },
+      "dilations": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "group": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "kernel_shape": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "pads": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "strides": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "x",
+      "x_scale",
+      "x_zero_point",
+      "w",
+      "w_scale",
+      "w_zero_point",
+      "y_scale",
+      "y_zero_point",
+      "B"
+    ],
+    "outputs": [
+      "y"
+    ]
+  },
+  "QLinearMatMul": {
+    "domain": "ai.onnx",
+    "version": 21,
+    "attributes": {},
+    "inputs": [
+      "a",
+      "a_scale",
+      "a_zero_point",
+      "b",
+      "b_scale",
+      "b_zero_point",
+      "y_scale",
+      "y_zero_point"
+    ],
+    "outputs": [
+      "y"
+    ]
+  },
+  "QuantizeLinear": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "block_size": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "output_dtype": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "precision": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "saturate": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "x",
+      "y_scale",
+      "y_zero_point"
+    ],
+    "outputs": [
+      "y"
+    ]
+  },
+  "RMSNormalization": {
+    "domain": "ai.onnx",
+    "version": 23,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": -1
+      },
+      "epsilon": {
+        "type": "float",
+        "required": false,
+        "default": 1e-05
+      },
+      "stash_type": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "X",
+      "scale"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "RNN": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "activation_alpha": {
+        "type": "List[float]",
+        "required": false,
+        "default": null
+      },
+      "activation_beta": {
+        "type": "List[float]",
+        "required": false,
+        "default": null
+      },
+      "activations": {
+        "type": "List[str]",
+        "required": false,
+        "default": [
+          "Tanh",
+          "Tanh"
+        ]
+      },
+      "clip": {
+        "type": "float",
+        "required": false,
+        "default": null
+      },
+      "direction": {
+        "type": "str",
+        "required": false,
+        "default": "forward"
+      },
+      "hidden_size": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "layout": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "X",
+      "W",
+      "R",
+      "B",
+      "sequence_lens",
+      "initial_h"
+    ],
+    "outputs": [
+      "Y",
+      "Y_h"
+    ]
+  },
+  "RandomNormal": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "dtype": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "mean": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "scale": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      },
+      "seed": {
+        "type": "float",
+        "required": false,
+        "default": null
+      },
+      "shape": {
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "output"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "RandomNormalLike": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "dtype": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "mean": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "scale": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      },
+      "seed": {
+        "type": "float",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "RandomUniform": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "dtype": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "high": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      },
+      "low": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "seed": {
+        "type": "float",
+        "required": false,
+        "default": null
+      },
+      "shape": {
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "output"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "RandomUniformLike": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "dtype": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "high": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      },
+      "low": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "seed": {
+        "type": "float",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Range": {
+    "domain": "ai.onnx",
+    "version": 27,
+    "attributes": {
+      "stash_type": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "start",
+      "limit",
+      "delta"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Reciprocal": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "ReduceL1": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ReduceL2": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ReduceLogSum": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ReduceLogSumExp": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ReduceMax": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ReduceMean": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ReduceMin": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ReduceProd": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ReduceSum": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "ReduceSumSquare": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "noop_with_empty_axes": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "reduced"
+    ]
+  },
+  "RegexFullMatch": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {
+      "pattern": {
+        "type": "str",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Relu": {
+    "domain": "ai.onnx",
+    "version": 14,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Reshape": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "allowzero": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data",
+      "shape"
+    ],
+    "outputs": [
+      "reshaped"
+    ]
+  },
+  "Resize": {
+    "domain": "ai.onnx",
+    "version": 19,
+    "attributes": {
+      "antialias": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "axes": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "coordinate_transformation_mode": {
+        "type": "str",
+        "required": false,
+        "default": "half_pixel"
+      },
+      "cubic_coeff_a": {
+        "type": "float",
+        "required": false,
+        "default": -0.75
+      },
+      "exclude_outside": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "extrapolation_value": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "keep_aspect_ratio_policy": {
+        "type": "str",
+        "required": false,
+        "default": "stretch"
+      },
+      "mode": {
+        "type": "str",
+        "required": false,
+        "default": "nearest"
+      },
+      "nearest_mode": {
+        "type": "str",
+        "required": false,
+        "default": "round_prefer_floor"
+      }
+    },
+    "inputs": [
+      "X",
+      "roi",
+      "scales",
+      "sizes"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "ReverseSequence": {
+    "domain": "ai.onnx",
+    "version": 10,
+    "attributes": {
+      "batch_axis": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "time_axis": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "input",
+      "sequence_lens"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "RoiAlign": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "coordinate_transformation_mode": {
+        "type": "str",
+        "required": false,
+        "default": "half_pixel"
+      },
+      "mode": {
+        "type": "str",
+        "required": false,
+        "default": "avg"
+      },
+      "output_height": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "output_width": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "sampling_ratio": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "spatial_scale": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      }
+    },
+    "inputs": [
+      "X",
+      "rois",
+      "batch_indices"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "RotaryEmbedding": {
+    "domain": "ai.onnx",
+    "version": 23,
+    "attributes": {
+      "interleaved": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "num_heads": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "rotary_embedding_dim": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "X",
+      "cos_cache",
+      "sin_cache",
+      "position_ids"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Round": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "STFT": {
+    "domain": "ai.onnx",
+    "version": 17,
+    "attributes": {
+      "onesided": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "signal",
+      "frame_step",
+      "window",
+      "frame_length"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Scan": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "body": {
+        "type": "Any",
+        "required": true,
+        "default": null
+      },
+      "num_scan_inputs": {
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      "scan_input_axes": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "scan_input_directions": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "scan_output_axes": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "scan_output_directions": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "initial_state_and_scan_inputs"
+    ],
+    "outputs": [
+      "final_state_and_scan_outputs"
+    ]
+  },
+  "ScatterElements": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "reduction": {
+        "type": "str",
+        "required": false,
+        "default": "none"
+      }
+    },
+    "inputs": [
+      "data",
+      "indices",
+      "updates"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "ScatterND": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "reduction": {
+        "type": "str",
+        "required": false,
+        "default": "none"
+      }
+    },
+    "inputs": [
+      "data",
+      "indices",
+      "updates"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Selu": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 1.67326
+      },
+      "gamma": {
+        "type": "float",
+        "required": false,
+        "default": 1.0507
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "SequenceAt": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {},
+    "inputs": [
+      "input_sequence",
+      "position"
+    ],
+    "outputs": [
+      "tensor"
+    ]
+  },
+  "SequenceConstruct": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {},
+    "inputs": [
+      "inputs"
+    ],
+    "outputs": [
+      "output_sequence"
+    ]
+  },
+  "SequenceEmpty": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {
+      "dtype": {
+        "type": "int",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "output"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "SequenceErase": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {},
+    "inputs": [
+      "input_sequence",
+      "position"
+    ],
+    "outputs": [
+      "output_sequence"
+    ]
+  },
+  "SequenceInsert": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {},
+    "inputs": [
+      "input_sequence",
+      "tensor",
+      "position"
+    ],
+    "outputs": [
+      "output_sequence"
+    ]
+  },
+  "SequenceLength": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {},
+    "inputs": [
+      "input_sequence"
+    ],
+    "outputs": [
+      "length"
+    ]
+  },
+  "SequenceMap": {
+    "domain": "ai.onnx",
+    "version": 17,
+    "attributes": {
+      "body": {
+        "type": "Any",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input_sequence",
+      "additional_inputs"
+    ],
+    "outputs": [
+      "out_sequence"
+    ]
+  },
+  "Shape": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "end": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "start": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      }
+    },
+    "inputs": [
+      "data"
+    ],
+    "outputs": [
+      "shape"
+    ]
+  },
+  "Shrink": {
+    "domain": "ai.onnx",
+    "version": 9,
+    "attributes": {
+      "bias": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "lambd": {
+        "type": "float",
+        "required": false,
+        "default": 0.5
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Sigmoid": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Sign": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Sin": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Sinh": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Size": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {},
+    "inputs": [
+      "data"
+    ],
+    "outputs": [
+      "size"
+    ]
+  },
+  "Slice": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "data",
+      "starts",
+      "ends",
+      "axes",
+      "steps"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Softmax": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": -1
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "SoftmaxCrossEntropyLoss": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "ignore_index": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "reduction": {
+        "type": "str",
+        "required": false,
+        "default": "mean"
+      }
+    },
+    "inputs": [
+      "scores",
+      "labels",
+      "weights"
+    ],
+    "outputs": [
+      "output",
+      "log_prob"
+    ]
+  },
+  "Softplus": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Softsign": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "SpaceToDepth": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {
+      "blocksize": {
+        "type": "int",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Split": {
+    "domain": "ai.onnx",
+    "version": 18,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "num_outputs": {
+        "type": "int",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "input",
+      "split"
+    ],
+    "outputs": [
+      "outputs"
+    ]
+  },
+  "SplitToSequence": {
+    "domain": "ai.onnx",
+    "version": 24,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "keepdims": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "input",
+      "split"
+    ],
+    "outputs": [
+      "output_sequence"
+    ]
+  },
+  "Sqrt": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Squeeze": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {},
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "squeezed"
+    ]
+  },
+  "StringConcat": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {},
+    "inputs": [
+      "X",
+      "Y"
+    ],
+    "outputs": [
+      "Z"
+    ]
+  },
+  "StringNormalizer": {
+    "domain": "ai.onnx",
+    "version": 10,
+    "attributes": {
+      "case_change_action": {
+        "type": "str",
+        "required": false,
+        "default": "NONE"
+      },
+      "is_case_sensitive": {
+        "type": "int",
+        "required": false,
+        "default": 0
+      },
+      "locale": {
+        "type": "str",
+        "required": false,
+        "default": null
+      },
+      "stopwords": {
+        "type": "List[str]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "StringSplit": {
+    "domain": "ai.onnx",
+    "version": 20,
+    "attributes": {
+      "delimiter": {
+        "type": "str",
+        "required": false,
+        "default": null
+      },
+      "maxsplit": {
+        "type": "int",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y",
+      "Z"
+    ]
+  },
+  "Sub": {
+    "domain": "ai.onnx",
+    "version": 14,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "Sum": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "data_0"
+    ],
+    "outputs": [
+      "sum"
+    ]
+  },
+  "Swish": {
+    "domain": "ai.onnx",
+    "version": 24,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Tan": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Tanh": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "input"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "TensorScatter": {
+    "domain": "ai.onnx",
+    "version": 24,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": -2
+      },
+      "mode": {
+        "type": "str",
+        "required": false,
+        "default": "linear"
+      }
+    },
+    "inputs": [
+      "past_cache",
+      "update",
+      "write_indices"
+    ],
+    "outputs": [
+      "present_cache"
+    ]
+  },
+  "TfIdfVectorizer": {
+    "domain": "ai.onnx",
+    "version": 9,
+    "attributes": {
+      "max_gram_length": {
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      "max_skip_count": {
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      "min_gram_length": {
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      "mode": {
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      "ngram_counts": {
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      },
+      "ngram_indexes": {
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      },
+      "pool_int64s": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      },
+      "pool_strings": {
+        "type": "List[str]",
+        "required": false,
+        "default": null
+      },
+      "weights": {
+        "type": "List[float]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "ThresholdedRelu": {
+    "domain": "ai.onnx",
+    "version": 22,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 1.0
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y"
+    ]
+  },
+  "Tile": {
+    "domain": "ai.onnx",
+    "version": 13,
+    "attributes": {},
+    "inputs": [
+      "input",
+      "repeats"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "TopK": {
+    "domain": "ai.onnx",
+    "version": 24,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": -1
+      },
+      "largest": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      },
+      "sorted": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "X",
+      "K"
+    ],
+    "outputs": [
+      "Values",
+      "Indices"
+    ]
+  },
+  "Transpose": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {
+      "perm": {
+        "type": "List[int]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "data"
+    ],
+    "outputs": [
+      "transposed"
+    ]
+  },
+  "Trilu": {
+    "domain": "ai.onnx",
+    "version": 14,
+    "attributes": {
+      "upper": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "input",
+      "k"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Unique": {
+    "domain": "ai.onnx",
+    "version": 11,
+    "attributes": {
+      "axis": {
+        "type": "int",
+        "required": false,
+        "default": null
+      },
+      "sorted": {
+        "type": "int",
+        "required": false,
+        "default": 1
+      }
+    },
+    "inputs": [
+      "X"
+    ],
+    "outputs": [
+      "Y",
+      "indices",
+      "inverse_indices",
+      "counts"
+    ]
+  },
+  "Unsqueeze": {
+    "domain": "ai.onnx",
+    "version": 25,
+    "attributes": {},
+    "inputs": [
+      "data",
+      "axes"
+    ],
+    "outputs": [
+      "expanded"
+    ]
+  },
+  "Where": {
+    "domain": "ai.onnx",
+    "version": 16,
+    "attributes": {},
+    "inputs": [
+      "condition",
+      "X",
+      "Y"
+    ],
+    "outputs": [
+      "output"
+    ]
+  },
+  "Xor": {
+    "domain": "ai.onnx",
+    "version": 7,
+    "attributes": {
+      "prob_mod": {
+        "type": "Any",
+        "required": false,
+        "default": null
+      },
+      "scale": {
+        "type": "float",
+        "required": false,
+        "default": null
+      },
+      "score_mod": {
+        "type": "Any",
+        "required": false,
+        "default": null
+      },
+      "softmax_precision": {
+        "type": "int",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "ai.onnx.preview.training.Adagrad": {
+    "domain": "ai.onnx",
+    "version": 1,
+    "attributes": {
+      "decay_factor": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "epsilon": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "norm_coefficient": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      }
+    },
+    "inputs": [
+      "R",
+      "T",
+      "inputs"
+    ],
+    "outputs": [
+      "outputs"
+    ]
+  },
+  "ai.onnx.preview.training.Adam": {
+    "domain": "ai.onnx",
+    "version": 1,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": false,
+        "default": 0.9
+      },
+      "beta": {
+        "type": "float",
+        "required": false,
+        "default": 0.999
+      },
+      "epsilon": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "norm_coefficient": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      },
+      "norm_coefficient_post": {
+        "type": "float",
+        "required": false,
+        "default": 0.0
+      }
+    },
+    "inputs": [
+      "R",
+      "T",
+      "inputs"
+    ],
+    "outputs": [
+      "outputs"
+    ]
+  },
+  "ai.onnx.preview.training.Gradient": {
+    "domain": "ai.onnx",
+    "version": 1,
+    "attributes": {
+      "xs": {
+        "type": "List[str]",
+        "required": true,
+        "default": null
+      },
+      "y": {
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      "zs": {
+        "type": "List[str]",
+        "required": false,
+        "default": null
+      }
+    },
+    "inputs": [
+      "Inputs"
+    ],
+    "outputs": [
+      "Outputs"
+    ]
+  },
+  "ai.onnx.preview.training.Momentum": {
+    "domain": "ai.onnx",
+    "version": 1,
+    "attributes": {
+      "alpha": {
+        "type": "float",
+        "required": true,
+        "default": null
+      },
+      "beta": {
+        "type": "float",
+        "required": true,
+        "default": null
+      },
+      "mode": {
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      "norm_coefficient": {
+        "type": "float",
+        "required": true,
+        "default": null
+      }
+    },
+    "inputs": [
+      "R",
+      "T",
+      "inputs"
+    ],
+    "outputs": [
+      "outputs"
+    ]
+  }
+}
