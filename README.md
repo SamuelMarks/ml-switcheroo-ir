@@ -1,3 +1,7 @@
+# zero-* Engine Core
+
+> **Note:** This repository serves as the core execution engine and abstract representation framework for the `zero-*` ecosystem.
+
 # ml-switcheroo-ir
 
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
