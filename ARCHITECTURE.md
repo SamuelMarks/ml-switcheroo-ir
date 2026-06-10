@@ -1,81 +1,134 @@
-# Architecture: ml-switcheroo-ir
+**Current Repository Context:** You are viewing the unified architecture documentation from within the `ml-switcheroo-ir` repository.
 
-`ml-switcheroo-ir` serves as the critical, dependency-free bridging contract between Source Languages (Frontends) and Target Environments (Backends) within the `ml-switcheroo` ecosystem.
+# Abstract ML Machine Ecosystem Architecture
 
-This document details the design choices, core abstractions, and mechanisms that power the Intermediate Representation.
+*Note: This architecture document is shared across all repositories in the `zero-*` and `ml-switcheroo-*` ecosystem to provide comprehensive technical context on how the frameworks interoperate.*
 
-## 1. High-Level Vision & Data Flow
+## The N-to-M Translation Problem
 
-To solve the N-to-M framework translation problem, `ml-switcheroo-ir` forces all tools to speak a common language.
+The Abstract ML Compiler ecosystem is designed to solve the $N \times M$ translation problem in Machine Learning. Instead of writing bespoke translators for every framework (JAX, PyTorch, Keras) to every target (WASM, WebGPU, TensorRT), we trace $N$ frontends into a strictly defined Intermediate Representation (IR), which is then consumed by $M$ backends.
+
+This achieves a source-to-source and source-to-browser compilation pipeline utilizing **strictly zero external dependencies** (relying solely on the Python Standard Library and `numpy` for eager evaluations).
+
+## Ecosystem Repository Taxonomy
+
+The ecosystem is strictly hierarchical. Circular dependencies are forbidden. The repositories are organized into tiers:
 
 ```mermaid
 graph TD
-    classDef frontend fill:#4285f4,stroke:#20344b,stroke-width:2px,color:#ffffff,rx:5px;
-    classDef ir fill:#f9ab00,stroke:#20344b,stroke-width:2px,color:#20344b,font-weight:bold,rx:5px;
-    classDef backend fill:#34a853,stroke:#20344b,stroke-width:2px,color:#ffffff,rx:5px;
+    subgraph Tier 1: Core Definitions
+        IR[ml-switcheroo-ir]
+    end
 
-    PyTorch(PyTorch Code) -->|Parsed by| PTF[PyTorch Frontend]:::frontend
-    TF(TensorFlow Code) -->|Parsed by| TFF[TensorFlow Frontend]:::frontend
+    subgraph Tier 2: Tracing & AD Engine
+        COMP[ml-switcheroo-compiler]
+    end
 
-    PTF -->|Emits| L[LogicalGraph IR]:::ir
-    TFF -->|Emits| L
+    subgraph Tier 3: Functional Foundation
+        ZJ[zero-jax]
+    end
 
-    L -->|Validated by| V[IR Schema Validator]:::ir
-    V --> L
+    subgraph Tier 4: Neural Networks & Frontends
+        ZF[zero-flax]
+        ZP[zero-pytorch]
+        ZK[zero-keras]
+        ZT[zero-tensorflow]
+        ZM[zero-mlx]
+        ZPX[zero-pax]
+        ZO[zero-optax]
+        ZC[zero-chex]
+        ZG[zero-grain]
+        ZOB[zero-orbax]
+    end
 
-    L -->|Consumed by| TRTB[TensorRT Backend]:::backend
-    L -->|Consumed by| XLAB[XLA Backend]:::backend
+    subgraph Tier 5: Verification
+        ZZ[zero-zoo]
+    end
 
-    TRTB -->|Generates| TRT(TensorRT Engine C++)
-    XLAB -->|Generates| HLO(XLA HLO)
+    COMP -->|Depends On| IR
+    
+    ZJ -->|Depends On| COMP
+    ZO -->|Depends On| ZJ
+    ZC -->|Depends On| COMP
+    ZG -->|Depends On| COMP
+    ZOB -->|Depends On| COMP
+    ZJ -->|Depends On| ZC
+    ZO -->|Depends On| ZC
+    
+    ZF -->|Depends On| ZJ
+    ZF -->|Depends On| ZO
+    ZF -->|Depends On| ZOB
+    ZZ -.->|Tests| ZG
+    ZP -->|Depends On| COMP
+    ZK -->|Depends On| COMP
+    ZT -->|Depends On| COMP
+    ZM -->|Depends On| COMP
+    ZPX -->|Depends On| COMP
+    
+    ZZ -.->|Tests| ZF
+    ZZ -.->|Tests| ZP
+    ZZ -.->|Tests| ZK
+    ZZ -.->|Tests| ZJ
 ```
 
-## 2. Core Abstractions
+### 1. `ml-switcheroo-ir` (Tier 1)
+The universal, canonical dialect. Defines `LogicalNode` and `LogicalGraph`. Contains the schema validator enforcing ONNX spec compliance without requiring the heavy `onnx` pip package.
 
-The Intermediate Representation is defined by a minimal set of `dataclasses`:
+### 2. `ml-switcheroo-compiler` (Tier 2)
+The computational heart. Implements:
+* **TracerTape**: Uses `threading.local` for concurrent, thread-safe AOT tracing.
+* **ProxyTensors**: Overloads Python math dunders to capture eager operations.
+* **AD Engine (`compiler.grad`)**: Reverse-mode automatic differentiation, topological sorting, gradient accumulation, and exact mathematical VJPs.
+* **Optimizations**: Static Shape Inference (matching Numpy broadcast logic), Dead Code Elimination (DCE), and Common Subexpression Elimination (CSE).
 
-*   **`LogicalGraph`**: The root container for a computational graph. It holds a flat list of nodes and a list of edges that connect them.
-*   **`LogicalNode`**: An individual operation (e.g., `Gemm`, `Conv`). Nodes define their `kind` (the operator), `domain` (namespace), `version` (schema version), and `metadata` (typed attributes configuring the operation).
-*   **`LogicalEdge`**: Explicit data dependencies connecting a `source` Node to a `target` Node. Explicit edges decouple the IR from relying on implicit variable naming for graph topology.
-*   **`LogicalMesh` & `PartitionSpec`**: First-class abstractions allowing the IR to express distributed computing sharding maps across logical tensor dimensions, crucial for modern Large Language Model (LLM) compilation.
+### 3. Frontends (`zero-*`) (Tiers 3 & 4)
+* **`zero-jax`**: Mimics the JAX API (`jnp`, `lax`, `jit`, `grad`, `vmap`). Uses Pytree flattening to route state safely into the compiler tape.
+* **`zero-chex`**: Typing and shape assertions (deeply integrated with `zero-optax` and `zero-jax`).
+* **`zero-grain`**: Deterministic data loading and transformations.
+* **`zero-orbax`**: Checkpoint loading (`.msgpack`/`tensorstore`) for PyTrees.
+* **`zero-optax`**: Provides standard optimization schedules and gradient transformations matching Google's `optax`.
+* **`zero-flax`**: Builds upon `zero-jax` to provide Neural Network layers (`Dense`, `Conv`, `Attention`) and `nnx` state functionalization.
+* **`zero-pytorch`, `zero-keras`, `zero-tensorflow`, `zero-mlx`**: Mimic eager, object-oriented, and stateful semantics. They dynamically lift mutable states (like `nn.Parameter` or `tf.Variable`) into purely functional graph inputs/outputs via the compiler's internal `lift_state` pass.
 
-## 3. Design Choices & Constraints
+### 4. `zero-zoo` (Tier 5)
+The proving grounds. Contains identical architectural definitions (MLP, CNN, Micro-Transformer/NanoGPT) written across all frontends. Headless CI pipelines train these deterministically for 10 steps to assert `.allclose()` float-for-float equivalence ("Golden Seed" testing) across all simulated frameworks and final backend compilations.
 
-### 3.1. Zero Dependency Policy
-`ml-switcheroo-ir` must never depend on external libraries like `torch`, `onnx` (the Python library), `numpy`, or `protobuf`.
+---
 
-**Reasoning:** Plugin authors should be able to build a code-generation backend in a pure Python environment without forcing their users to install multi-gigabyte ML frameworks just to satisfy the IR dependency chain.
+## Compilation Pipeline & Data Flow
 
-### 3.2. ONNX as the Canonical Dialect
-Instead of inventing an arbitrary string schema for `LogicalNode.kind` (e.g., `"Dense"`, `"Linear"`, `"MatMul"`), `ml-switcheroo-ir` standardizes strictly on the **Open Neural Network Exchange (ONNX)** specification for operator semantics.
+When a user executes code in any `zero-*` frontend, the framework delegates the logic to the backend pipeline, mapping high-level API calls down to executable WASM/WebGPU binary code.
 
-**Reasoning:**
-1.  **Exhaustiveness:** ONNX has already solved the mathematical definitions and edge-cases for hundreds of operations.
-2.  **Standardization:** It provides a common vocabulary that both PyTorch and TensorFlow communities already understand.
+```mermaid
+sequenceDiagram
+    participant User as zero-* Frontend API
+    participant Compiler as ml-switcheroo-compiler
+    participant IR as ml-switcheroo-ir
+    participant Backend as onnx9000 (Export)
 
-*Note: While we use the ONNX dialect, we do NOT use the `onnx` Protobuf format. We use our own lightweight JSON/dataclass IR.*
+    User->>Compiler: Execute math (e.g., zero_torch.add)
+    activate Compiler
+    Compiler->>Compiler: Intercept via ProxyTensor
+    Compiler->>Compiler: Calculate broadcast shapes (Numpy Rules)
+    Compiler->>Compiler: Record to TracerTape
+    Compiler-->>User: Return new ProxyTensor
+    deactivate Compiler
 
-### 3.3. Dynamic Schema Generation
-To maintain the Zero Dependency policy while enforcing ONNX rules, `ml-switcheroo-ir` dynamically builds its operator registry by parsing the official ONNX markdown documentation during its own build process (`scripts/generate_registry.py`).
+    User->>Compiler: Trigger Compilation (.backward() / @jit)
+    activate Compiler
+    Compiler->>Compiler: compiler.grad() (Topological Sort & VJPs)
+    Compiler->>Compiler: Optimizations (DCE, CSE, Constant Fold)
+    Compiler->>Compiler: lift_state (Functionalize mutations)
+    Compiler->>IR: Construct LogicalGraph & LogicalNodes
+    deactivate Compiler
+    
+    IR->>Backend: Provide strict JSON Graph
+    activate Backend
+    Backend->>Backend: Static Arena Allocation (Memory Offsets)
+    Backend->>Backend: Generate LEB128 WASM / WGSL Shaders
+    Backend-->>User: Executable Browser Payload
+    deactivate Backend
+```
 
-This extracts operator attributes, types, and defaults, baking them into pure Python dataclasses (`onnx_registry.py`), providing runtime type safety without the overhead of protobufs.
-
-### 3.4. Superset Extensibility
-The ML ecosystem evolves faster than standard bodies. The IR uses namespaces (`LogicalNode.domain`) to allow extensions.
-
-*   `ai.onnx`: The standard, strictly validated ONNX operator set.
-*   `ml.switcheroo.custom`: Allows users to define arbitrary nodes (e.g., `FlashAttention`, `RotaryEmbedding`) via JSON schemas.
-
-The validation engine treats custom schemas with the same rigorous type-checking as standard ONNX schemas, ensuring custom nodes don't compromise compiler stability.
-
-## 4. The Validation Engine
-
-Because IR generation is decoupled from compilation, invalid graphs must be caught early. The `ml_switcheroo_ir.validator` module provides structural and semantic checks:
-
-1.  **Existence:** Does the operator `kind` exist in the specified `domain`?
-2.  **Required Attributes:** Are all mandatory keys present in `metadata`?
-3.  **Type Safety:** Are the values in `metadata` of the correct type (e.g., preventing a string `"1"` where an integer `1` is expected)?
-4.  **Topology:** Do all `LogicalEdge` objects reference valid `LogicalNode` IDs?
-5.  **Defaults:** The validator mutates the graph to inject missing optional attributes with their canonical defaults, drastically simplifying the logic required in Backend compilers.
-
-By pushing validation into the IR layer, Frontends can confidently emit graphs, and Backends can confidently consume them, knowing the data is pristine.
+### Trace-to-AST Linking
+To provide clear error messages and allow for framework-specific syntactic rewrites, the compiler dynamically links trace operations to the original Python syntax trees. Leveraging `inspect.currentframe()`, every `LogicalNode` emitted into the IR captures a `source_ast_ref` binding it back to the exact file path, line number, and AST ID in the user's source code.

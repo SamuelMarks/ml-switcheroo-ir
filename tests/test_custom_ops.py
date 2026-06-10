@@ -37,9 +37,9 @@ def test_register_and_validate_custom_op():
     # Valid node
     valid_node = LogicalNode(
         id="fa1",
-        kind="FlashAttention",
+        op_type="FlashAttention",
         domain="ml.switcheroo.custom",
-        metadata={"causal": True},
+        attributes={"causal": True},
     )
 
     assert not validator.validate_kind(valid_node)
@@ -47,7 +47,7 @@ def test_register_and_validate_custom_op():
     assert not validator.validate_attribute_types(valid_node)
 
     validator.populate_defaults(valid_node)
-    assert valid_node.metadata["dropout_p"] == 0.0
+    assert valid_node.attributes["dropout_p"] == 0.0
 
 
 def test_custom_op_type_checking():
@@ -63,9 +63,9 @@ def test_custom_op_type_checking():
 
     invalid_node = LogicalNode(
         id="c1",
-        kind="CustomAdd",
+        op_type="CustomAdd",
         domain="ai.custom",
-        metadata={"scale": "1.0"},  # should be float
+        attributes={"scale": "1.0"},  # should be float
     )
 
     errors = validator.validate_attribute_types(invalid_node)

@@ -1,9 +1,15 @@
-ml-switcheroo-ir
-================
+# ml-switcheroo-ir
 
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-![Test Coverage](https://img.shields.io/badge/Test_Coverage-94.0%25-brightgreen)
-![Doc Coverage](https://img.shields.io/badge/Doc_Coverage-100.0%25-brightgreen)
+[![CI](https://github.com/SamuelMarks/ml-switcheroo-ir/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelMarks/ml-switcheroo-ir/actions)
+[![Test Coverage](https://img.shields.io/badge/test_coverage-88.9%25-yellowgreen.svg)](#)
+[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)
+
+ml-switcheroo-ir
+
+=======
+
+
 > The universal, dependency-free intermediate representation for the `ml-switcheroo` ecosystem.
 
 `ml-switcheroo-ir` provides the core language-agnostic data structures and interface protocols used to translate neural network architectures between different Deep Learning frameworks (PyTorch, TensorFlow, JAX) and hardware-level formats (TensorRT, XLA, MLIR).

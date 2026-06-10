@@ -1,18 +1,49 @@
 name: CI
+
 on:
   push:
-    branches: [main, master]
+    branches: [ master ]
   pull_request:
+    branches: [ master ]
+
+permissions:
+  contents: write
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install
-        run: pip install -e .
-      - name: Pre-commit
-        uses: pre-commit/action@v3.0.1
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff pytest pytest-cov build
+        if [ -f "pyproject.toml" ]; then pip install -e . || true; fi
+        if [ -f "requirements.txt" ]; then pip install -r requirements.txt || true; fi
+
+    - name: Check Code Formatting (Ruff)
+      run: ruff format --check .
+
+    - name: Check Linting (Ruff)
+      run: ruff check .
+
+    - name: Test & Coverage
+      run: |
+        pytest --cov=. --cov-report=xml
+        
+    - name: Update Badges
+      run: |
+        python scripts/update_badges.py
+        if ! git diff --exit-code README.md; then
+          echo "Coverage badges in README.md are out of date. Please run pre-commit or the update badges script locally and commit the changes."
+          exit 1
+        fi
+
+    - name: Build Package
+      run: python -m build

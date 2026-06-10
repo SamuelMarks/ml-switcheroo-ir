@@ -7,10 +7,11 @@ explicit definition.
 It acts as the contract between the Frontend (Ingestion) and the Backend (Synthesis).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Union, Tuple, Any
 from collections import defaultdict, deque
 from abc import ABC, abstractmethod
+import json
 
 from ml_switcheroo_ir.types import AttributeValue
 
@@ -64,34 +65,36 @@ class LogicalNode:
 
     Attributes:
         id (str): Unique identifier (e.g. 'conv1').
-        kind (str): Operation type. Standard types include 'Conv2d', 'Linear', 'Input', 'Output', as well as advanced primitives.
+        op_type (str): Operation type. Standard types include 'Conv2d', 'Linear', 'Input', 'Output', as well as advanced primitives.
         domain (str): Operator domain (e.g., 'ai.onnx').
         version (int): Operator set version (e.g., 1).
-        metadata (Dict[str, AttributeValue]): Dictionary of configuration parameters (e.g. ``kernel_size=3``).
+        attributes (Dict[str, AttributeValue]): Dictionary of configuration parameters (e.g. ``kernel_size=3``).
+        inputs (List[str]): Ordered list of upstream LogicalNode IDs.
+        shape_metadata (Optional[Tuple[Union[int, str], ...]]): Tuple of integers or string symbols ("B", "T").
+        source_ast_ref (Optional[str]): Traceback to exact file path, line number, and cdd-python AST node ID.
         sharding (Optional[PartitionSpec]): Optional layout specification for distributed placement of this node's output.
 
     """
 
     id: str
-    kind: str
+    op_type: str
     domain: str = "ai.onnx"
     version: int = 1
-    metadata: Dict[str, AttributeValue] = field(default_factory=dict)
+    attributes: Dict[str, AttributeValue] = field(default_factory=dict)
+    inputs: List[str] = field(default_factory=list)
+    shape_metadata: Optional[Tuple[Union[int, str], ...]] = None
+    source_ast_ref: Optional[str] = None
     sharding: Optional[PartitionSpec] = None
 
+    @property
+    def kind(self) -> str:
+        """Alias for op_type for backward compatibility."""
+        return self.op_type
 
-@dataclass
-class LogicalEdge:
-    """Represents data flow between two nodes.
-
-    Attributes:
-        source (str): Source node ID.
-        target (str): Target node ID.
-
-    """
-
-    source: str
-    target: str
+    @property
+    def metadata(self) -> Dict[str, AttributeValue]:
+        """Alias for attributes for backward compatibility."""
+        return self.attributes
 
 
 @dataclass
@@ -100,16 +103,56 @@ class LogicalGraph:
 
     Attributes:
         name (str): Name of the graph model/class.
-        nodes (List[LogicalNode]): Ordered list of nodes in the graph.
-        edges (List[LogicalEdge]): List of directed edges between nodes.
+        nodes (Dict[str, LogicalNode]): Map of id -> LogicalNode.
+        outputs (List[str]): List of explicit output ids.
         mesh (Optional[LogicalMesh]): Optional logical device mesh for distributed training/inference.
 
     """
 
     name: str = "Model"
-    nodes: List[LogicalNode] = field(default_factory=list)
-    edges: List[LogicalEdge] = field(default_factory=list)
+    nodes: Dict[str, LogicalNode] = field(default_factory=dict)
+    outputs: List[str] = field(default_factory=list)
     mesh: Optional[LogicalMesh] = None
+
+    def to_json(self) -> str:
+        """Serialize the graph to a deterministic JSON string."""
+        return json.dumps(asdict(self), sort_keys=True, indent=2)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "LogicalGraph":
+        """Deserialize a graph from a JSON string."""
+        data = json.loads(json_str)
+        nodes_data = data.get("nodes", {})
+        nodes = {}
+        # Support both Dict and List representation of nodes for backward compatibility
+        if isinstance(nodes_data, list):
+            nodes_data = {n["id"]: n for n in nodes_data}
+
+        for nid, ndata in nodes_data.items():
+            if "kind" in ndata and "op_type" not in ndata:
+                ndata["op_type"] = ndata.pop("kind")
+            if "metadata" in ndata and "attributes" not in ndata:
+                ndata["attributes"] = ndata.pop("metadata")
+            sharding = ndata.get("sharding")
+            if sharding:
+                ndata["sharding"] = PartitionSpec(axes=tuple(sharding["axes"]))
+            if "shape_metadata" in ndata and ndata["shape_metadata"]:
+                ndata["shape_metadata"] = tuple(ndata["shape_metadata"])
+            nodes[nid] = LogicalNode(**ndata)
+
+        mesh_data = data.get("mesh")
+        mesh = LogicalMesh(shape=mesh_data["shape"]) if mesh_data else None
+
+        # Build output list from explicit 'outputs' or legacy 'edges'
+        outputs = data.get("outputs", [])
+        if "edges" in data and not outputs:
+            # legacy logic: nodes with no outgoing edges might be outputs, or output nodes.
+            # We don't try to reconstruct the entire output list, just keep it empty if not provided.
+            pass
+
+        return cls(
+            name=data.get("name", "Model"), nodes=nodes, outputs=outputs, mesh=mesh
+        )
 
 
 def topological_sort(graph: LogicalGraph) -> List[LogicalNode]:
@@ -128,27 +171,26 @@ def topological_sort(graph: LogicalGraph) -> List[LogicalNode]:
     """
     adj: Dict[str, List[str]] = defaultdict(list)
     in_degree: Dict[str, int] = defaultdict(int)
-    nodes_by_id = {n.id: n for n in graph.nodes}
 
     # Initialize in-degree for all nodes
-    for n in graph.nodes:
-        in_degree[n.id] = 0
+    for nid in graph.nodes:
+        in_degree[nid] = 0
 
-    # Build adjacency and degree maps
-    for edge in graph.edges:
-        if edge.source in nodes_by_id and edge.target in nodes_by_id:
-            adj[edge.source].append(edge.target)
-            in_degree[edge.target] += 1
+    # Build adjacency and degree maps based on node inputs
+    for nid, node in graph.nodes.items():
+        for inp_id in node.inputs:
+            if inp_id in graph.nodes:
+                adj[inp_id].append(nid)
+                in_degree[nid] += 1
 
     # Simple queue-based toposort
-    # Note: Using sorted keys for determinism in queue initialization
-    initial_roots = sorted([n.id for n in graph.nodes if in_degree[n.id] == 0])
+    initial_roots = sorted([nid for nid in graph.nodes if in_degree[nid] == 0])
     queue = deque(initial_roots)
     sorted_nodes = []
 
     while queue:
         u = queue.popleft()
-        sorted_nodes.append(nodes_by_id[u])
+        sorted_nodes.append(graph.nodes[u])
 
         for v in sorted(adj[u]):  # Sorting for determinism
             in_degree[v] -= 1
@@ -158,9 +200,9 @@ def topological_sort(graph: LogicalGraph) -> List[LogicalNode]:
     # Handle disconnected components or cycles by appending remaining nodes
     if len(sorted_nodes) < len(graph.nodes):
         seen = {n.id for n in sorted_nodes}
-        # Append remaining nodes in definition order (fallback)
-        for n in graph.nodes:
-            if n.id not in seen:
+        # Append remaining nodes in dictionary iteration order (fallback)
+        for nid, n in graph.nodes.items():
+            if nid not in seen:
                 sorted_nodes.append(n)
 
     return sorted_nodes

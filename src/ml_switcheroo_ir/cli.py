@@ -5,7 +5,6 @@ Provides basic utilities to interact with LogicalGraph representations.
 
 import argparse
 import sys
-import json
 import os
 import importlib.util
 import inspect
@@ -14,8 +13,6 @@ from typing import List
 
 from ml_switcheroo_ir import (
     LogicalGraph,
-    LogicalNode,
-    LogicalEdge,
     topological_sort,
     CompilerBackend,
 )
@@ -36,40 +33,16 @@ except ImportError:
 
 
 def _parse_graph_from_json(json_str: str) -> LogicalGraph:
-    """Parse a LogicalGraph from a JSON string representation.
+    """Parses a LogicalGraph from a JSON string.
 
     Args:
-        json_str (str): The JSON string containing graph data.
+        json_str (str): The JSON string.
 
     Returns:
         LogicalGraph: The parsed graph object.
 
     """
-    data = json.loads(json_str)
-    nodes = []
-    for n in data.get("nodes", []):
-        nodes.append(
-            LogicalNode(
-                id=n.get("id", ""),
-                kind=n.get("kind", ""),
-                domain=n.get("domain", "ai.onnx"),
-                version=n.get("version", 1),
-                metadata=n.get("metadata", {}),
-            )
-        )
-    edges = []
-    for e in data.get("edges", []):
-        edges.append(
-            LogicalEdge(
-                source=e.get("source", ""),
-                target=e.get("target", ""),
-            )
-        )
-    return LogicalGraph(
-        name=data.get("name", "Model"),
-        nodes=nodes,
-        edges=edges,
-    )
+    return LogicalGraph.from_json(json_str)
 
 
 def _verify_backend(file_path: str, class_name: str) -> None:

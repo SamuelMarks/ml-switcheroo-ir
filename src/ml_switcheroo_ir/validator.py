@@ -60,12 +60,12 @@ class Validator:
         if node.domain != "ai.onnx":
             return errors  # Custom domains not handled strictly here unless in registry
 
-        if node.kind not in self.registry:
+        if node.op_type not in self.registry:
             errors.append(
                 ValidationError(
                     node_id=node.id,
                     attribute="kind",
-                    message=f"Operator '{node.kind}' not found in domain '{node.domain}'.",
+                    message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
                     level=ValidationLevel.ERROR,
                 )
             )
@@ -81,12 +81,12 @@ class Validator:
             List[ValidationError]: A list of errors found.
         """
         errors: List[ValidationError] = []
-        if node.kind not in self.registry:
+        if node.op_type not in self.registry:
             return errors
 
-        schema = self.registry[node.kind]
+        schema = self.registry[node.op_type]
         for attr_name, attr_schema in schema.attributes.items():
-            if attr_schema.required and attr_name not in node.metadata:
+            if attr_schema.required and attr_name not in node.attributes:
                 errors.append(
                     ValidationError(
                         node_id=node.id,
@@ -107,17 +107,17 @@ class Validator:
             List[ValidationError]: A list of errors found.
         """
         errors: List[ValidationError] = []
-        if node.kind not in self.registry:
+        if node.op_type not in self.registry:
             return errors
 
-        schema = self.registry[node.kind]
-        for key, value in node.metadata.items():
+        schema = self.registry[node.op_type]
+        for key, value in node.attributes.items():
             if key not in schema.attributes:
                 errors.append(
                     ValidationError(
                         node_id=node.id,
                         attribute=key,
-                        message=f"Attribute '{key}' is not recognized for '{node.kind}'.",
+                        message=f"Attribute '{key}' is not recognized for '{node.op_type}'.",
                         level=ValidationLevel.WARNING,
                     )
                 )
@@ -172,14 +172,14 @@ class Validator:
         Args:
             node (LogicalNode): The node to mutate.
         """
-        if node.kind not in self.registry:
+        if node.op_type not in self.registry:
             return
 
-        schema = self.registry[node.kind]
+        schema = self.registry[node.op_type]
         for attr_name, attr_schema in schema.attributes.items():
             if not attr_schema.required and attr_schema.default is not None:
-                if attr_name not in node.metadata:
-                    node.metadata[attr_name] = attr_schema.default
+                if attr_name not in node.attributes:
+                    node.attributes[attr_name] = attr_schema.default
 
     def validate_graph(self, graph: LogicalGraph) -> List[ValidationError]:
         """Validate all nodes and edges in a LogicalGraph.
@@ -193,7 +193,7 @@ class Validator:
         errors: List[ValidationError] = []
 
         # Validate nodes
-        for node in graph.nodes:
+        for node in graph.nodes.values():
             errors.extend(self.validate_kind(node))
             errors.extend(self.validate_required_attributes(node))
             errors.extend(self.validate_attribute_types(node))
@@ -205,7 +205,7 @@ class Validator:
         return errors
 
     def validate_edges(self, graph: LogicalGraph) -> List[ValidationError]:
-        """Validate that all edge source and target IDs exist in the graph.
+        """Validate that all node inputs exist in the graph.
 
         Args:
             graph (LogicalGraph): The graph to validate.
@@ -214,26 +214,17 @@ class Validator:
             List[ValidationError]: A list of edge validation errors.
         """
         errors: List[ValidationError] = []
-        node_ids = {n.id for n in graph.nodes}
+        node_ids = set(graph.nodes.keys())
 
-        for edge in graph.edges:
-            if edge.source not in node_ids:
-                errors.append(
-                    ValidationError(
-                        node_id=edge.source,
-                        attribute="edge",
-                        message=f"Edge source '{edge.source}' does not exist.",
-                        level=ValidationLevel.ERROR,
+        for node_id, node in graph.nodes.items():
+            for inp in node.inputs:
+                if inp not in node_ids:
+                    errors.append(
+                        ValidationError(
+                            node_id=node_id,
+                            attribute="inputs",
+                            message=f"Node input '{inp}' does not exist.",
+                            level=ValidationLevel.ERROR,
+                        )
                     )
-                )
-            if edge.target not in node_ids:
-                errors.append(
-                    ValidationError(
-                        node_id=edge.target,
-                        attribute="edge",
-                        message=f"Edge target '{edge.target}' does not exist.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-
         return errors

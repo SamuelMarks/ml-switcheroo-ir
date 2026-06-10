@@ -9,7 +9,6 @@ from unittest.mock import patch
 from ml_switcheroo_ir import (
     LogicalGraph,
     LogicalNode,
-    LogicalEdge,
     LogicalMesh,
     LogicalAxis,
     PartitionSpec,
@@ -23,12 +22,10 @@ from ml_switcheroo_ir.cli import main as cli_main, _parse_graph_from_json
 def test_topological_sort_linear():
     """Test standard linear topological sort."""
     n1 = LogicalNode("n1", "Input")
-    n2 = LogicalNode("n2", "Linear")
-    n3 = LogicalNode("n3", "Output")
+    n2 = LogicalNode("n2", "Linear", inputs=["n1"])
+    n3 = LogicalNode("n3", "Output", inputs=["n2"])
 
-    graph = LogicalGraph(
-        nodes=[n3, n1, n2], edges=[LogicalEdge("n1", "n2"), LogicalEdge("n2", "n3")]
-    )
+    graph = LogicalGraph(nodes={"n1": n1, "n2": n2, "n3": n3})
 
     sorted_nodes = topological_sort(graph)
     assert [n.id for n in sorted_nodes] == ["n1", "n2", "n3"]
@@ -37,10 +34,10 @@ def test_topological_sort_linear():
 def test_topological_sort_disconnected():
     """Test disconnected graph topological sort."""
     n1 = LogicalNode("n1", "Input")
-    n2 = LogicalNode("n2", "Output")
+    n2 = LogicalNode("n2", "Output", inputs=["n1"])
     n3 = LogicalNode("n3", "Floating")
 
-    graph = LogicalGraph(nodes=[n1, n2, n3], edges=[LogicalEdge("n1", "n2")])
+    graph = LogicalGraph(nodes={"n1": n1, "n2": n2, "n3": n3})
 
     sorted_nodes = topological_sort(graph)
     assert [n.id for n in sorted_nodes] == ["n1", "n3", "n2"]
@@ -48,18 +45,11 @@ def test_topological_sort_disconnected():
 
 def test_topological_sort_cycle():
     """Test cycle handling in topological sort."""
-    n1 = LogicalNode("n1", "Node1")
-    n2 = LogicalNode("n2", "Node2")
-    n3 = LogicalNode("n3", "Node3")
+    n1 = LogicalNode("n1", "Node1", inputs=["n3"])
+    n2 = LogicalNode("n2", "Node2", inputs=["n1"])
+    n3 = LogicalNode("n3", "Node3", inputs=["n2"])
 
-    graph = LogicalGraph(
-        nodes=[n1, n2, n3],
-        edges=[
-            LogicalEdge("n1", "n2"),
-            LogicalEdge("n2", "n3"),
-            LogicalEdge("n3", "n1"),
-        ],
-    )
+    graph = LogicalGraph(nodes={"n1": n1, "n2": n2, "n3": n3})
 
     sorted_nodes = topological_sort(graph)
     assert len(sorted_nodes) == 3
@@ -69,17 +59,10 @@ def test_topological_sort_cycle():
 def test_topological_sort_cycle_with_root():
     """Test a cycle where another root node feeds into it."""
     n1 = LogicalNode("n1", "Root")
-    n2 = LogicalNode("n2", "Cycle1")
-    n3 = LogicalNode("n3", "Cycle2")
+    n2 = LogicalNode("n2", "Cycle1", inputs=["n1", "n3"])
+    n3 = LogicalNode("n3", "Cycle2", inputs=["n2"])
 
-    graph = LogicalGraph(
-        nodes=[n1, n2, n3],
-        edges=[
-            LogicalEdge("n1", "n2"),
-            LogicalEdge("n2", "n3"),
-            LogicalEdge("n3", "n2"),  # cycle
-        ],
-    )
+    graph = LogicalGraph(nodes={"n1": n1, "n2": n2, "n3": n3})
     sorted_nodes = topological_sort(graph)
     assert len(sorted_nodes) == 3
 
@@ -87,11 +70,9 @@ def test_topological_sort_cycle_with_root():
 def test_topological_sort_missing_nodes():
     """Test edge referencing non-existent nodes."""
     n1 = LogicalNode("n1", "Input")
-    n2 = LogicalNode("n2", "Floating")
+    n2 = LogicalNode("n2", "Floating", inputs=["n4"])
 
-    graph = LogicalGraph(
-        nodes=[n1, n2], edges=[LogicalEdge("n1", "n3"), LogicalEdge("n4", "n2")]
-    )
+    graph = LogicalGraph(nodes={"n1": n1, "n2": n2})
 
     sorted_nodes = topological_sort(graph)
     assert set(n.id for n in sorted_nodes) == {"n1", "n2"}
@@ -109,7 +90,7 @@ def test_dataclasses_coverage():
     mesh = LogicalMesh(shape={"data": 4})
     assert mesh.shape["data"] == 4
 
-    node = LogicalNode(id="x", kind="Linear", sharding=spec)
+    node = LogicalNode(id="x", op_type="Linear", sharding=spec)
     assert node.metadata == {}
     assert node.sharding == spec
 
@@ -161,22 +142,21 @@ def test_cli_parse_json():
             "name": "TestModel",
             "nodes": [
                 {"id": "n1", "kind": "Input", "metadata": {"shape": "2"}},
-                {"id": "n2", "kind": "Output"},
+                {"id": "n2", "kind": "Output", "inputs": ["n1"]},
             ],
-            "edges": [{"source": "n1", "target": "n2"}],
         }
     )
 
     graph = _parse_graph_from_json(json_data)
     assert graph.name == "TestModel"
     assert len(graph.nodes) == 2
-    assert len(graph.edges) == 1
-    assert graph.nodes[0].metadata["shape"] == "2"
+    assert len(graph.nodes["n2"].inputs) == 1
+    assert graph.nodes["n1"].attributes["shape"] == "2"
 
     graph_empty = _parse_graph_from_json("{}")
     assert graph_empty.name == "Model"
     assert len(graph_empty.nodes) == 0
-    assert len(graph_empty.edges) == 0
+    assert len(graph_empty.nodes) == 0
 
 
 def test_cli_main(capsys):
@@ -189,8 +169,10 @@ def test_cli_main(capsys):
     json_data = json.dumps(
         {
             "name": "TestModel",
-            "nodes": [{"id": "n1", "kind": "Input"}, {"id": "n2", "kind": "Output"}],
-            "edges": [{"source": "n1", "target": "n2"}],
+            "nodes": [
+                {"id": "n1", "kind": "Input"},
+                {"id": "n2", "kind": "Output", "inputs": ["n1"]},
+            ],
         }
     )
 
@@ -416,7 +398,7 @@ def test_cli_main_validate_valid(capsys, tmp_path):
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
-    f.write_text('{"nodes": [], "edges": []}')
+    f.write_text('{"nodes": []}')
     with pytest.raises(SystemExit) as e:
         cli_main(["validate", str(f)])
     assert e.value.code == 0
@@ -427,7 +409,7 @@ def test_cli_main_validate_invalid(capsys, tmp_path):
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
-    f.write_text('{"nodes": [{"id": "1", "kind": "InvalidOp"}], "edges": []}')
+    f.write_text('{"nodes": [{"id": "1", "kind": "InvalidOp"}]}')
     with pytest.raises(SystemExit) as e:
         cli_main(["validate", str(f)])
     assert e.value.code == 1
@@ -438,9 +420,7 @@ def test_cli_main_validate_custom_ops(capsys, tmp_path):
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
-    f.write_text(
-        '{"nodes": [{"id": "1", "kind": "MyOp", "domain": "custom"}], "edges": []}'
-    )
+    f.write_text('{"nodes": [{"id": "1", "kind": "MyOp", "domain": "custom"}]}')
     c = tmp_path / "custom.json"
     c.write_text('{"MyOp": {"name": "MyOp", "domain": "custom", "attributes": {}}}')
     with pytest.raises(SystemExit) as e:
@@ -552,7 +532,7 @@ def test_cli_main_validate_warnings_only(capsys, tmp_path):
     # Actually, missing required attribute is ERROR.
     # Unknown attribute is WARNING.
     f.write_text(
-        '{"nodes": [{"id": "1", "kind": "Add", "metadata": {"unknown_attr": "val"}}], "edges": []}'
+        '{"nodes": [{"id": "1", "kind": "Add", "metadata": {"unknown_attr": "val"}}]}'
     )
     import pytest
 
@@ -586,3 +566,17 @@ def test_cli_compliance_json_exception(tmp_path, capsys):
     monkeypatch.chdir(tmp_path)
     cli_main(["compliance", "test_fw.py"])
     assert "Compliance Report" in capsys.readouterr().out
+
+
+def test_to_json_from_json():
+    spec = PartitionSpec(axes=("data", None))
+    mesh = LogicalMesh(shape={"data": 4})
+    node = LogicalNode(id="x", op_type="Linear", sharding=spec, shape_metadata=(1, 2))
+    graph = LogicalGraph(nodes={"x": node}, mesh=mesh)
+
+    json_str = graph.to_json()
+    assert "Linear" in json_str
+
+    graph2 = LogicalGraph.from_json(json_str)
+    assert graph2.nodes["x"].sharding.axes == ("data", None)
+    assert graph2.nodes["x"].shape_metadata == (1, 2)
