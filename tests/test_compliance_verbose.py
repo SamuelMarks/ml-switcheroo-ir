@@ -94,3 +94,54 @@ def test_cli_compliance_verbose_mapping_empty(
 
     assert "Verbose Missing Operations Report" in captured.out
     assert "No mappings found in" in captured.out
+
+
+def test_cli_compliance_verbose_mapping_exception(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test compliance subcommand verbose output with mapping when getdoc raises exception.
+
+    Args:
+        tmp_path: Pytest fixture for temporary directory.
+        capsys: Pytest fixture for capturing stdout/stderr.
+        monkeypatch: Pytest fixture for monkeypatching.
+    """
+    import json
+    import inspect
+    from typing import Any
+
+    def mock_getdoc(obj: Any) -> str:
+        """Mock inspect.getdoc to raise an Exception.
+
+        Args:
+            obj: Any object.
+
+        Returns:
+            str: Never returns, raises Exception.
+
+        Raises:
+            Exception: Always.
+        """
+        raise Exception("Mocked exception")
+
+    monkeypatch.setattr(inspect, "getdoc", mock_getdoc)
+
+    dialect_file = tmp_path / "my_dialect.py"
+    dialect_file.write_text("def Abs(x):\n    pass\n")
+
+    mapping_file = tmp_path / "mapping.json"
+    mapping_data = {
+        "Add": {"api": "os.path.join"},  # valid function
+    }
+    with open(mapping_file, "w") as f:
+        json.dump(mapping_data, f)
+
+    cli_main(
+        ["compliance", str(dialect_file), "--verbose", "--mapping", str(mapping_file)]
+    )
+    captured = capsys.readouterr()
+
+    assert "Verbose Missing Operations Report" in captured.out
+    assert "Mapped API targets" in captured.out
