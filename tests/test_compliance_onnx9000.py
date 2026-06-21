@@ -1,26 +1,31 @@
+import pathlib
 import pytest
 from ml_switcheroo_ir.cli import main as cli_main
 from ml_switcheroo_ir.compliance import run_compliance_check
 
 
-def test_cli_compliance_no_targets(capsys):
+def test_cli_compliance_no_targets(capsys: pytest.CaptureFixture) -> None:
     with pytest.raises(SystemExit):
         cli_main(["compliance"])
 
 
-def test_cli_compliance_empty_targets(capsys):
+def test_cli_compliance_empty_targets(capsys: pytest.CaptureFixture) -> None:
     with pytest.raises(SystemExit):
         run_compliance_check([])
 
 
-def test_cli_compliance_invalid_json(tmp_path, capsys):
+def test_cli_compliance_invalid_json(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+) -> None:
     f = tmp_path / "bad.json"
     f.write_text("{bad json")
     cli_main(["compliance", str(tmp_path)])
     # should not raise, just ignore
 
 
-def test_cli_compliance_onnx9000_adapter_and_decorator(tmp_path, capsys):
+def test_cli_compliance_onnx9000_adapter_and_decorator(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+) -> None:
     f = tmp_path / "my_importer.py"
     f.write_text("""
 class JaxprImporter:
@@ -41,7 +46,9 @@ def _map_abs(): pass
     assert "2/" in captured.out  # Add and Abs
 
 
-def test_cli_compliance_dynamic_defs_adjacent(tmp_path, capsys):
+def test_cli_compliance_dynamic_defs_adjacent(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+) -> None:
     # simulate load_definitions falling back to adjacent folder
     d = tmp_path / "definitions"
     d.mkdir()
@@ -59,7 +66,9 @@ class MyAdapter:
     assert "1/" in captured.out  # Add is in json
 
 
-def test_cli_compliance_multiple_targets(tmp_path, capsys):
+def test_cli_compliance_multiple_targets(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+) -> None:
     f1 = tmp_path / "f1.py"
     f2 = tmp_path / "f2.py"
     f1.write_text("def Abs(x): pass")

@@ -12,7 +12,7 @@ from ml_switcheroo_ir.schema.ghost import (
 )
 
 
-def test_parameter_kind_enum():
+def test_parameter_kind_enum() -> None:
     """Test ParameterKind enumeration values."""
     assert ParameterKind.POSITIONAL_ONLY.value == "POSITIONAL_ONLY"
     assert ParameterKind.POSITIONAL_OR_KEYWORD.value == "POSITIONAL_OR_KEYWORD"
@@ -21,7 +21,7 @@ def test_parameter_kind_enum():
     assert ParameterKind.VAR_KEYWORD.value == "VAR_KEYWORD"
 
 
-def test_semantic_tier_enum():
+def test_semantic_tier_enum() -> None:
     """Test SemanticTier enumeration values."""
     assert SemanticTier.ARRAY_API.value == "array"
     assert SemanticTier.NEURAL.value == "neural"
@@ -29,7 +29,7 @@ def test_semantic_tier_enum():
     assert SemanticTier.EXTRAS.value == "extras"
 
 
-def test_logic_op_enum():
+def test_logic_op_enum() -> None:
     """Test LogicOp enumeration values."""
     assert LogicOp.EQ.value == "eq"
     assert LogicOp.NEQ.value == "neq"
@@ -42,7 +42,7 @@ def test_logic_op_enum():
     assert LogicOp.IS_TYPE.value == "is_type"
 
 
-def test_ghost_param_model():
+def test_ghost_param_model() -> None:
     """Test GhostParam serialization and deserialization."""
     param = GhostParam(
         name="x",
@@ -66,7 +66,7 @@ def test_ghost_param_model():
     assert not hasattr(param2, "extra_field")
 
 
-def test_ghost_ref_model():
+def test_ghost_ref_model() -> None:
     """Test GhostRef serialization, deserialization, and methods."""
     param = GhostParam(name="x", kind=ParameterKind.POSITIONAL_OR_KEYWORD)
     ref = GhostRef(name="foo", api_path="pkg.foo", kind="function", params=[param])
@@ -81,7 +81,7 @@ def test_ghost_ref_model():
     assert ref.has_arg("y") is False
 
 
-def test_standard_map_model():
+def test_standard_map_model() -> None:
     """Test StandardMap serialization and defaults."""
     sm = StandardMap(api="foo.bar")
     assert sm.api == "foo.bar"
@@ -94,7 +94,7 @@ def test_standard_map_model():
     assert sm.macro_template is None
 
 
-def test_migrate_ghost_ref_v1():
+def test_migrate_ghost_ref_v1() -> None:
     """Test migrating v1.x schema dict to v2.x GhostRef."""
     v1_data = {
         "name": "old_func",
@@ -125,7 +125,7 @@ def test_migrate_ghost_ref_v1():
     assert ref.params[1].kind == ParameterKind.POSITIONAL_OR_KEYWORD
 
 
-def test_migrate_ghost_ref_v2():
+def test_migrate_ghost_ref_v2() -> None:
     """Test migrating v2.x schema dict (noop behavior) to GhostRef."""
     v2_data = {
         "name": "new_func",
@@ -147,7 +147,7 @@ def test_migrate_ghost_ref_v2():
     assert ref.params[0].kind == ParameterKind.POSITIONAL_ONLY
 
 
-def test_migrate_ghost_ref_no_params():
+def test_migrate_ghost_ref_no_params() -> None:
     """Test migrating ghost ref with no params key."""
     v1_data = {
         "name": "no_params",
@@ -160,7 +160,7 @@ def test_migrate_ghost_ref_no_params():
     assert len(ref.params) == 0
 
 
-def test_migrate_ghost_ref_param_no_kind():
+def test_migrate_ghost_ref_param_no_kind() -> None:
     """Test migrating ghost ref where a param lacks a kind (for branch coverage)."""
     v1_data = {
         "name": "bad_param",

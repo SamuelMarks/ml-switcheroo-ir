@@ -68,7 +68,7 @@ class CustomOpSchema:
 class Registry:
     """A dynamic registry of operator schemas."""
 
-    def __init__(self, base_registry: Dict[str, OpSchema] = None):
+    def __init__(self, base_registry: Dict[str, OpSchema] = None) -> None:
         """Initialize the registry.
 
         Args:

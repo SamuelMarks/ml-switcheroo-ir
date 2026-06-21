@@ -1,7 +1,11 @@
+import pathlib
+import pytest
 from ml_switcheroo_ir.cli import main as cli_main
 
 
-def test_cli_compliance_framework_adapter(tmp_path, capsys):
+def test_cli_compliance_framework_adapter(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+) -> None:
     """Test compliance subcommand scanning mock framework adapters."""
     import json
 
@@ -43,7 +47,11 @@ class MockAdapter:
     # assert "mockfw.py" in captured.out
 
 
-def test_cli_compliance_branch_coverage(tmp_path, capsys, monkeypatch):
+def test_cli_compliance_branch_coverage(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Test compliance subcommand branch coverage."""
     import json
     from ml_switcheroo_ir.cli import main as cli_main

@@ -13,7 +13,7 @@ from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 from ml_switcheroo_ir.validator import Validator, ValidationLevel
 
 
-def test_register_and_validate_custom_op():
+def test_register_and_validate_custom_op() -> None:
     """Test registering a custom op and validating it."""
     # Define custom FlashAttention
     flash_attn_schema = CustomOpSchema(
@@ -50,7 +50,7 @@ def test_register_and_validate_custom_op():
     assert valid_node.attributes["dropout_p"] == 0.0
 
 
-def test_custom_op_type_checking():
+def test_custom_op_type_checking() -> None:
     """Test custom attribute type enforcement."""
     schema = CustomOpSchema(
         name="CustomAdd",
@@ -74,7 +74,7 @@ def test_custom_op_type_checking():
     assert "Expected float" in errors[0].message
 
 
-def test_load_custom_ops_from_json():
+def test_load_custom_ops_from_json() -> None:
     """Test loading custom operators from a JSON file."""
     json_data = json.dumps(
         {

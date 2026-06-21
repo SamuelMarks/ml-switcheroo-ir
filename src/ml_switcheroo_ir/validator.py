@@ -35,7 +35,7 @@ class ValidationError:
 class Validator:
     """Validates LogicalGraph and LogicalNode instances against schemas."""
 
-    def __init__(self, registry: Dict[str, OpSchema] = None):
+    def __init__(self, registry: Dict[str, OpSchema] = None) -> None:
         """Initialize the validator.
 
         Args:

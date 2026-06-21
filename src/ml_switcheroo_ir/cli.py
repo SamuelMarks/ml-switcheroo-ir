@@ -23,7 +23,7 @@ try:
     from tabulate import tabulate
 except ImportError:
     # Fallback if tabulate is not available
-    def tabulate(data, headers):
+    def tabulate(data: list[list[object]], headers: list[str]) -> str:
         """Fallback for tabulate."""
         res = " | ".join(headers) + "\n"
         res += "-" * len(res) + "\n"

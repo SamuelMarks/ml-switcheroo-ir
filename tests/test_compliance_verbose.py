@@ -1,14 +1,20 @@
+import pathlib
+import pytest
 from ml_switcheroo_ir.cli import main as cli_main
 
 
-def test_cli_compliance_verbose(tmp_path, capsys, monkeypatch):
+def test_cli_compliance_verbose(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Test compliance subcommand verbose output."""
     from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
     import ml_switcheroo_ir.compliance
 
     original_get_dialect_ops = ml_switcheroo_ir.compliance.get_dialect_ops
 
-    def mock_get_dialect_ops():
+    def mock_get_dialect_ops() -> set[str]:
         ops = original_get_dialect_ops()
         ops.add("FakeOp")
         return ops
@@ -36,7 +42,9 @@ def test_cli_compliance_verbose(tmp_path, capsys, monkeypatch):
         assert '"inputs":' in captured.out
 
 
-def test_cli_compliance_verbose_mapping(tmp_path, capsys):
+def test_cli_compliance_verbose_mapping(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+) -> None:
     """Test compliance subcommand verbose output with mapping."""
     import json
 
@@ -66,7 +74,9 @@ def test_cli_compliance_verbose_mapping(tmp_path, capsys):
     assert "join" in captured.out
 
 
-def test_cli_compliance_verbose_mapping_empty(tmp_path, capsys):
+def test_cli_compliance_verbose_mapping_empty(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+) -> None:
     """Test compliance subcommand verbose output with empty mapping."""
     import json
 

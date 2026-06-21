@@ -42,12 +42,12 @@ MOCK_REGISTRY = {
 
 
 @pytest.fixture
-def validator():
+def validator() -> Validator:
     """Returns a Validator initialized with the mock registry."""
     return Validator(registry=MOCK_REGISTRY)
 
 
-def test_validator_valid_gemm(validator):
+def test_validator_valid_gemm(validator: Validator) -> None:
     """Test a fully compliant Gemm node returning no errors."""
     node = LogicalNode(id="gemm1", op_type="Gemm", attributes={"alpha": 2.0})
 
@@ -61,7 +61,7 @@ def test_validator_valid_gemm(validator):
     assert not errors
 
 
-def test_validator_missing_required_attr(validator):
+def test_validator_missing_required_attr(validator: Validator) -> None:
     """Test a Conv node lacking kernel_shape asserting a specific ValidationError."""
     node = LogicalNode(id="conv1", op_type="Conv", attributes={"strides": [2, 2]})
 
@@ -71,7 +71,7 @@ def test_validator_missing_required_attr(validator):
     assert errors[0].level == ValidationLevel.ERROR
 
 
-def test_validator_invalid_type(validator):
+def test_validator_invalid_type(validator: Validator) -> None:
     """Test providing a string '1' when an integer 1 is required."""
     node = LogicalNode(
         id="conv1", op_type="Conv", attributes={"group": "1", "kernel_shape": [3, 3]}
@@ -84,7 +84,7 @@ def test_validator_invalid_type(validator):
     assert errors[0].level == ValidationLevel.ERROR
 
 
-def test_validator_default_population(validator):
+def test_validator_default_population(validator: Validator) -> None:
     """Test to ensure missing optional attributes are injected."""
     node = LogicalNode(id="conv1", op_type="Conv", attributes={"kernel_shape": [3, 3]})
     validator.populate_defaults(node)
@@ -95,7 +95,7 @@ def test_validator_default_population(validator):
     assert node.metadata["group"] == 1
 
 
-def test_validator_invalid_edge(validator):
+def test_validator_invalid_edge(validator: Validator) -> None:
     """Test for dangling edge references."""
     node1 = LogicalNode(id="n1", op_type="Gemm", inputs=["n0", "n2"])
     graph = LogicalGraph(nodes={"n1": node1})
@@ -106,7 +106,7 @@ def test_validator_invalid_edge(validator):
     assert errors[1].node_id == "n1"
 
 
-def test_validator_unknown_kind(validator):
+def test_validator_unknown_kind(validator: Validator) -> None:
     """Test validating an unknown operator."""
     node = LogicalNode(id="n1", op_type="UnknownOp")
     errors = validator.validate_kind(node)
@@ -115,7 +115,7 @@ def test_validator_unknown_kind(validator):
     assert errors[0].level == ValidationLevel.ERROR
 
 
-def test_validator_unknown_attribute(validator):
+def test_validator_unknown_attribute(validator: Validator) -> None:
     """Test providing an unregistered attribute issues a warning."""
     node = LogicalNode(id="gemm1", op_type="Gemm", attributes={"unknown_attr": 42})
     errors = validator.validate_attribute_types(node)
@@ -124,7 +124,7 @@ def test_validator_unknown_attribute(validator):
     assert errors[0].level == ValidationLevel.WARNING
 
 
-def test_validator_graph_integration(validator):
+def test_validator_graph_integration(validator: Validator) -> None:
     """Test the integrated validate_graph method."""
     node1 = LogicalNode(id="n1", op_type="Gemm", attributes={"alpha": 2.0})
     node2 = LogicalNode(
@@ -147,14 +147,14 @@ def test_validator_graph_integration(validator):
     assert node1.metadata.get("transA") == 0
 
 
-def test_validator_default_registry():
+def test_validator_default_registry() -> None:
     """Test that Validator defaults to ONNX_REGISTRY."""
     v = Validator()
     assert v.registry is not None
     assert "Add" in v.registry
 
 
-def test_validator_list_type_check_errors(validator):
+def test_validator_list_type_check_errors(validator: Validator) -> None:
     """Test invalid list items."""
     node = LogicalNode(
         id="conv1", op_type="Conv", attributes={"kernel_shape": [3, "3"]}
@@ -181,7 +181,7 @@ def test_validator_list_type_check_errors(validator):
     assert not errors4
 
 
-def test_validator_various_types():
+def test_validator_various_types() -> None:
     """Test string, List[float], List[str], bool, etc."""
     mock_reg = {
         "TestOp": OpSchema(
@@ -239,14 +239,14 @@ def test_validator_various_types():
     )
 
 
-def test_validator_custom_domain():
+def test_validator_custom_domain() -> None:
     """Test that custom domains don't trigger kind validation errors if not checked."""
     v = Validator(registry=MOCK_REGISTRY)
     node = LogicalNode(id="n1", op_type="CustomOp", domain="ai.custom")
     assert not v.validate_kind(node)
 
 
-def test_validator_missing_kind_methods():
+def test_validator_missing_kind_methods() -> None:
     """Test methods return quickly if kind not in registry."""
     v = Validator(registry=MOCK_REGISTRY)
     node = LogicalNode(id="n1", op_type="UnknownOp")

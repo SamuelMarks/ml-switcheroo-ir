@@ -8,7 +8,7 @@ It acts as the contract between the Frontend (Ingestion) and the Backend (Synthe
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Union, Tuple, Any
+from typing import Dict, List, Optional, Union, Tuple
 from collections import defaultdict, deque
 from abc import ABC, abstractmethod
 import json
@@ -212,7 +212,7 @@ class CompilerBackend(ABC):
     """Abstract base class for compilation backends."""
 
     @abstractmethod
-    def compile(self, graph: LogicalGraph) -> Any:
+    def compile(self, graph: LogicalGraph) -> object:
         """Compiles the Logical Intermediate Representation (IR) into a target artifact.
 
         Args:
