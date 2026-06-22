@@ -6,7 +6,20 @@ import os
 import sys
 from typing import Any, Dict, List, Optional, Set
 
-from tabulate import tabulate
+try:
+    from tabulate import tabulate
+except ImportError:
+    # Fallback if tabulate is not available
+    def tabulate(data: list[list[object]], headers: list[str] = None) -> str:
+        """Fallback for tabulate."""
+        res = ""
+        if headers:
+            res += " | ".join(headers) + "\n"
+            res += "-" * len(res) + "\n"
+        for row in data:
+            res += " | ".join(str(c) for c in row) + "\n"
+        return res
+
 
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 

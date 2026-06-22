@@ -1,0 +1,3 @@
+tabulate
+ml-switcheroo-compiler
+pydantic
