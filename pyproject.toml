@@ -33,3 +33,6 @@ exclude = [
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.coverage.run]
+omit = ["scripts/*"]
