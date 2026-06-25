@@ -23,8 +23,17 @@ try:
     from tabulate import tabulate
 except ImportError:
     # Fallback if tabulate is not available
-    def tabulate(data: list[list[object]], headers: list[str]) -> str:
-        """Fallback for tabulate."""
+    def tabulate(data: list[list[object]], headers: list[str], **kwargs: object) -> str:
+        """Fallback for tabulate.
+
+        Args:
+            data: The table data.
+            headers: The table headers.
+            kwargs: Ignored keyword arguments.
+
+        Returns:
+            The tabulated string.
+        """
         res = " | ".join(headers) + "\n"
         res += "-" * len(res) + "\n"
         for row in data:

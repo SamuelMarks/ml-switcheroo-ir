@@ -10,8 +10,19 @@ try:
     from tabulate import tabulate
 except ImportError:
     # Fallback if tabulate is not available
-    def tabulate(data: list[list[object]], headers: list[str] = None) -> str:
-        """Fallback for tabulate."""
+    def tabulate(
+        data: list[list[object]], headers: list[str] = None, **kwargs: Any
+    ) -> str:
+        """Fallback for tabulate.
+
+        Args:
+            data: The table data.
+            headers: The table headers.
+            kwargs: Ignored keyword arguments.
+
+        Returns:
+            The tabulated string.
+        """
         res = ""
         if headers:
             res += " | ".join(headers) + "\n"

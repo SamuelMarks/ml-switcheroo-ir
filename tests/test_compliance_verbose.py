@@ -35,11 +35,11 @@ def test_cli_compliance_verbose(
 
     # Find some op we know is missing, e.g., 'Add' if it's in the registry
     dialect_ops = {k.split(".")[-1] for k in ONNX_REGISTRY.keys()}
-    if "Add" in dialect_ops:
-        assert "- [ ] **Add**" in captured.out
-        assert "```json" in captured.out
-        assert '"domain":' in captured.out
-        assert '"inputs":' in captured.out
+    assert "Add" in dialect_ops
+    assert "- [ ] **Add**" in captured.out
+    assert "```json" in captured.out
+    assert '"domain":' in captured.out
+    assert '"inputs":' in captured.out
 
 
 def test_cli_compliance_verbose_mapping(
