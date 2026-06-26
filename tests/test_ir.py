@@ -384,6 +384,7 @@ def test_verify_backend_class_not_inheriting(capsys: pytest.CaptureFixture) -> N
 def test_cli_tabulate_fallback(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     import sys
 
     monkeypatch.setitem(sys.modules, "tabulate", None)
@@ -398,6 +399,7 @@ def test_cli_tabulate_fallback(
 
 
 def test_cli_main_invalid_command() -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
     import pytest
 
@@ -408,6 +410,7 @@ def test_cli_main_invalid_command() -> None:
 def test_cli_main_validate_valid(
     capsys: pytest.CaptureFixture, tmp_path: pathlib.Path
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
@@ -421,6 +424,7 @@ def test_cli_main_validate_valid(
 def test_cli_main_validate_invalid(
     capsys: pytest.CaptureFixture, tmp_path: pathlib.Path
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
@@ -434,6 +438,7 @@ def test_cli_main_validate_invalid(
 def test_cli_main_validate_custom_ops(
     capsys: pytest.CaptureFixture, tmp_path: pathlib.Path
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
@@ -446,6 +451,7 @@ def test_cli_main_validate_custom_ops(
 
 
 def test_cli_main_list_ops(capsys: pytest.CaptureFixture) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     cli_main(["list-ops", "--domain", "ai.onnx", "--search", "Abs"])
@@ -454,6 +460,7 @@ def test_cli_main_list_ops(capsys: pytest.CaptureFixture) -> None:
 
 
 def test_cli_main_list_ops_no_filters(capsys: pytest.CaptureFixture) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     cli_main(["list-ops"])
@@ -463,6 +470,7 @@ def test_cli_main_list_ops_no_filters(capsys: pytest.CaptureFixture) -> None:
 
 
 def test_cli_compliance_not_found(capsys: pytest.CaptureFixture) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
     import pytest
 
@@ -474,6 +482,7 @@ def test_cli_compliance_not_found(capsys: pytest.CaptureFixture) -> None:
 def test_cli_compliance_file(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_file.py"
@@ -486,6 +495,7 @@ def test_cli_compliance_file(
 def test_cli_compliance_register_framework(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_fw.py"
@@ -500,6 +510,7 @@ def test_cli_compliance_register_framework(
 def test_cli_compliance_backend_frontend(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_be.py"
@@ -514,6 +525,7 @@ def test_cli_compliance_backend_frontend(
 def test_cli_compliance_verbose(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_be.py"
@@ -526,6 +538,7 @@ def test_cli_compliance_verbose(
 def test_cli_compliance_no_targets(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     # Empty directory to avoid dialect ops
@@ -539,6 +552,7 @@ def test_cli_compliance_no_targets(
 def test_cli_compliance_directory(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     (tmp_path / "node_modules").mkdir()
@@ -555,6 +569,7 @@ def test_cli_compliance_directory(
 def test_cli_main_validate_warnings_only(
     capsys: pytest.CaptureFixture, tmp_path: pathlib.Path
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
@@ -578,6 +593,7 @@ def test_cli_compliance_exception(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture,
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     # Create an unparseable file to trigger exception
@@ -590,6 +606,7 @@ def test_cli_compliance_exception(
 def test_cli_compliance_json_exception(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_fw.py"
@@ -606,6 +623,7 @@ def test_cli_compliance_json_exception(
 
 
 def test_to_json_from_json() -> None:
+    """Test."""
     spec = PartitionSpec(axes=("data", None))
     mesh = LogicalMesh(shape={"data": 4})
     node = LogicalNode(id="x", op_type="Linear", sharding=spec, shape_metadata=(1, 2))

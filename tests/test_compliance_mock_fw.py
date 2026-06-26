@@ -1,3 +1,5 @@
+"""Tests module."""
+
 import pathlib
 import pytest
 from ml_switcheroo_ir.cli import main as cli_main

@@ -1,3 +1,5 @@
+"""Tests module."""
+
 import pathlib
 import pytest
 from ml_switcheroo_ir.cli import main as cli_main
@@ -5,11 +7,13 @@ from ml_switcheroo_ir.compliance import run_compliance_check
 
 
 def test_cli_compliance_no_targets(capsys: pytest.CaptureFixture) -> None:
+    """Test."""
     with pytest.raises(SystemExit):
         cli_main(["compliance"])
 
 
 def test_cli_compliance_empty_targets(capsys: pytest.CaptureFixture) -> None:
+    """Test."""
     with pytest.raises(SystemExit):
         run_compliance_check([])
 
@@ -17,6 +21,7 @@ def test_cli_compliance_empty_targets(capsys: pytest.CaptureFixture) -> None:
 def test_cli_compliance_invalid_json(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     f = tmp_path / "bad.json"
     f.write_text("{bad json")
     cli_main(["compliance", str(tmp_path)])
@@ -26,6 +31,7 @@ def test_cli_compliance_invalid_json(
 def test_cli_compliance_onnx9000_adapter_and_decorator(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     f = tmp_path / "my_importer.py"
     f.write_text("""
 class JaxprImporter:
@@ -50,6 +56,7 @@ def test_cli_compliance_dynamic_defs_adjacent(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
     # simulate load_definitions falling back to adjacent folder
+    """Test."""
     d = tmp_path / "definitions"
     d.mkdir()
     (d / "jax.json").write_text('{"Add": {"api": "foo"}}')
@@ -69,6 +76,7 @@ class MyAdapter:
 def test_cli_compliance_multiple_targets(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
+    """Test."""
     f1 = tmp_path / "f1.py"
     f2 = tmp_path / "f2.py"
     f1.write_text("def Abs(x): pass")
