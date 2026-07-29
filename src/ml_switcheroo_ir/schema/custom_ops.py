@@ -1,10 +1,12 @@
 """Custom operator schemas for ml_switcheroo_ir."""
 
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass, field
-from typing import Dict, List, Any
+from typing import Any
 
-from ml_switcheroo_ir.schema.onnx_registry import OpSchema, OpAttribute
+from ml_switcheroo_ir.schema.onnx_registry import OpAttribute, OpSchema
 
 
 @dataclass
@@ -44,9 +46,9 @@ class CustomOpSchema:
 
     name: str
     domain: str
-    attributes: List[CustomAttributeSchema] = field(default_factory=list)
-    inputs: List[str] = field(default_factory=list)
-    outputs: List[str] = field(default_factory=list)
+    attributes: list[CustomAttributeSchema] = field(default_factory=list)
+    inputs: list[str] = field(default_factory=list)
+    outputs: list[str] = field(default_factory=list)
 
     def to_op_schema(self) -> OpSchema:
         """Convert to the internal OpSchema type.
@@ -68,13 +70,13 @@ class CustomOpSchema:
 class Registry:
     """A dynamic registry of operator schemas."""
 
-    def __init__(self, base_registry: Dict[str, OpSchema] = None) -> None:
+    def __init__(self, base_registry: dict[str, OpSchema] | None = None) -> None:
         """Initialize the registry.
 
         Args:
             base_registry (Dict[str, OpSchema], optional): A base registry to copy from.
         """
-        self.schemas: Dict[str, OpSchema] = {}
+        self.schemas: dict[str, OpSchema] = {}
         if base_registry is not None:
             self.schemas.update(base_registry)
 

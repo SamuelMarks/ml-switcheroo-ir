@@ -1,6 +1,7 @@
 """Test tabulate fallback in compliance module."""
 
 import sys
+
 import pytest
 
 
@@ -13,8 +14,9 @@ def test_compliance_tabulate_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "tabulate", None)
 
     # Force reload of compliance.py so it hits the ImportError
-    import ml_switcheroo_ir.compliance
     import importlib
+
+    import ml_switcheroo_ir.compliance
 
     try:
         importlib.reload(ml_switcheroo_ir.compliance)

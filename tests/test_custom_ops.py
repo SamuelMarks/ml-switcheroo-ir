@@ -5,12 +5,12 @@ from tempfile import NamedTemporaryFile
 
 from ml_switcheroo_ir import LogicalNode
 from ml_switcheroo_ir.schema.custom_ops import (
-    CustomOpSchema,
     CustomAttributeSchema,
+    CustomOpSchema,
     Registry,
 )
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
-from ml_switcheroo_ir.validator import Validator, ValidationLevel
+from ml_switcheroo_ir.validator import ValidationLevel, Validator
 
 
 def test_register_and_validate_custom_op() -> None:

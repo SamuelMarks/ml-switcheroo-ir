@@ -1,25 +1,25 @@
 """Tests for ml_switcheroo_ir package."""
 
-import pathlib
-
-
 import json
-import pytest
+import pathlib
 import runpy
 from tempfile import NamedTemporaryFile
 from unittest.mock import patch
 
+import pytest
+
 from ml_switcheroo_ir import (
-    LogicalGraph,
-    LogicalNode,
-    LogicalMesh,
-    LogicalAxis,
-    PartitionSpec,
-    topological_sort,
     CompilerBackend,
     GraphFrontend,
+    LogicalAxis,
+    LogicalGraph,
+    LogicalMesh,
+    LogicalNode,
+    PartitionSpec,
+    topological_sort,
 )
-from ml_switcheroo_ir.cli import main as cli_main, _parse_graph_from_json
+from ml_switcheroo_ir.cli import _parse_graph_from_json
+from ml_switcheroo_ir.cli import main as cli_main
 
 
 def test_topological_sort_linear() -> None:
@@ -56,7 +56,7 @@ def test_topological_sort_cycle() -> None:
 
     sorted_nodes = topological_sort(graph)
     assert len(sorted_nodes) == 3
-    assert set(n.id for n in sorted_nodes) == {"n1", "n2", "n3"}
+    assert {n.id for n in sorted_nodes} == {"n1", "n2", "n3"}
 
 
 def test_topological_sort_cycle_with_root() -> None:
@@ -78,7 +78,7 @@ def test_topological_sort_missing_nodes() -> None:
     graph = LogicalGraph(nodes={"n1": n1, "n2": n2})
 
     sorted_nodes = topological_sort(graph)
-    assert set(n.id for n in sorted_nodes) == {"n1", "n2"}
+    assert {n.id for n in sorted_nodes} == {"n1", "n2"}
 
 
 def test_dataclasses_coverage() -> None:
@@ -389,6 +389,7 @@ def test_cli_tabulate_fallback(
 
     monkeypatch.setitem(sys.modules, "tabulate", None)
     import importlib
+
     import ml_switcheroo_ir.cli
 
     importlib.reload(ml_switcheroo_ir.cli)
@@ -400,8 +401,9 @@ def test_cli_tabulate_fallback(
 
 def test_cli_main_invalid_command() -> None:
     """Test."""
-    from ml_switcheroo_ir.cli import main as cli_main
     import pytest
+
+    from ml_switcheroo_ir.cli import main as cli_main
 
     with pytest.raises(SystemExit):
         cli_main(["invalid_command"])
@@ -471,8 +473,9 @@ def test_cli_main_list_ops_no_filters(capsys: pytest.CaptureFixture) -> None:
 
 def test_cli_compliance_not_found(capsys: pytest.CaptureFixture) -> None:
     """Test."""
-    from ml_switcheroo_ir.cli import main as cli_main
     import pytest
+
+    from ml_switcheroo_ir.cli import main as cli_main
 
     with pytest.raises(SystemExit) as e:
         cli_main(["compliance", "nonexistent_path"])

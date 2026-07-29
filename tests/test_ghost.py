@@ -1,12 +1,13 @@
 """Tests for the Ghost Protocol schema in ml_switcheroo_ir."""
 
 import pytest
+
 from ml_switcheroo_ir.schema.ghost import (
-    ParameterKind,
-    SemanticTier,
     GhostParam,
     GhostRef,
     LogicOp,
+    ParameterKind,
+    SemanticTier,
     StandardMap,
     migrate_ghost_ref,
 )

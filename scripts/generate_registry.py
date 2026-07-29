@@ -1,6 +1,6 @@
-import re
-import json
 import ast
+import json
+import re
 
 
 def parse_onnx_docs(md_file):
@@ -88,9 +88,7 @@ def parse_onnx_docs(md_file):
                     py_type = "List[float]"
                 elif raw_type == "list of strings":
                     py_type = "List[str]"
-                elif raw_type == "tensor":
-                    py_type = "Any"
-                elif raw_type == "graph":
+                elif raw_type == "tensor" or raw_type == "graph":
                     py_type = "Any"
                 elif raw_type == "type":
                     py_type = "str"

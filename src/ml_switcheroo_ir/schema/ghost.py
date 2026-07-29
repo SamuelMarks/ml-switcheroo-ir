@@ -4,9 +4,12 @@ Provides the Ghost Protocol (GhostRef, GhostParam) schemas used to communicate
 API structures between the ml-framework-snapshots scraper and the ml-switcheroo compiler.
 """
 
+from __future__ import annotations
+
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ParameterKind(str, Enum):
@@ -47,13 +50,11 @@ class GhostParam(BaseModel):
     kind: ParameterKind = Field(
         description="Kind of parameter (e.g. POSITIONAL_OR_KEYWORD)."
     )
-    default: Optional[str] = Field(None, description="Default value as string.")
-    annotation: Optional[str] = Field(None, description="Type annotation as string.")
-    description: Optional[str] = Field(default=None, description="Description")
+    default: str | None = Field(None, description="Default value as string.")
+    annotation: str | None = Field(None, description="Type annotation as string.")
+    description: str | None = Field(default=None, description="Description")
 
-    standardized_name: Optional[str] = Field(
-        default=None, description="Standardized name"
-    )
+    standardized_name: str | None = Field(default=None, description="Standardized name")
 
 
 class GhostRef(BaseModel):
@@ -64,27 +65,25 @@ class GhostRef(BaseModel):
     name: str = Field(description="Short name of the object.")
     api_path: str = Field(description="Fully qualified import path.")
     kind: str = Field(description="One of: 'class', 'function'")
-    params: List[GhostParam] = Field(
+    params: list[GhostParam] = Field(
         default_factory=list, description="List of parameters."
     )
-    docstring: Optional[str] = Field(None, description="Extracted docstring.")
+    docstring: str | None = Field(None, description="Extracted docstring.")
     has_varargs: bool = Field(False, description="True if signature accepts *args.")
     schema_version: str = Field("1.2", description="Version of the schema format.")
 
-    is_public: Optional[bool] = Field(default=None, description="Is public")
+    is_public: bool | None = Field(default=None, description="Is public")
 
-    aliases: Optional[List[str]] = Field(default_factory=list, description="Aliases")
-    returns_type: Optional[str] = Field(default=None, description="Returns type")
-    returns_description: Optional[str] = Field(
+    aliases: list[str] | None = Field(default_factory=list, description="Aliases")
+    returns_type: str | None = Field(default=None, description="Returns type")
+    returns_description: str | None = Field(
         default=None, description="Returns description"
     )
-    raises: Optional[List[str]] = Field(default_factory=list, description="Raises")
-    environment_tags: Optional[List[str]] = Field(
+    raises: list[str] | None = Field(default_factory=list, description="Raises")
+    environment_tags: list[str] | None = Field(
         default_factory=list, description="Environment tags"
     )
-    overloads: Optional[List[Any]] = Field(
-        default_factory=list, description="Overloads"
-    )
+    overloads: list[Any] | None = Field(default_factory=list, description="Overloads")
 
     def has_arg(self, arg_name: str) -> bool:
         """Check if a specific argument exists in the signature.
@@ -117,17 +116,17 @@ class StandardMap(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    api: Optional[str] = Field(default=None)
-    args: Optional[Dict[str, Optional[Union[str, float, int]]]] = Field(default=None)
-    inject_args: Optional[Dict[str, Any]] = Field(default=None)
-    requires_plugin: Optional[str] = Field(default=None)
-    transformation_type: Optional[str] = Field(default=None)
-    operator: Optional[str] = Field(default=None)
-    pack_to_tuple: Optional[str] = Field(default=None)
-    macro_template: Optional[str] = Field(default=None)
+    api: str | None = Field(default=None)
+    args: dict[str, str | float | int | None] | None = Field(default=None)
+    inject_args: dict[str, Any] | None = Field(default=None)
+    requires_plugin: str | None = Field(default=None)
+    transformation_type: str | None = Field(default=None)
+    operator: str | None = Field(default=None)
+    pack_to_tuple: str | None = Field(default=None)
+    macro_template: str | None = Field(default=None)
 
 
-def migrate_ghost_ref(data: Dict[str, Any]) -> "GhostRef":
+def migrate_ghost_ref(data: dict[str, Any]) -> GhostRef:
     """Migrates a v1.x JSON dict to a v2.x compatible GhostRef instance.
 
     Args:

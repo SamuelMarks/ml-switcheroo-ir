@@ -1,7 +1,7 @@
+import json
 import os
 import re
 import subprocess
-import json
 
 
 def get_color(pct):
@@ -30,7 +30,7 @@ def get_test_coverage():
         with open("coverage.json", "r") as f:
             data = json.load(f)
             return data["totals"]["percent_covered"]
-    except Exception:
+    except Exception:  # noqa: BLE001
         return 0.0
 
 

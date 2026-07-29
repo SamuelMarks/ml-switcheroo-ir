@@ -1,7 +1,9 @@
 """Tests module."""
 
 import pathlib
+
 import pytest
+
 from ml_switcheroo_ir.cli import main as cli_main
 
 
@@ -56,6 +58,7 @@ def test_cli_compliance_branch_coverage(
 ) -> None:
     """Test compliance subcommand branch coverage."""
     import json
+
     from ml_switcheroo_ir.cli import main as cli_main
 
     workspace = tmp_path / "workspace2"

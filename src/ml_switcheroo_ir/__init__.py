@@ -7,11 +7,12 @@ explicit definition.
 It acts as the contract between the Frontend (Ingestion) and the Backend (Synthesis).
 """
 
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Union, Tuple
-from collections import defaultdict, deque
-from abc import ABC, abstractmethod
+from __future__ import annotations
+
 import json
+from abc import ABC, abstractmethod
+from collections import defaultdict, deque
+from dataclasses import asdict, dataclass, field
 
 from ml_switcheroo_ir.types import AttributeValue
 
@@ -27,7 +28,7 @@ class LogicalAxis:
     """
 
     name: str
-    size: Optional[int] = None
+    size: int | None = None
 
 
 @dataclass
@@ -44,7 +45,7 @@ class PartitionSpec:
 
     """
 
-    axes: Tuple[Optional[Union[str, Tuple[str, ...]]], ...]
+    axes: tuple[str | tuple[str, ...] | None, ...]
 
 
 @dataclass
@@ -56,7 +57,7 @@ class LogicalMesh:
 
     """
 
-    shape: Dict[str, int]
+    shape: dict[str, int]
 
 
 @dataclass
@@ -80,11 +81,11 @@ class LogicalNode:
     op_type: str
     domain: str = "ai.onnx"
     version: int = 1
-    attributes: Dict[str, AttributeValue] = field(default_factory=dict)
-    inputs: List[str] = field(default_factory=list)
-    shape_metadata: Optional[Tuple[Union[int, str], ...]] = None
-    source_ast_ref: Optional[str] = None
-    sharding: Optional[PartitionSpec] = None
+    attributes: dict[str, AttributeValue] = field(default_factory=dict)
+    inputs: list[str] = field(default_factory=list)
+    shape_metadata: tuple[int | str, ...] | None = None
+    source_ast_ref: str | None = None
+    sharding: PartitionSpec | None = None
 
     @property
     def kind(self) -> str:
@@ -92,7 +93,7 @@ class LogicalNode:
         return self.op_type
 
     @property
-    def metadata(self) -> Dict[str, AttributeValue]:
+    def metadata(self) -> dict[str, AttributeValue]:
         """Alias for attributes for backward compatibility."""
         return self.attributes
 
@@ -110,16 +111,16 @@ class LogicalGraph:
     """
 
     name: str = "Model"
-    nodes: Dict[str, LogicalNode] = field(default_factory=dict)
-    outputs: List[str] = field(default_factory=list)
-    mesh: Optional[LogicalMesh] = None
+    nodes: dict[str, LogicalNode] = field(default_factory=dict)
+    outputs: list[str] = field(default_factory=list)
+    mesh: LogicalMesh | None = None
 
     def to_json(self) -> str:
         """Serialize the graph to a deterministic JSON string."""
         return json.dumps(asdict(self), sort_keys=True, indent=2)
 
     @classmethod
-    def from_json(cls, json_str: str) -> "LogicalGraph":
+    def from_json(cls, json_str: str) -> LogicalGraph:
         """Deserialize a graph from a JSON string."""
         data = json.loads(json_str)
         nodes_data = data.get("nodes", {})
@@ -136,7 +137,7 @@ class LogicalGraph:
             sharding = ndata.get("sharding")
             if sharding:
                 ndata["sharding"] = PartitionSpec(axes=tuple(sharding["axes"]))
-            if "shape_metadata" in ndata and ndata["shape_metadata"]:
+            if ndata.get("shape_metadata"):
                 ndata["shape_metadata"] = tuple(ndata["shape_metadata"])
             nodes[nid] = LogicalNode(**ndata)
 
@@ -155,7 +156,7 @@ class LogicalGraph:
         )
 
 
-def topological_sort(graph: LogicalGraph) -> List[LogicalNode]:
+def topological_sort(graph: LogicalGraph) -> list[LogicalNode]:
     """Sorts graph nodes by dependency order.
 
     Ensures that for every edge u -> v, u appears before v in the returned list.
@@ -169,8 +170,8 @@ def topological_sort(graph: LogicalGraph) -> List[LogicalNode]:
         List[LogicalNode]: List of nodes in execution order.
 
     """
-    adj: Dict[str, List[str]] = defaultdict(list)
-    in_degree: Dict[str, int] = defaultdict(int)
+    adj: dict[str, list[str]] = defaultdict(list)
+    in_degree: dict[str, int] = defaultdict(int)
 
     # Initialize in-degree for all nodes
     for nid in graph.nodes:

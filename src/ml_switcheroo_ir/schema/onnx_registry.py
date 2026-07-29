@@ -1,7 +1,9 @@
 """Generated ONNX Operator Registry."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Dict, List, Any
+from typing import Any
 
 
 @dataclass
@@ -37,12 +39,12 @@ class OpSchema:
     name: str
     domain: str
     version: int
-    attributes: Dict[str, OpAttribute]
-    inputs: List[str]
-    outputs: List[str]
+    attributes: dict[str, OpAttribute]
+    inputs: list[str]
+    outputs: list[str]
 
 
-ONNX_REGISTRY: Dict[str, OpSchema] = {
+ONNX_REGISTRY: dict[str, OpSchema] = {
     "Abs": OpSchema(
         name="Abs",
         domain="ai.onnx",

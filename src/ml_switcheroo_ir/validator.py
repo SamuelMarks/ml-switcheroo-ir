@@ -1,10 +1,11 @@
 """Validator module for ml_switcheroo_ir schemas."""
 
-from enum import Enum
-from dataclasses import dataclass
-from typing import List, Dict
+from __future__ import annotations
 
-from ml_switcheroo_ir import LogicalNode, LogicalGraph
+from dataclasses import dataclass
+from enum import Enum
+
+from ml_switcheroo_ir import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
 
 
@@ -35,7 +36,7 @@ class ValidationError:
 class Validator:
     """Validates LogicalGraph and LogicalNode instances against schemas."""
 
-    def __init__(self, registry: Dict[str, OpSchema] = None) -> None:
+    def __init__(self, registry: dict[str, OpSchema] | None = None) -> None:
         """Initialize the validator.
 
         Args:
@@ -47,7 +48,7 @@ class Validator:
         else:
             self.registry = registry
 
-    def validate_kind(self, node: LogicalNode) -> List[ValidationError]:
+    def validate_kind(self, node: LogicalNode) -> list[ValidationError]:
         """Validate that the node's kind exists in the registry for its domain.
 
         Args:
@@ -56,7 +57,7 @@ class Validator:
         Returns:
             List[ValidationError]: A list of errors found.
         """
-        errors: List[ValidationError] = []
+        errors: list[ValidationError] = []
         if node.domain != "ai.onnx":
             return errors  # Custom domains not handled strictly here unless in registry
 
@@ -71,7 +72,7 @@ class Validator:
             )
         return errors
 
-    def validate_required_attributes(self, node: LogicalNode) -> List[ValidationError]:
+    def validate_required_attributes(self, node: LogicalNode) -> list[ValidationError]:
         """Validate that all required attributes for the node's kind are present.
 
         Args:
@@ -80,7 +81,7 @@ class Validator:
         Returns:
             List[ValidationError]: A list of errors found.
         """
-        errors: List[ValidationError] = []
+        errors: list[ValidationError] = []
         if node.op_type not in self.registry:
             return errors
 
@@ -97,7 +98,7 @@ class Validator:
                 )
         return errors
 
-    def validate_attribute_types(self, node: LogicalNode) -> List[ValidationError]:
+    def validate_attribute_types(self, node: LogicalNode) -> list[ValidationError]:
         """Validate that attributes have the correct types according to the schema.
 
         Args:
@@ -106,7 +107,7 @@ class Validator:
         Returns:
             List[ValidationError]: A list of errors found.
         """
-        errors: List[ValidationError] = []
+        errors: list[ValidationError] = []
         if node.op_type not in self.registry:
             return errors
 
@@ -177,11 +178,14 @@ class Validator:
 
         schema = self.registry[node.op_type]
         for attr_name, attr_schema in schema.attributes.items():
-            if not attr_schema.required and attr_schema.default is not None:
-                if attr_name not in node.attributes:
-                    node.attributes[attr_name] = attr_schema.default
+            if (
+                not attr_schema.required
+                and attr_schema.default is not None
+                and attr_name not in node.attributes
+            ):
+                node.attributes[attr_name] = attr_schema.default
 
-    def validate_graph(self, graph: LogicalGraph) -> List[ValidationError]:
+    def validate_graph(self, graph: LogicalGraph) -> list[ValidationError]:
         """Validate all nodes and edges in a LogicalGraph.
 
         Args:
@@ -190,7 +194,7 @@ class Validator:
         Returns:
             List[ValidationError]: A list of all aggregated errors.
         """
-        errors: List[ValidationError] = []
+        errors: list[ValidationError] = []
 
         # Validate nodes
         for node in graph.nodes.values():
@@ -204,7 +208,7 @@ class Validator:
 
         return errors
 
-    def validate_edges(self, graph: LogicalGraph) -> List[ValidationError]:
+    def validate_edges(self, graph: LogicalGraph) -> list[ValidationError]:
         """Validate that all node inputs exist in the graph.
 
         Args:
@@ -213,7 +217,7 @@ class Validator:
         Returns:
             List[ValidationError]: A list of edge validation errors.
         """
-        errors: List[ValidationError] = []
+        errors: list[ValidationError] = []
         node_ids = set(graph.nodes.keys())
 
         for node_id, node in graph.nodes.items():

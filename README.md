@@ -51,16 +51,17 @@ Implement the `GraphFrontend` protocol to parse your domain-specific code into a
 from typing import Any
 from ml_switcheroo_ir import LogicalGraph, LogicalNode, GraphFrontend
 
+
 class MyPyTorchFrontend(GraphFrontend):
     def parse_to_graph(self, model_input: Any) -> LogicalGraph:
         # 1. Parse your PyTorch model
         # 2. Map operations to the ONNX dialect
         node = LogicalNode(
             id="linear1",
-            kind="Gemm", # ONNX dialect
+            kind="Gemm",  # ONNX dialect
             domain="ai.onnx",
             version=11,
-            metadata={"alpha": 1.0, "beta": 1.0, "transB": 1}
+            metadata={"alpha": 1.0, "beta": 1.0, "transB": 1},
         )
         # 3. Construct and return the graph
         return LogicalGraph(nodes=[node], edges=[])
@@ -71,6 +72,7 @@ Implement the `CompilerBackend` protocol to consume a `LogicalGraph` and emit yo
 
 ```python
 from ml_switcheroo_ir import LogicalGraph, CompilerBackend
+
 
 class MyTensorRTBackend(CompilerBackend):
     def compile(self, graph: LogicalGraph) -> str:

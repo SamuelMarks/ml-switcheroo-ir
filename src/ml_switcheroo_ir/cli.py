@@ -3,21 +3,22 @@
 Provides basic utilities to interact with LogicalGraph representations.
 """
 
+from __future__ import annotations
+
 import argparse
-import sys
-import os
 import importlib.util
 import inspect
+import os
 import re
-from typing import List
+import sys
 
 from ml_switcheroo_ir import (
+    CompilerBackend,
     LogicalGraph,
     topological_sort,
-    CompilerBackend,
 )
-from ml_switcheroo_ir.validator import Validator, ValidationLevel
 from ml_switcheroo_ir.schema.custom_ops import Registry
+from ml_switcheroo_ir.validator import ValidationLevel, Validator
 
 try:
     from tabulate import tabulate
@@ -96,7 +97,7 @@ def _verify_backend(file_path: str, class_name: str) -> None:
     try:
         spec.loader.exec_module(module)
         checks["Module loaded"] = True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error executing module: {e}")
         print_report()
         return
@@ -115,16 +116,16 @@ def _verify_backend(file_path: str, class_name: str) -> None:
     except TypeError:
         pass
 
-    if hasattr(cls, "compile") and callable(getattr(cls, "compile")):
+    if hasattr(cls, "compile") and callable(cls.compile):
         checks["Has compile() method"] = True
-        sig = inspect.signature(getattr(cls, "compile"))
+        sig = inspect.signature(cls.compile)
         if "graph" in sig.parameters:
             checks["compile() signature takes 'graph'"] = True
 
     print_report()
 
 
-def main(args: List[str] = None) -> None:
+def main(args: list[str] | None = None) -> None:
     """Entrypoint for the CLI.
 
     Args:

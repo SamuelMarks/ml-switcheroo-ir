@@ -1,9 +1,10 @@
 """Tests for the validation module."""
 
 import pytest
-from ml_switcheroo_ir import LogicalNode, LogicalGraph
-from ml_switcheroo_ir.validator import Validator, ValidationLevel
-from ml_switcheroo_ir.schema.onnx_registry import OpSchema, OpAttribute
+
+from ml_switcheroo_ir import LogicalGraph, LogicalNode
+from ml_switcheroo_ir.schema.onnx_registry import OpAttribute, OpSchema
+from ml_switcheroo_ir.validator import ValidationLevel, Validator
 
 # Create a small mock registry for controlled testing
 MOCK_REGISTRY = {

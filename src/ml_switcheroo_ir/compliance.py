@@ -1,17 +1,19 @@
 """Module for checking compliance of ML implementations against the IR and dialect."""
 
+from __future__ import annotations
+
 import ast
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 try:
     from tabulate import tabulate
 except ImportError:
     # Fallback if tabulate is not available
     def tabulate(
-        data: list[list[object]], headers: list[str] = None, **kwargs: Any
+        data: list[list[object]], headers: list[str] | None = None, **kwargs: Any
     ) -> str:
         """Fallback for tabulate.
 
@@ -35,7 +37,7 @@ except ImportError:
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 
 
-def collect_files(targets: List[str]) -> List[str]:
+def collect_files(targets: list[str]) -> list[str]:
     """Collect Python and JSON files from a list of target paths.
 
     Args:
@@ -51,7 +53,7 @@ def collect_files(targets: List[str]) -> List[str]:
             sys.exit(1)
 
         if os.path.isfile(target):
-            if target.endswith(".py") or target.endswith(".json"):
+            if target.endswith((".py", ".json")):
                 collected_files.append(os.path.abspath(target))
         else:
             for root, dirs, files in os.walk(target):
@@ -61,7 +63,7 @@ def collect_files(targets: List[str]) -> List[str]:
                     dirs.remove(".venv")
                 for file in files:
                     if (
-                        (file.endswith(".py") or file.endswith(".json"))
+                        (file.endswith((".py", ".json")))
                         and not file.startswith("test_")
                         and file != "__init__.py"
                     ):
@@ -69,16 +71,16 @@ def collect_files(targets: List[str]) -> List[str]:
     return collected_files
 
 
-def get_dialect_ops() -> Set[str]:
+def get_dialect_ops() -> set[str]:
     """Get the set of all operator names in the ONNX dialect registry.
 
     Returns:
         Set of operator names.
     """
-    return {k.split(".")[-1] for k in ONNX_REGISTRY.keys()}
+    return {k.split(".")[-1] for k in ONNX_REGISTRY}
 
 
-def parse_json_file(filepath: str, dialect_ops: Set[str]) -> Set[str]:
+def parse_json_file(filepath: str, dialect_ops: set[str]) -> set[str]:
     """Extract implemented dialect operations from a JSON file.
 
     Args:
@@ -93,17 +95,17 @@ def parse_json_file(filepath: str, dialect_ops: Set[str]) -> Set[str]:
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
-                for k in data.keys():
+                for k in data:
                     if k in dialect_ops:
                         implemented.add(k)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
     return implemented
 
 
 def extract_dynamic_definitions(
-    tree: ast.AST, filepath: str, dialect_ops: Set[str]
-) -> Set[str]:
+    tree: ast.AST, filepath: str, dialect_ops: set[str]
+) -> set[str]:
     """Extract dynamically loaded JSON definitions based on load_definitions call.
 
     Args:
@@ -119,11 +121,14 @@ def extract_dynamic_definitions(
 
     for node in ast.walk(tree):
         if (
-            isinstance(node, ast.Call)
-            and getattr(node.func, "id", "") == "load_definitions"
+            (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "id", "") == "load_definitions"
+            )
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
         ):
-            if node.args and isinstance(node.args[0], ast.Constant):
-                loaded_definitions_fw = node.args[0].value
+            loaded_definitions_fw = node.args[0].value
 
     if loaded_definitions_fw:
         # Try adjacent or nearby definitions/ folder
@@ -145,7 +150,7 @@ def extract_dynamic_definitions(
     return implemented
 
 
-def analyze_python_file(filepath: str, dialect_ops: Set[str]) -> Dict[str, Any]:
+def analyze_python_file(filepath: str, dialect_ops: set[str]) -> dict[str, Any]:
     """Analyze a python file for IR, FrameworkAdapter, and Dialect compliance.
 
     Args:
@@ -155,7 +160,7 @@ def analyze_python_file(filepath: str, dialect_ops: Set[str]) -> Dict[str, Any]:
     Returns:
         Dictionary with compliance findings.
     """
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "is_ir": False,
         "is_fw": False,
         "implemented_ops": set(),
@@ -167,7 +172,7 @@ def analyze_python_file(filepath: str, dialect_ops: Set[str]) -> Dict[str, Any]:
         with open(filepath, "r", encoding="utf-8") as f:
             source = f.read()
         tree = ast.parse(source)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return result
 
     # Check for IR
@@ -200,22 +205,28 @@ def analyze_python_file(filepath: str, dialect_ops: Set[str]) -> Dict[str, Any]:
             # Check for @register_op("framework", "op_name")
             for dec in node.decorator_list:
                 if (
-                    isinstance(dec, ast.Call)
-                    and getattr(dec.func, "id", "") == "register_op"
+                    (
+                        isinstance(dec, ast.Call)
+                        and getattr(dec.func, "id", "") == "register_op"
+                    )
+                    and len(dec.args) >= 2
+                    and isinstance(dec.args[1], ast.Constant)
                 ):
-                    if len(dec.args) >= 2 and isinstance(dec.args[1], ast.Constant):
-                        op_name = dec.args[1].value
-                        # Try exact match or capitalized match
-                        if op_name in dialect_ops:
-                            result["implemented_ops"].add(op_name)
-                        elif str(op_name).capitalize() in dialect_ops:
-                            result["implemented_ops"].add(str(op_name).capitalize())
+                    op_name = dec.args[1].value
+                    # Try exact match or capitalized match
+                    if op_name in dialect_ops:
+                        result["implemented_ops"].add(op_name)
+                    elif str(op_name).capitalize() in dialect_ops:
+                        result["implemented_ops"].add(str(op_name).capitalize())
 
         if isinstance(node, ast.Dict):
             for key in node.keys:
-                if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                    if key.value in dialect_ops:
-                        result["implemented_ops"].add(key.value)
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and key.value in dialect_ops
+                ):
+                    result["implemented_ops"].add(key.value)
 
     result["implemented_ops"].update(
         extract_dynamic_definitions(tree, filepath, dialect_ops)
@@ -277,7 +288,7 @@ def analyze_python_file(filepath: str, dialect_ops: Set[str]) -> Dict[str, Any]:
 
 
 def run_compliance_check(
-    targets: List[str], verbose: bool = False, mapping_file: Optional[str] = None
+    targets: list[str], verbose: bool = False, mapping_file: str | None = None
 ) -> None:
     """Run the compliance check on the specified targets and print reports.
 
@@ -419,12 +430,12 @@ def run_compliance_check(
         print("\nVerbose Missing Operations Report")
         print("=================================")
 
-        missing_ops_list = sorted(list(dialect_ops - aggregated_dialect_ops))
+        missing_ops_list = sorted(dialect_ops - aggregated_dialect_ops)
         dialect_ops_map = {k.split(".")[-1]: v for k, v in ONNX_REGISTRY.items()}
 
         if mapping_file and os.path.exists(mapping_file):
-            import inspect
             import importlib
+            import inspect
 
             with open(mapping_file, "r", encoding="utf-8") as f:
                 mapping_data = json.load(f)
@@ -467,7 +478,7 @@ def run_compliance_check(
                             docstring = docstring.replace("\n", " ")
                             if len(docstring) > 150:
                                 docstring = docstring[:147] + "..."
-                    except Exception:
+                    except Exception:  # noqa: BLE001, S110
                         pass
 
                     table_data.append(

@@ -1,7 +1,11 @@
 """Tests module."""
 
+from __future__ import annotations
+
 import pathlib
+
 import pytest
+
 from ml_switcheroo_ir.cli import main as cli_main
 
 
@@ -11,8 +15,8 @@ def test_cli_compliance_verbose(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test compliance subcommand verbose output."""
-    from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
     import ml_switcheroo_ir.compliance
+    from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 
     original_get_dialect_ops = ml_switcheroo_ir.compliance.get_dialect_ops
 
@@ -37,7 +41,7 @@ def test_cli_compliance_verbose(
     assert "### " in captured.out
 
     # Find some op we know is missing, e.g., 'Add' if it's in the registry
-    dialect_ops = {k.split(".")[-1] for k in ONNX_REGISTRY.keys()}
+    dialect_ops = {k.split(".")[-1] for k in ONNX_REGISTRY}
     assert "Add" in dialect_ops
     assert "- [ ] **Add**" in captured.out
     assert "```json" in captured.out
@@ -111,8 +115,8 @@ def test_cli_compliance_verbose_mapping_exception(
         capsys: Pytest fixture for capturing stdout/stderr.
         monkeypatch: Pytest fixture for monkeypatching.
     """
-    import json
     import inspect
+    import json
     from typing import Any
 
     def mock_getdoc(obj: Any) -> str:
@@ -127,7 +131,7 @@ def test_cli_compliance_verbose_mapping_exception(
         Raises:
             Exception: Always.
         """
-        raise Exception("Mocked exception")
+        raise RuntimeError("Mocked exception")
 
     monkeypatch.setattr(inspect, "getdoc", mock_getdoc)
 
