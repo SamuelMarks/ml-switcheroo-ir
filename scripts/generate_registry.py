@@ -1,9 +1,23 @@
+"""Parser and code generator for ONNX operator schema registry."""
+
+from __future__ import annotations
+
 import ast
 import json
 import re
+import sys
+from typing import Any
 
 
-def parse_onnx_docs(md_file):
+def parse_onnx_docs(md_file: str) -> dict[str, dict[str, Any]]:
+    """Parse ONNX Operators.md markdown documentation to extract op schemas.
+
+    Args:
+        md_file: Path to the Operators.md file.
+
+    Returns:
+        Dictionary mapping operator names to operator schema definitions.
+    """
     with open(md_file, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -13,7 +27,7 @@ def parse_onnx_docs(md_file):
 
     op_blocks = re.split(r'^###\s+<a\s+name="[^"]+"></a>', content, flags=re.MULTILINE)
 
-    ops = {}
+    ops: dict[str, dict[str, Any]] = {}
 
     for block in op_blocks[1:]:  # skip first block which is preamble
         name_match = re.search(r'^<a\s+name="[^"]+">\*\*(.*?)\*\*</a>', block)
@@ -37,7 +51,7 @@ def parse_onnx_docs(md_file):
             r"#### Attributes\n+<dl>(.*?)</dl>", block, flags=re.DOTALL
         )
 
-        attributes = {}
+        attributes: dict[str, dict[str, Any]] = {}
         if attr_section_match:
             attr_content = attr_section_match.group(1)
             # Find all <dt>
@@ -54,7 +68,9 @@ def parse_onnx_docs(md_file):
                 required = "(required)" in rest
 
                 # Default
-                default_val = None
+                default_val: str | int | float | list[Any] | dict[str, Any] | None = (
+                    None
+                )
                 default_match = re.search(r"\(default is (.*?)\)", rest)
                 if default_match:
                     default_str = default_match.group(1).strip()
@@ -105,7 +121,7 @@ def parse_onnx_docs(md_file):
         input_section_match = re.search(
             r"#### Inputs(?:.*?)\n+<dl>(.*?)</dl>", block, flags=re.DOTALL
         )
-        inputs = []
+        inputs: list[str] = []
         if input_section_match:
             input_content = input_section_match.group(1)
             # Find all <dt>
@@ -119,7 +135,7 @@ def parse_onnx_docs(md_file):
         output_section_match = re.search(
             r"#### Outputs(?:.*?)\n+<dl>(.*?)</dl>", block, flags=re.DOTALL
         )
-        outputs = []
+        outputs: list[str] = []
         if output_section_match:
             output_content = output_section_match.group(1)
             # Find all <dt>
@@ -140,26 +156,61 @@ def parse_onnx_docs(md_file):
     return ops
 
 
-def main():
-    md_file = "third_party/onnx/docs/Operators.md"
-    ops = parse_onnx_docs(md_file)
+def main(
+    md_file: str | None = None,
+    json_path: str | None = None,
+    registry_path: str | None = None,
+) -> None:
+    """Generate ONNX JSON schema and registry python module from documentation.
 
-    json_path = "src/ml_switcheroo_ir/schema/onnx_ops.json"
-    with open(json_path, "w") as f:
+    Args:
+        md_file: Path to ONNX Operators markdown documentation.
+        json_path: Destination path for generated JSON op schemas.
+        registry_path: Destination path for generated Python registry file.
+    """
+    target_md = (
+        md_file
+        if md_file is not None
+        else (
+            sys.argv[1] if len(sys.argv) > 1 else "third_party/onnx/docs/Operators.md"
+        )
+    )
+    target_json = (
+        json_path
+        if json_path is not None
+        else (
+            sys.argv[2]
+            if len(sys.argv) > 2
+            else "src/ml_switcheroo_ir/schema/onnx_ops.json"
+        )
+    )
+    target_reg = (
+        registry_path
+        if registry_path is not None
+        else (
+            sys.argv[3]
+            if len(sys.argv) > 3
+            else "src/ml_switcheroo_ir/schema/onnx_registry.py"
+        )
+    )
+
+    ops = parse_onnx_docs(target_md)
+
+    with open(target_json, "w", encoding="utf-8") as f:
         json.dump(ops, f, indent=2)
 
     print(f"Parsed {len(ops)} operators.")
 
     # Generate python registry file
-    registry_path = "src/ml_switcheroo_ir/schema/onnx_registry.py"
-
     lines = [
         '"""Generated ONNX Operator Registry."""',
+        "from __future__ import annotations",
         "from dataclasses import dataclass, field",
-        "from typing import Dict, List, Optional, Any",
+        "from typing import Any",
         "",
         "@dataclass",
         "class OpAttribute:",
+        '    """Represents a single operator attribute schema."""',
         "    name: str",
         "    type: str",
         "    required: bool",
@@ -167,14 +218,15 @@ def main():
         "",
         "@dataclass",
         "class OpSchema:",
+        '    """Represents a single operator schema."""',
         "    name: str",
         "    domain: str",
         "    version: int",
-        "    attributes: Dict[str, OpAttribute]",
-        "    inputs: List[str]",
-        "    outputs: List[str]",
+        "    attributes: dict[str, OpAttribute]",
+        "    inputs: list[str]",
+        "    outputs: list[str]",
         "",
-        "ONNX_REGISTRY: Dict[str, OpSchema] = {",
+        "ONNX_REGISTRY: dict[str, OpSchema] = {",
     ]
 
     for op_name, op_data in sorted(ops.items()):
@@ -199,10 +251,10 @@ def main():
     lines.append("}")
     lines.append("")
 
-    with open(registry_path, "w") as f:
+    with open(target_reg, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    print(f"Generated {registry_path}")
+    print(f"Generated {target_reg}")
 
 
 if __name__ == "__main__":

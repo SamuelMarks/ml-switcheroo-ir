@@ -117,3 +117,97 @@ class Registry:
                 outputs=op_data.get("outputs", []),
             )
             self.register_custom_op(schema)
+
+
+RMSNORM_SCHEMA = CustomOpSchema(
+    name="RMSNorm",
+    domain="ml.switcheroo.custom",
+    inputs=["X", "weight"],
+    outputs=["Y"],
+    attributes=[
+        CustomAttributeSchema(
+            name="eps",
+            type="float",
+            required=False,
+            default=1e-6,
+        )
+    ],
+)
+
+SWIGLU_SCHEMA = CustomOpSchema(
+    name="SwiGLU",
+    domain="ml.switcheroo.custom",
+    inputs=["X"],
+    outputs=["Y"],
+    attributes=[
+        CustomAttributeSchema(
+            name="dim",
+            type="int",
+            required=False,
+            default=-1,
+        )
+    ],
+)
+
+ROPE_SCHEMA = CustomOpSchema(
+    name="RoPE",
+    domain="ml.switcheroo.custom",
+    inputs=["X", "cos", "sin"],
+    outputs=["Y"],
+    attributes=[
+        CustomAttributeSchema(
+            name="dim",
+            type="int",
+            required=False,
+            default=-1,
+        )
+    ],
+)
+
+FLASH_ATTENTION_SCHEMA = CustomOpSchema(
+    name="FlashAttention",
+    domain="ml.switcheroo.custom",
+    inputs=["Q", "K", "V"],
+    outputs=["Y"],
+    attributes=[
+        CustomAttributeSchema(
+            name="causal",
+            type="bool",
+            required=False,
+            default=False,
+        ),
+        CustomAttributeSchema(
+            name="scale",
+            type="float",
+            required=False,
+            default=None,
+        ),
+    ],
+)
+
+VISION_PATCH_EMBEDDING_SCHEMA = CustomOpSchema(
+    name="VisionPatchEmbedding",
+    domain="ml.switcheroo.custom",
+    inputs=["X", "weight"],
+    outputs=["Y"],
+    attributes=[
+        CustomAttributeSchema(
+            name="patch_size",
+            type="List[int]",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="embed_dim",
+            type="int",
+            required=True,
+        ),
+    ],
+)
+
+CUSTOM_OPS_REGISTRY: dict[str, OpSchema] = {
+    RMSNORM_SCHEMA.name: RMSNORM_SCHEMA.to_op_schema(),
+    SWIGLU_SCHEMA.name: SWIGLU_SCHEMA.to_op_schema(),
+    ROPE_SCHEMA.name: ROPE_SCHEMA.to_op_schema(),
+    FLASH_ATTENTION_SCHEMA.name: FLASH_ATTENTION_SCHEMA.to_op_schema(),
+    VISION_PATCH_EMBEDDING_SCHEMA.name: VISION_PATCH_EMBEDDING_SCHEMA.to_op_schema(),
+}

@@ -18,13 +18,15 @@ from ml_switcheroo_ir import (
     topological_sort,
 )
 from ml_switcheroo_ir.schema.custom_ops import Registry
-from ml_switcheroo_ir.validator import ValidationLevel, Validator
+from ml_switcheroo_ir.validator import ValidationError, ValidationLevel, Validator
 
 try:
     from tabulate import tabulate
 except ImportError:
     # Fallback if tabulate is not available
-    def tabulate(data: list[list[object]], headers: list[str], **kwargs: object) -> str:
+    def tabulate(  # type: ignore[misc]
+        data: list[list[object]], headers: list[str], **kwargs: object
+    ) -> str:
         """Fallback for tabulate.
 
         Args:
@@ -203,6 +205,36 @@ def main(args: list[str] | None = None) -> None:
         help="Print a detailed markdown checklist of missing operations",
     )
 
+    # Dump snapshot command
+    dump_parser = subparsers.add_parser(
+        "dump-snapshot",
+        help="Dump all classes, methods, parameters, and ops to GhostRef format JSON",
+    )
+    dump_parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        required=True,
+        help="Path to output JSON file",
+    )
+
+    # Ground command
+    ground_parser = subparsers.add_parser(
+        "ground",
+        help="Ground and audit a graph against ground-truth framework snapshots",
+    )
+    ground_parser.add_argument(
+        "infile", type=argparse.FileType("r"), help="Input model graph JSON file"
+    )
+    ground_parser.add_argument(
+        "--snapshots-dir",
+        "--snapshots",
+        type=str,
+        required=False,
+        default=None,
+        help="Path to snapshot JSON file or directory",
+    )
+
     parsed_args = parser.parse_args(args)
 
     if parsed_args.command == "toposort":
@@ -237,7 +269,7 @@ def main(args: list[str] | None = None) -> None:
             sys.exit(0)
 
         has_errors = False
-        grouped_errors = {}
+        grouped_errors: dict[str, list[ValidationError]] = {}
         for err in errors:
             if err.level == ValidationLevel.ERROR or parsed_args.strict:
                 has_errors = True
@@ -270,7 +302,7 @@ def main(args: list[str] | None = None) -> None:
     elif parsed_args.command == "list-ops":
         from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 
-        schemas = ONNX_REGISTRY.values()
+        schemas = list(ONNX_REGISTRY.values())
 
         if parsed_args.domain:
             schemas = [s for s in schemas if s.domain == parsed_args.domain]
@@ -296,6 +328,108 @@ def main(args: list[str] | None = None) -> None:
             )
         )
 
+    elif parsed_args.command == "dump-snapshot":
+        import json
+        from typing import Any
 
-if __name__ == "__main__":  # pragma: no cover
+        from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
+        from ml_switcheroo_ir.schema.ghost import GhostParam, GhostRef, ParameterKind
+        from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+
+        snapshot_entries: dict[str, dict[str, Any]] = {}
+
+        # Dump ONNX operators
+        for op_name, schema in ONNX_REGISTRY.items():
+            params = []
+            for inp in schema.inputs:
+                params.append(
+                    GhostParam(
+                        name=inp,
+                        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+                        default=None,
+                        annotation="Tensor",
+                    )
+                )
+            for attr_name, attr in schema.attributes.items():
+                params.append(
+                    GhostParam(
+                        name=attr_name,
+                        kind=ParameterKind.KEYWORD_ONLY,
+                        default=str(attr.default) if attr.default is not None else None,
+                        annotation=attr.type,
+                    )
+                )
+            ghost_ref = GhostRef(
+                name=op_name,
+                api_path=f"{schema.domain}.{op_name}",
+                kind="function",
+                params=params,
+                returns_type="Tensor",
+                docstring=f"ONNX operator {op_name} in domain {schema.domain}",
+                has_varargs=False,
+                schema_version="1.2",
+            )
+            snapshot_entries[f"{schema.domain}.{op_name}"] = ghost_ref.model_dump()
+
+        # Dump Custom operators
+        for op_name, schema in CUSTOM_OPS_REGISTRY.items():
+            params = []
+            for inp in schema.inputs:
+                params.append(
+                    GhostParam(
+                        name=inp,
+                        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+                        default=None,
+                        annotation="Tensor",
+                    )
+                )
+            for attr_name, attr in schema.attributes.items():
+                params.append(
+                    GhostParam(
+                        name=attr_name,
+                        kind=ParameterKind.KEYWORD_ONLY,
+                        default=str(attr.default) if attr.default is not None else None,
+                        annotation=attr.type,
+                    )
+                )
+            ghost_ref = GhostRef(
+                name=op_name,
+                api_path=f"{schema.domain}.{op_name}",
+                kind="function",
+                params=params,
+                returns_type="Tensor",
+                docstring=f"Custom operator {op_name} in domain {schema.domain}",
+                has_varargs=False,
+                schema_version="1.2",
+            )
+            snapshot_entries[f"{schema.domain}.{op_name}"] = ghost_ref.model_dump()
+
+        with open(parsed_args.output, "w", encoding="utf-8") as f:
+            json.dump(snapshot_entries, f, indent=2, sort_keys=True)
+        print(f"Dumped snapshot to {parsed_args.output}")
+
+    elif parsed_args.command == "ground":
+        from ml_switcheroo_ir.validator import audit_graph_grounding
+
+        json_data = parsed_args.infile.read()
+        graph = _parse_graph_from_json(json_data)
+        report = audit_graph_grounding(graph, snapshots_path=parsed_args.snapshots_dir)
+
+        print(
+            f"Grounding Audit: {report.grounded_count}/{report.total_nodes} nodes grounded. "
+            f"Hallucination score: {report.hallucination_score:.1%}"
+        )
+
+        if report.diagnostics:
+            for err in report.diagnostics:
+                print(
+                    f"  [{err.level.value}] Node {err.node_id} ({err.attribute}): {err.message}"
+                )
+            sys.exit(1)
+        else:
+            print("Graph is fully grounded against framework snapshots.")
+            sys.exit(0)
+
+
+if __name__ == "__main__":
     main()

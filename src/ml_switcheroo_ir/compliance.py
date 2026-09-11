@@ -12,24 +12,24 @@ try:
     from tabulate import tabulate
 except ImportError:
     # Fallback if tabulate is not available
-    def tabulate(
-        data: list[list[object]], headers: list[str] | None = None, **kwargs: Any
+    def tabulate(  # type: ignore[misc]
+        tabular_data: Any,
+        headers: Any = (),
+        **kwargs: Any,
     ) -> str:
         """Fallback for tabulate.
 
         Args:
-            data: The table data.
+            tabular_data: The table data.
             headers: The table headers.
             kwargs: Ignored keyword arguments.
 
         Returns:
             The tabulated string.
         """
-        res = ""
-        if headers:
-            res += " | ".join(headers) + "\n"
-            res += "-" * len(res) + "\n"
-        for row in data:
+        res = " | ".join(str(h) for h in headers) + "\n"
+        res += "-" * len(res) + "\n"
+        for row in tabular_data:
             res += " | ".join(str(c) for c in row) + "\n"
         return res
 
@@ -130,16 +130,21 @@ def extract_dynamic_definitions(
         ):
             loaded_definitions_fw = node.args[0].value
 
-    if loaded_definitions_fw:
+    if loaded_definitions_fw is not None:
+        fw_name = (
+            loaded_definitions_fw.decode("utf-8", errors="replace")
+            if isinstance(loaded_definitions_fw, bytes)
+            else str(loaded_definitions_fw)
+        )
         # Try adjacent or nearby definitions/ folder
         base_dir = os.path.dirname(filepath)
         possible_paths = [
-            os.path.join(base_dir, f"{loaded_definitions_fw}.json"),
-            os.path.join(base_dir, "definitions", f"{loaded_definitions_fw}.json"),
+            os.path.join(base_dir, f"{fw_name}.json"),
+            os.path.join(base_dir, "definitions", f"{fw_name}.json"),
             os.path.join(
                 os.path.dirname(base_dir),
                 "definitions",
-                f"{loaded_definitions_fw}.json",
+                f"{fw_name}.json",
             ),
         ]
         for p in possible_paths:

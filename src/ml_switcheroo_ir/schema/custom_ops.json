@@ -1,0 +1,84 @@
+{
+  "ops": [
+    {
+      "name": "RMSNorm",
+      "domain": "ml.switcheroo.custom",
+      "inputs": ["X", "weight"],
+      "outputs": ["Y"],
+      "attributes": [
+        {
+          "name": "eps",
+          "type": "float",
+          "required": false,
+          "default": 1e-06
+        }
+      ]
+    },
+    {
+      "name": "SwiGLU",
+      "domain": "ml.switcheroo.custom",
+      "inputs": ["X"],
+      "outputs": ["Y"],
+      "attributes": [
+        {
+          "name": "dim",
+          "type": "int",
+          "required": false,
+          "default": -1
+        }
+      ]
+    },
+    {
+      "name": "RoPE",
+      "domain": "ml.switcheroo.custom",
+      "inputs": ["X", "cos", "sin"],
+      "outputs": ["Y"],
+      "attributes": [
+        {
+          "name": "dim",
+          "type": "int",
+          "required": false,
+          "default": -1
+        }
+      ]
+    },
+    {
+      "name": "FlashAttention",
+      "domain": "ml.switcheroo.custom",
+      "inputs": ["Q", "K", "V"],
+      "outputs": ["Y"],
+      "attributes": [
+        {
+          "name": "causal",
+          "type": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "scale",
+          "type": "float",
+          "required": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "VisionPatchEmbedding",
+      "domain": "ml.switcheroo.custom",
+      "inputs": ["X", "weight"],
+      "outputs": ["Y"],
+      "attributes": [
+        {
+          "name": "patch_size",
+          "type": "List[int]",
+          "required": true
+        },
+        {
+          "name": "embed_dim",
+          "type": "int",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

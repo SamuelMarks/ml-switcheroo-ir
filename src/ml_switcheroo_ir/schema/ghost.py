@@ -7,7 +7,7 @@ API structures between the ml-framework-snapshots scraper and the ml-switcheroo 
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,6 +20,25 @@ class ParameterKind(str, Enum):
     VAR_POSITIONAL = "VAR_POSITIONAL"
     KEYWORD_ONLY = "KEYWORD_ONLY"
     VAR_KEYWORD = "VAR_KEYWORD"
+
+
+class OperandDirection(str, Enum):
+    """Structured operand directionality for assembly and low-level instructions."""
+
+    READ = "READ"
+    WRITE = "WRITE"
+    READ_WRITE = "READ_WRITE"
+    PREDICATE = "PREDICATE"
+
+
+class IRParameterRole(str, Enum):
+    """Distinguishes parameter roles for compiler intermediate representations."""
+
+    OPERAND = "OPERAND"
+    ATTRIBUTE = "ATTRIBUTE"
+    RESULT = "RESULT"
+    SUCCESSOR = "SUCCESSOR"
+    REGION = "REGION"
 
 
 class SemanticTier(str, Enum):
@@ -55,6 +74,53 @@ class GhostParam(BaseModel):
     description: str | None = Field(default=None, description="Description")
 
     standardized_name: str | None = Field(default=None, description="Standardized name")
+
+
+class GhostResult(BaseModel):
+    """Structured SSA return or result for compiler IR operations."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str | None = Field(
+        default=None, description="Result SSA name or output identifier."
+    )
+    type: str | None = Field(
+        default=None, description="Result type (e.g. tensor<?x?xf32>)."
+    )
+    description: str | None = Field(
+        default=None, description="Description of the result."
+    )
+
+
+class ExtendedGhostParam(GhostParam):
+    """Extended GhostParam supporting operand directionality, IR roles, dtypes, rank, and factory defaults."""
+
+    model_config = ConfigDict(extra="allow")
+
+    direction: OperandDirection | None = Field(
+        default=None,
+        description="Operand directionality (READ, WRITE, READ_WRITE, PREDICATE).",
+    )
+    role: IRParameterRole | None = Field(
+        default=None,
+        description="IR parameter role (OPERAND, ATTRIBUTE, RESULT, etc.).",
+    )
+    dtypes: list[str] | None = Field(
+        default=None,
+        description="Allowed tensor dtypes (e.g. ['float32', 'bfloat16', 'float16']).",
+    )
+    rank: int | str | None = Field(
+        default=None,
+        description="Allowed tensor rank (e.g. 0 for scalar, 1, 2, 'N-D').",
+    )
+    rank_constraint: str | None = Field(
+        default=None,
+        description="Allowed tensor rank constraint (e.g. '==2', '>=2', 'scalar').",
+    )
+    is_contracting_dim: bool | None = Field(
+        default=None,
+        description="Whether this parameter represents a contracting tensor dimension.",
+    )
 
 
 class GhostRef(BaseModel):
@@ -97,6 +163,123 @@ class GhostRef(BaseModel):
         return any(p.name == arg_name for p in self.params)
 
 
+class ExtendedGhostRef(GhostRef):
+    """Extended GhostRef with support for domain metadata, multiple SSA returns, and IR operands."""
+
+    model_config = ConfigDict(extra="allow")
+
+    params: list[ExtendedGhostParam | GhostParam] = Field(  # type: ignore[assignment]
+        default_factory=list,
+        description="List of extended parameter specifications.",
+    )
+    returns: list[GhostResult] | None = Field(
+        default=None, description="Multiple SSA returns or results."
+    )
+    domain_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured domain metadata for ISAs and compilers.",
+    )
+    signature_completeness: Literal["exact", "heuristic", "opaque"] | None = Field(
+        default="exact",
+        description="Completeness of signature resolution: exact, heuristic, or opaque.",
+    )
+
+
+class GhostIsaRef(ExtendedGhostRef):
+    """GhostRef specialized for GPU assembly ISAs (NVIDIA SASS, AMD RDNA/CDNA)."""
+
+    model_config = ConfigDict(extra="allow")
+    domain_type: Literal["isa", "instruction"] = "isa"
+    predicate_guards: list[str] | None = Field(
+        default=None,
+        description="Allowed predicate guard registers (e.g. ['@P0', '@!P1', '@PT']).",
+    )
+    register_classes: dict[str, str] | None = Field(
+        default=None,
+        description="Register classes for operands (e.g. {'op0': 'VGPR_32', 'op1': 'VReg_64'}).",
+    )
+    control_codes: dict[str, Any] | None = Field(
+        default=None,
+        description="Instruction control code and scheduling schema.",
+    )
+    instruction_modifiers: list[str] | None = Field(
+        default=None,
+        description="Valid instruction modifiers (e.g. ['.SAT', '.FTZ', 'omod:2']).",
+    )
+    vopd_profile: dict[str, Any] | None = Field(
+        default=None,
+        description="VOPD dual-issue profile and pairing rules for RDNA3/GFX11.",
+    )
+
+
+class GhostMlirRef(ExtendedGhostRef):
+    """GhostRef specialized for compiler IR dialects (Core MLIR and StableHLO)."""
+
+    model_config = ConfigDict(extra="allow")
+    domain_type: Literal["mlir", "operation"] = "mlir"
+    traits: list[str] | None = Field(
+        default=None,
+        description="Dialect verification traits (e.g. ['SameOperandsAndResultType', 'Commutative']).",
+    )
+    operands: list[ExtendedGhostParam | GhostParam] | None = Field(
+        default=None,
+        description="Strictly decoupled SSA value arguments (operands).",
+    )
+    attributes: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured attribute specifications and schemas.",
+    )
+    regions: dict[str, Any] | None = Field(
+        default=None,
+        description="Region definitions with block arguments and yield types.",
+    )
+    successors: list[str] | None = Field(
+        default=None,
+        description="Successor block identifiers for control flow operations.",
+    )
+    type_constraints: dict[str, str] | None = Field(
+        default=None,
+        description="Type constraints for operands and results (e.g. RankedTensorOf, AnyFloat).",
+    )
+
+
+class SnapshotEnvelope(BaseModel):
+    """Structured provenance envelope for framework and ISA/IR snapshots."""
+
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: str = Field(default="2.0.0", description="Snapshot schema version.")
+    target: str = Field(..., description="Target framework, dialect, or hardware ISA.")
+    version: str | None = Field(
+        default=None,
+        description="Upstream framework version or toolkit release.",
+    )
+    upstream_version: str | None = Field(
+        default=None,
+        description="Upstream hardware specification or compiler version.",
+    )
+    source_type: str | None = Field(
+        default=None,
+        description="Extraction source (tablegen, binary_disassembly, python_ast).",
+    )
+    upstream_commit: str | None = Field(
+        default=None, description="Upstream git commit hash or release tag."
+    )
+    supported_microarchitectures: list[str] | None = Field(
+        default=None,
+        description="Explicit list of supported GPU compute capabilities or target architectures.",
+    )
+    generated_at: str | None = Field(
+        default=None, description="ISO-8601 generation timestamp."
+    )
+    environment: dict[str, Any] | None = Field(
+        default=None, description="Build host environment metadata."
+    )
+    categories: dict[str, list[Any]] = Field(
+        default_factory=dict, description="Categorized symbol dictionaries."
+    )
+
+
 class LogicOp(str, Enum):
     """Supported operators for conditional logic rules in operations."""
 
@@ -127,7 +310,7 @@ class StandardMap(BaseModel):
 
 
 def migrate_ghost_ref(data: dict[str, Any]) -> GhostRef:
-    """Migrates a v1.x JSON dict to a v2.x compatible GhostRef instance.
+    """Migrates a v1.x JSON dict to a v1.2 compatible GhostRef instance.
 
     Args:
         data: The dictionary representation of a GhostRef, possibly from an older schema.
@@ -148,3 +331,39 @@ def migrate_ghost_ref(data: dict[str, Any]) -> GhostRef:
                 param["kind"] = kind_str
 
     return GhostRef.model_validate(data)
+
+
+def migrate_ghost_ref_v2(data: dict[str, Any]) -> ExtendedGhostRef:
+    """Seamlessly upgrade v1.x or v2.x dictionaries to ExtendedGhostRef structure.
+
+    Args:
+        data (Dict[str, Any]): Dictionary representation of ghost reference.
+
+    Returns:
+        ExtendedGhostRef: Validated ExtendedGhostRef instance.
+    """
+    data_copy = dict(data)
+    if "schema_version" not in data_copy or data_copy["schema_version"] in (
+        "1.0",
+        "1.0.0",
+        "1.2",
+    ):
+        data_copy["schema_version"] = "2.0.0"
+
+    if "params" in data_copy and isinstance(data_copy["params"], list):
+        for param in data_copy["params"]:
+            if (
+                isinstance(param, dict)
+                and "kind" in param
+                and isinstance(param["kind"], str)
+            ):
+                kind_str = param["kind"].split(".")[-1]
+                param["kind"] = kind_str
+
+    domain_type = data_copy.get("domain_type")
+    if domain_type == "isa" or domain_type == "instruction":
+        return GhostIsaRef.model_validate(data_copy)
+    if domain_type == "mlir" or domain_type == "operation":
+        return GhostMlirRef.model_validate(data_copy)
+
+    return ExtendedGhostRef.model_validate(data_copy)

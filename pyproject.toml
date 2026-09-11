@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ml-switcheroo-ir"
-version = "0.1.0"
-description = "Intermediate Representation for ml-switcheroo"
+version = "0.0.3"
+description = "Intermediate Representation for ml-switcheroo* and ml-framework-snapshots"
 authors = [
-    { name = "ml-switcheroo authors" }
+    { name = "Samuel Marks <807580+SamuelMarks@users.noreply.github.com>" }
 ]
 readme = "README.md"
 requires-python = ">=3.8"
@@ -24,15 +24,12 @@ files = ["requirements.txt"]
 
 [tool.hatch.metadata.hooks.requirements_txt.optional-dependencies]
 test = ["requirements-test.txt"]
-cuda = ["requirements-cuda.txt"]
 
 [tool.ruff]
-exclude = [
-    "third_party",
-]
+exclude = ["third_party"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
 
 [tool.coverage.run]
-omit = ["scripts/*"]
+branch = true

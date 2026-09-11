@@ -1,10 +1,23 @@
+"""Script for dynamically updating README.md test and doc coverage badges."""
+
+from __future__ import annotations
+
 import json
 import os
 import re
 import subprocess
+import sys
 
 
-def get_color(pct):
+def get_color(pct: float) -> str:
+    """Determine shield badge color based on coverage percentage.
+
+    Args:
+        pct: Coverage percentage between 0.0 and 100.0.
+
+    Returns:
+        String color name for shields.io badge.
+    """
     if pct >= 100:
         return "brightgreen"
     if pct >= 90:
@@ -18,32 +31,66 @@ def get_color(pct):
     return "red"
 
 
-def format_cov(cov):
+def format_cov(cov: float) -> str:
+    """Format coverage float into string for badges.
+
+    Args:
+        cov: Coverage percentage as a floating-point number.
+
+    Returns:
+        Formatted string without decimal places if whole number, else one decimal.
+    """
     if int(cov) == cov:
         return str(int(cov))
     return f"{cov:.1f}"
 
 
-def get_test_coverage():
+def get_test_coverage(coverage_json_path: str = "coverage.json") -> float:
+    """Extract total test coverage percentage from coverage.json or run coverage tool.
+
+    Args:
+        coverage_json_path: Path to the JSON coverage file to inspect or generate.
+
+    Returns:
+        Total coverage percentage as a float.
+    """
     try:
-        subprocess.run(["coverage", "json", "-o", "coverage.json"], check=False)
-        with open("coverage.json", "r") as f:
+        subprocess.run(["coverage", "json", "-o", coverage_json_path], check=False)
+        with open(coverage_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return data["totals"]["percent_covered"]
+            return float(data["totals"]["percent_covered"])
     except Exception:  # noqa: BLE001
         return 0.0
 
 
-def get_doc_coverage():
+def get_doc_coverage() -> float:
+    """Determine documentation coverage percentage.
+
+    Returns:
+        Doc coverage percentage as a float.
+    """
     # Placeholder for actual AST linter coverage logic
     return 100.0
 
 
-def update_readme():
-    if not os.path.exists("README.md"):
+def update_readme(
+    readme_path: str | None = None, coverage_json_path: str = "coverage.json"
+) -> None:
+    """Update test and doc coverage shields in README.md.
+
+    Args:
+        readme_path: Path to the README.md file to update.
+        coverage_json_path: Path to the coverage.json file to inspect.
+    """
+    target_readme = (
+        readme_path
+        if readme_path is not None
+        else (sys.argv[1] if len(sys.argv) > 1 else "README.md")
+    )
+    if not os.path.exists(target_readme):
         return
 
-    test_cov = get_test_coverage()
+    test_cov = get_test_coverage(coverage_json_path=coverage_json_path)
     doc_cov = get_doc_coverage()
 
     test_str = format_cov(test_cov)
@@ -52,7 +99,7 @@ def update_readme():
     test_color = get_color(test_cov)
     doc_color = get_color(doc_cov)
 
-    with open("README.md", "r") as f:
+    with open(target_readme, "r", encoding="utf-8") as f:
         content = f.read()
 
     # Generic replacements that handle both the cdd-go markdown format with the `#` anchor and the older ml-switcheroo format
@@ -72,7 +119,7 @@ def update_readme():
         content,
     )
 
-    with open("README.md", "w") as f:
+    with open(target_readme, "w", encoding="utf-8") as f:
         f.write(content)
 
 

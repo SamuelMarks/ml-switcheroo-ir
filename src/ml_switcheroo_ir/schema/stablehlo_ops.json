@@ -1,0 +1,157 @@
+{
+  "ops": [
+    {
+      "name": "dot_general",
+      "domain": "stablehlo",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "dot_dimension_numbers",
+          "type": "dict",
+          "required": true
+        },
+        {
+          "name": "precision_config",
+          "type": "List[str]",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "convolution",
+      "domain": "stablehlo",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "dimension_numbers",
+          "type": "dict",
+          "required": true
+        },
+        {
+          "name": "window_strides",
+          "type": "List[int]",
+          "required": true
+        },
+        {
+          "name": "padding",
+          "type": "List[int]",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "reduce",
+      "domain": "stablehlo",
+      "inputs": ["inputs", "init_values"],
+      "outputs": ["results"],
+      "attributes": [
+        {
+          "name": "dimensions",
+          "type": "List[int]",
+          "required": true
+        },
+        {
+          "name": "body",
+          "type": "dict",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "while",
+      "domain": "stablehlo",
+      "inputs": ["operand"],
+      "outputs": ["results"],
+      "attributes": [
+        {
+          "name": "cond",
+          "type": "dict",
+          "required": false
+        },
+        {
+          "name": "body",
+          "type": "dict",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "gather",
+      "domain": "stablehlo",
+      "inputs": ["operand", "start_indices"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "dimension_numbers",
+          "type": "dict",
+          "required": true
+        },
+        {
+          "name": "slice_sizes",
+          "type": "List[int]",
+          "required": true
+        },
+        {
+          "name": "indices_are_sorted",
+          "type": "bool",
+          "required": false,
+          "default": false
+        }
+      ]
+    },
+    {
+      "name": "scatter",
+      "domain": "stablehlo",
+      "inputs": ["inputs", "scatter_indices", "updates"],
+      "outputs": ["results"],
+      "attributes": [
+        {
+          "name": "scatter_dimension_numbers",
+          "type": "dict",
+          "required": true
+        },
+        {
+          "name": "indices_are_sorted",
+          "type": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "unique_indices",
+          "type": "bool",
+          "required": false,
+          "default": false
+        }
+      ]
+    },
+    {
+      "name": "custom_call",
+      "domain": "stablehlo",
+      "inputs": ["inputs"],
+      "outputs": ["results"],
+      "attributes": [
+        {
+          "name": "call_target_name",
+          "type": "str",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "add",
+      "domain": "stablehlo",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "multiply",
+      "domain": "stablehlo",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": []
+    }
+  ]
+}
