@@ -107,3 +107,232 @@ def test_grounding_validator_edge_branches(tmp_path: Path) -> None:
     }
     gv_cat = GroundingValidator(snapshot_manifest=cat_manifest)
     assert "only_name" in gv_cat.grounded_symbols
+
+
+def test_compute_levenshtein() -> None:
+    """Test compute_levenshtein edit distance calculations and edge cases."""
+    from ml_switcheroo_ir.validator import compute_levenshtein
+
+    assert compute_levenshtein("", "") == 0
+    assert compute_levenshtein("a", "abc") == 2
+    assert compute_levenshtein("abc", "") == 3
+    assert compute_levenshtein("kitten", "sitting") == 3
+    assert compute_levenshtein("same", "same") == 0
+
+
+def test_grounding_validator_multi_format_and_directory(tmp_path: Path) -> None:
+    """Test GroundingValidator ingesting top-level lists, gzip files, and directories."""
+    import gzip
+    import json
+
+    # 1. Top-level list of dicts
+    list_manifest = [
+        {
+            "name": "dot_general",
+            "api_path": "stablehlo.dot_general",
+            "params": [{"name": "lhs"}, {"name": "rhs"}],
+            "attributes": [
+                {"name": "dot_dimension_numbers", "type": "dict"},
+                "plain_attr_str",
+            ],
+            "operands": [
+                {"name": "lhs_op"},
+                "plain_op_str",
+                123,  # non-dict, non-str branch
+            ],
+        },
+        {"mnemonic": "V_ADD_F32", "api_path": "amd_rdna.v_add_f32"},
+        "invalid_non_dict_entry",
+    ]
+
+    gv_list = GroundingValidator(snapshot_manifest=list_manifest)
+    assert "stablehlo.dot_general" in gv_list.grounded_symbols
+    assert "dot_general" in gv_list.grounded_symbols
+    assert "V_ADD_F32" in gv_list.grounded_symbols
+
+    # Test attributes list[dict] and list[str], operands list[dict] and list[str]
+    valid_hlo_node = LogicalNode(
+        id="hlo1",
+        op_type="dot_general",
+        domain="stablehlo",
+        attributes={
+            "dot_dimension_numbers": {},
+            "plain_attr_str": "test",
+            "lhs_op": "in1",
+            "plain_op_str": "in2",
+        },
+    )
+    assert not gv_list.validate_grounding(valid_hlo_node)
+
+    # 2. Directory traversal with .json, .json.gz, and corrupt file
+    snap_dir = tmp_path / "snapshots_dir"
+    snap_dir.mkdir()
+
+    # Regular json file
+    json_file = snap_dir / "ops1.json"
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump([{"name": "op_plain", "api_path": "dial.op_plain"}], f)
+
+    # Gzipped json file
+    gz_file = snap_dir / "ops2.json.gz"
+    with gzip.open(gz_file, "wt", encoding="utf-8") as f:
+        json.dump([{"name": "op_gz", "api_path": "dial.op_gz"}], f)
+
+    # Corrupt/non-json file
+    bad_file = snap_dir / "corrupt.json"
+    with open(bad_file, "w", encoding="utf-8") as f:
+        f.write("not valid json")
+
+    # Corrupt .json.gz file
+    bad_gz = snap_dir / "corrupt.json.gz"
+    bad_gz.write_bytes(b"not valid gzip data")
+
+    # Ignored non-json file in directory
+    ignored_file = snap_dir / "ignored.txt"
+    ignored_file.write_text("should be ignored", encoding="utf-8")
+
+    # Load directory
+    gv_dir = GroundingValidator(snapshot_manifest=str(snap_dir))
+    assert "dial.op_plain" in gv_dir.grounded_symbols
+    assert "dial.op_gz" in gv_dir.grounded_symbols
+
+    # Ingest target of unsupported type and load unsupported data type
+    gv_unsupported = GroundingValidator(snapshot_manifest=12345)  # type: ignore[arg-type]
+    assert gv_unsupported.grounded_symbols == {}
+    gv_unsupported._load_snapshot_data("not_list_or_dict")  # type: ignore[arg-type]
+
+    # 3. Collection of targets (list of file paths and dicts)
+    manifest_collection = [
+        str(json_file),
+        {"custom_target": {"name": "custom_target"}},
+    ]
+    gv_coll = GroundingValidator(snapshot_manifest=manifest_collection)
+    assert "dial.op_plain" in gv_coll.grounded_symbols
+    assert "custom_target" in gv_coll.grounded_symbols
+
+    # 4. audit_graph_grounding function with list and directory
+    from ml_switcheroo_ir.validator import audit_graph_grounding
+
+    test_graph = LogicalGraph(
+        nodes={"p1": LogicalNode(id="p1", op_type="op_plain", domain="dial")}
+    )
+    rep_dir = audit_graph_grounding(test_graph, snapshots_path=str(snap_dir))
+    assert rep_dir.grounded_count == 1
+
+    rep_list = audit_graph_grounding(test_graph, snapshots_path=list_manifest)
+    assert rep_list.total_nodes == 1
+
+    # Symbol with attributes and operands that have dicts without 'name'
+    unnamed_manifest = [
+        {
+            "name": "unnamed_op",
+            "attributes": [{"no_name_field": 1}],
+            "operands": [{"no_name_field": 2}],
+        }
+    ]
+    gv_unnamed = GroundingValidator(snapshot_manifest=unnamed_manifest)
+    node_unnamed = LogicalNode(id="u1", op_type="unnamed_op", domain="test")
+    assert not gv_unnamed.validate_grounding(node_unnamed)
+
+
+def test_grounding_validator_fuzzy_suggestions() -> None:
+    """Test fuzzy typo suggestions for hallucinated operators and attributes."""
+    snapshot = {
+        "stablehlo.dot_general": {
+            "name": "dot_general",
+            "api_path": "stablehlo.dot_general",
+            "params": [{"name": "lhs"}, {"name": "rhs"}],
+            "attributes": {"window_strides": {}},
+        },
+        "arith.addf": {
+            "name": "addf",
+            "api_path": "arith.addf",
+            "params": [{"name": "lhs"}, {"name": "rhs"}],
+        },
+    }
+    gv = GroundingValidator(snapshot_manifest=snapshot)
+
+    # 1. Known synonym: stablehlo matmul -> dot_general
+    node_syn = LogicalNode(id="n1", op_type="matmul", domain="stablehlo")
+    errors_syn = gv.validate_grounding(node_syn)
+    assert len(errors_syn) == 1
+    assert "Did you mean 'stablehlo.dot_general'?" in errors_syn[0].message
+
+    # 2. Domain prefix fuzzy match: stablehlo.dot_genral -> dot_general
+    node_fuzzy_domain = LogicalNode(id="n2", op_type="dot_genral", domain="stablehlo")
+    errors_fuzzy_domain = gv.validate_grounding(node_fuzzy_domain)
+    assert len(errors_fuzzy_domain) == 1
+    assert "Did you mean 'stablehlo.dot_general'?" in errors_fuzzy_domain[0].message
+
+    # 3. Global fuzzy match: addff -> addf / arith.addf (domain without prefix match)
+    node_fuzzy_global = LogicalNode(id="n3", op_type="addff", domain="other")
+    errors_fuzzy_global = gv.validate_grounding(node_fuzzy_global)
+    assert len(errors_fuzzy_global) == 1
+    assert (
+        "Did you mean 'addf'?" in errors_fuzzy_global[0].message
+        or "Did you mean 'arith.addf'?" in errors_fuzzy_global[0].message
+    )
+
+    # 3b. Empty domain fuzzy match
+    node_fuzzy_empty_dom = LogicalNode(id="n3b", op_type="addff", domain="")
+    errors_fuzzy_empty = gv.validate_grounding(node_fuzzy_empty_dom)
+    assert len(errors_fuzzy_empty) == 1
+    assert (
+        "Did you mean 'addf'?" in errors_fuzzy_empty[0].message
+        or "Did you mean 'arith.addf'?" in errors_fuzzy_empty[0].message
+    )
+
+    # 4. Far distance hallucination (> 3 edit distance): no suggestion
+    node_far = LogicalNode(
+        id="n4", op_type="completely_unknown_super_long_op", domain="other"
+    )
+    errors_far = gv.validate_grounding(node_far)
+    assert len(errors_far) == 1
+    assert "Did you mean" not in errors_far[0].message
+
+    # 5. Fuzzy attribute match: window_stride -> window_strides
+    node_bad_attr_fuzzy = LogicalNode(
+        id="n5",
+        op_type="dot_general",
+        domain="stablehlo",
+        attributes={"window_stride": [1, 1]},
+    )
+    errors_bad_attr_fuzzy = gv.validate_grounding(node_bad_attr_fuzzy)
+    assert len(errors_bad_attr_fuzzy) == 1
+    assert "Did you mean 'window_strides'?" in errors_bad_attr_fuzzy[0].message
+
+    # 6. Attribute far distance hallucination (> 3 edit distance): no suggestion
+    node_bad_attr_far = LogicalNode(
+        id="n6",
+        op_type="dot_general",
+        domain="stablehlo",
+        attributes={"completely_unknown_attr": 42},
+    )
+    errors_bad_attr_far = gv.validate_grounding(node_bad_attr_far)
+    assert len(errors_bad_attr_far) == 1
+    assert "Did you mean" not in errors_bad_attr_far[0].message
+
+
+def test_grounding_against_ml_framework_snapshots_golden() -> None:
+    """Verify GroundingValidator against real ml-framework-snapshots datasets if present."""
+    snapshots_repo = (
+        Path(__file__).resolve().parent.parent.parent / "ml-framework-snapshots"
+    )
+    frameworks_dir = snapshots_repo / "src" / "ml_framework_snapshots" / "frameworks"
+    if not frameworks_dir.exists():
+        return
+
+    stablehlo_file = frameworks_dir / "stablehlo_exhaustive.json"
+    if stablehlo_file.exists():
+        gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
+        assert "stablehlo.dot_general" in gv.grounded_symbols
+        assert "stablehlo.convolution" in gv.grounded_symbols
+
+        # Audit a valid StableHLO node
+        valid_node = LogicalNode(
+            id="dot1",
+            op_type="dot_general",
+            domain="stablehlo",
+            attributes={"dot_dimension_numbers": {}},
+        )
+        assert not gv.validate_grounding(valid_node)

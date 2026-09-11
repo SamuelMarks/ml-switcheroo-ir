@@ -27,6 +27,14 @@ def test_cli_dump_snapshot(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     assert "ml.switcheroo.custom.RMSNorm" in data
     assert "ml.switcheroo.custom.SwiGLU" in data
     assert "ml.switcheroo.custom.FlashAttention" in data
+    assert "stablehlo.dot_general" in data
+
+    # Verify SnapshotEnvelope metadata
+    assert data["schema_version"] == "2.0.0"
+    assert data["target"] == "ml-switcheroo-ir"
+    assert "onnx" in data["categories"]
+    assert "custom" in data["categories"]
+    assert "stablehlo" in data["categories"]
 
     rmsnorm_entry = data["ml.switcheroo.custom.RMSNorm"]
     assert rmsnorm_entry["name"] == "RMSNorm"

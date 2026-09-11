@@ -329,14 +329,27 @@ def main(args: list[str] | None = None) -> None:
         )
 
     elif parsed_args.command == "dump-snapshot":
+        import datetime
         import json
         from typing import Any
 
         from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
-        from ml_switcheroo_ir.schema.ghost import GhostParam, GhostRef, ParameterKind
+        from ml_switcheroo_ir.schema.ghost import (
+            ExtendedGhostParam,
+            GhostMlirRef,
+            GhostParam,
+            GhostRef,
+            IRParameterRole,
+            ParameterKind,
+            SnapshotEnvelope,
+        )
         from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+        from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 
         snapshot_entries: dict[str, dict[str, Any]] = {}
+        onnx_list: list[dict[str, Any]] = []
+        custom_list: list[dict[str, Any]] = []
+        stablehlo_list: list[dict[str, Any]] = []
 
         # Dump ONNX operators
         for op_name, schema in ONNX_REGISTRY.items():
@@ -367,9 +380,11 @@ def main(args: list[str] | None = None) -> None:
                 returns_type="Tensor",
                 docstring=f"ONNX operator {op_name} in domain {schema.domain}",
                 has_varargs=False,
-                schema_version="1.2",
+                schema_version="2.0.0",
             )
-            snapshot_entries[f"{schema.domain}.{op_name}"] = ghost_ref.model_dump()
+            dumped = ghost_ref.model_dump()
+            snapshot_entries[f"{schema.domain}.{op_name}"] = dumped
+            onnx_list.append(dumped)
 
         # Dump Custom operators
         for op_name, schema in CUSTOM_OPS_REGISTRY.items():
@@ -400,12 +415,60 @@ def main(args: list[str] | None = None) -> None:
                 returns_type="Tensor",
                 docstring=f"Custom operator {op_name} in domain {schema.domain}",
                 has_varargs=False,
-                schema_version="1.2",
+                schema_version="2.0.0",
             )
-            snapshot_entries[f"{schema.domain}.{op_name}"] = ghost_ref.model_dump()
+            dumped = ghost_ref.model_dump()
+            snapshot_entries[f"{schema.domain}.{op_name}"] = dumped
+            custom_list.append(dumped)
+
+        # Dump StableHLO operators
+        for op_name, schema in STABLEHLO_REGISTRY.items():
+            operands: list[ExtendedGhostParam | GhostParam] = []
+            for inp in schema.inputs:
+                operands.append(
+                    ExtendedGhostParam(
+                        name=inp,
+                        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+                        role=IRParameterRole.OPERAND,
+                    )
+                )
+            attrs_dict: dict[str, Any] = {}
+            for attr_name, attr in schema.attributes.items():
+                attrs_dict[attr_name] = {
+                    "type": attr.type,
+                    "default": attr.default,
+                    "required": attr.required,
+                }
+            mlir_ref = GhostMlirRef(
+                name=op_name,
+                api_path=f"{schema.domain}.{op_name}",
+                kind="function",
+                domain_type="mlir",
+                operands=operands,
+                attributes=attrs_dict,
+                docstring=f"StableHLO operator {op_name} in domain {schema.domain}",
+                schema_version="2.0.0",
+            )
+            dumped = mlir_ref.model_dump()
+            snapshot_entries[f"{schema.domain}.{op_name}"] = dumped
+            stablehlo_list.append(dumped)
+
+        envelope = SnapshotEnvelope(
+            schema_version="2.0.0",
+            target="ml-switcheroo-ir",
+            generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            environment={"source": "ml_switcheroo_ir.schema"},
+            categories={
+                "onnx": onnx_list,
+                "custom": custom_list,
+                "stablehlo": stablehlo_list,
+            },
+        )
+        data_to_dump = envelope.model_dump()
+        data_to_dump.update(snapshot_entries)
 
         with open(parsed_args.output, "w", encoding="utf-8") as f:
-            json.dump(snapshot_entries, f, indent=2, sort_keys=True)
+            json.dump(data_to_dump, f, indent=2, sort_keys=True)
         print(f"Dumped snapshot to {parsed_args.output}")
 
     elif parsed_args.command == "ground":

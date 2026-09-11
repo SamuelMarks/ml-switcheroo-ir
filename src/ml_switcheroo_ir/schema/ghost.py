@@ -69,8 +69,10 @@ class GhostParam(BaseModel):
     kind: ParameterKind = Field(
         description="Kind of parameter (e.g. POSITIONAL_OR_KEYWORD)."
     )
-    default: str | None = Field(None, description="Default value as string.")
-    annotation: str | None = Field(None, description="Type annotation as string.")
+    default: str | None = Field(default=None, description="Default value as string.")
+    annotation: str | None = Field(
+        default=None, description="Type annotation as string."
+    )
     description: str | None = Field(default=None, description="Description")
 
     standardized_name: str | None = Field(default=None, description="Standardized name")
@@ -97,6 +99,10 @@ class ExtendedGhostParam(GhostParam):
 
     model_config = ConfigDict(extra="allow")
 
+    default: Any | None = Field(
+        default=None,
+        description="Default value representation.",
+    )
     direction: OperandDirection | None = Field(
         default=None,
         description="Operand directionality (READ, WRITE, READ_WRITE, PREDICATE).",
@@ -109,6 +115,14 @@ class ExtendedGhostParam(GhostParam):
         default=None,
         description="Allowed tensor dtypes (e.g. ['float32', 'bfloat16', 'float16']).",
     )
+    allowed_dtypes: list[str] | None = Field(
+        default=None,
+        description="Canonical allowed tensor dtypes (e.g. ['float32', 'bfloat16']).",
+    )
+    allowed_values: list[str] | None = Field(
+        default=None,
+        description="Allowed enum or literal string values (e.g. ['none', 'mean', 'sum']).",
+    )
     rank: int | str | None = Field(
         default=None,
         description="Allowed tensor rank (e.g. 0 for scalar, 1, 2, 'N-D').",
@@ -120,6 +134,14 @@ class ExtendedGhostParam(GhostParam):
     is_contracting_dim: bool | None = Field(
         default=None,
         description="Whether this parameter represents a contracting tensor dimension.",
+    )
+    default_factory: str | None = Field(
+        default=None,
+        description="Name or representation of factory function producing default value.",
+    )
+    is_mandatory: bool | None = Field(
+        default=None,
+        description="Whether parameter is mandatory (no default value).",
     )
 
 
@@ -134,9 +156,13 @@ class GhostRef(BaseModel):
     params: list[GhostParam] = Field(
         default_factory=list, description="List of parameters."
     )
-    docstring: str | None = Field(None, description="Extracted docstring.")
-    has_varargs: bool = Field(False, description="True if signature accepts *args.")
-    schema_version: str = Field("1.2", description="Version of the schema format.")
+    docstring: str | None = Field(default=None, description="Extracted docstring.")
+    has_varargs: bool = Field(
+        default=False, description="True if signature accepts *args."
+    )
+    schema_version: str = Field(
+        default="1.2", description="Version of the schema format."
+    )
 
     is_public: bool | None = Field(default=None, description="Is public")
 
@@ -185,6 +211,13 @@ class ExtendedGhostRef(GhostRef):
     )
 
 
+class GhostPythonRef(ExtendedGhostRef):
+    """GhostRef specialized for high-level Python ML frameworks (PyTorch, JAX, TF, Keras)."""
+
+    model_config = ConfigDict(extra="allow")
+    domain_type: Literal["python"] = "python"
+
+
 class GhostIsaRef(ExtendedGhostRef):
     """GhostRef specialized for GPU assembly ISAs (NVIDIA SASS, AMD RDNA/CDNA)."""
 
@@ -206,9 +239,25 @@ class GhostIsaRef(ExtendedGhostRef):
         default=None,
         description="Valid instruction modifiers (e.g. ['.SAT', '.FTZ', 'omod:2']).",
     )
+    structured_modifiers: dict[str, Any] | None = Field(
+        default=None,
+        description="Structured modifier bitfields (e.g. rounding, cache, saturation).",
+    )
+    structured_operands: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Detailed operand records with roles, register classes, and immediate constraints.",
+    )
     vopd_profile: dict[str, Any] | None = Field(
         default=None,
         description="VOPD dual-issue profile and pairing rules for RDNA3/GFX11.",
+    )
+    condition_codes: list[str] | None = Field(
+        default=None,
+        description="Allowed condition codes or flags (e.g. ['CC.EQ', 'CC.LT', 'vcc']).",
+    )
+    supported_architectures: list[str] | None = Field(
+        default=None,
+        description="Microarchitectures supporting this instruction.",
     )
 
 
@@ -241,6 +290,11 @@ class GhostMlirRef(ExtendedGhostRef):
         default=None,
         description="Type constraints for operands and results (e.g. RankedTensorOf, AnyFloat).",
     )
+
+
+# First-class domain IR and ISA schema aliases
+GhostInstructionRef = GhostIsaRef
+GhostOperationRef = GhostMlirRef
 
 
 class SnapshotEnvelope(BaseModel):
@@ -350,6 +404,20 @@ def migrate_ghost_ref_v2(data: dict[str, Any]) -> ExtendedGhostRef:
     ):
         data_copy["schema_version"] = "2.0.0"
 
+    if "kind" not in data_copy:
+        data_copy["kind"] = "function"
+
+    if "name" not in data_copy:
+        if "mnemonic" in data_copy:
+            data_copy["name"] = data_copy["mnemonic"]
+        elif "api_path" in data_copy:
+            data_copy["name"] = data_copy["api_path"].split(".")[-1]
+        else:
+            data_copy["name"] = "unknown"
+
+    if "api_path" not in data_copy:
+        data_copy["api_path"] = data_copy.get("name", "unknown")
+
     if "params" in data_copy and isinstance(data_copy["params"], list):
         for param in data_copy["params"]:
             if (
@@ -361,7 +429,9 @@ def migrate_ghost_ref_v2(data: dict[str, Any]) -> ExtendedGhostRef:
                 param["kind"] = kind_str
 
     domain_type = data_copy.get("domain_type")
-    if domain_type == "isa" or domain_type == "instruction":
+    if domain_type == "python":
+        return GhostPythonRef.model_validate(data_copy)
+    if domain_type == "isa" or domain_type == "instruction" or "mnemonic" in data_copy:
         return GhostIsaRef.model_validate(data_copy)
     if domain_type == "mlir" or domain_type == "operation":
         return GhostMlirRef.model_validate(data_copy)

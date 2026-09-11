@@ -8,6 +8,7 @@ from ml_switcheroo_ir.schema.ghost import (
     GhostIsaRef,
     GhostMlirRef,
     GhostParam,
+    GhostPythonRef,
     GhostResult,
     IRParameterRole,
     OperandDirection,
@@ -243,3 +244,91 @@ def test_migrate_ghost_ref_v2_backward_compatibility() -> None:
         "domain_type": "operation",
     }
     assert isinstance(migrate_ghost_ref_v2(mlir_op_dict), GhostMlirRef)
+
+
+def test_ghost_python_ref_and_aliases() -> None:
+    """Test GhostPythonRef instantiation, domain_type, and canonical aliases."""
+    py_ref = GhostPythonRef(
+        name="Linear",
+        api_path="torch.nn.Linear",
+        kind="class",
+    )
+    assert py_ref.domain_type == "python"
+    assert py_ref.name == "Linear"
+
+    # Verify canonical aliases
+    from ml_switcheroo_ir.schema.ghost import GhostInstructionRef, GhostOperationRef
+
+    assert GhostInstructionRef is GhostIsaRef
+    assert GhostOperationRef is GhostMlirRef
+
+
+def test_extended_ghost_param_and_isa_advanced_fields() -> None:
+    """Test new metadata fields on ExtendedGhostParam and GhostIsaRef."""
+    p = ExtendedGhostParam(
+        name="kernel",
+        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+        default=3,
+        allowed_dtypes=["float32", "float16"],
+        allowed_values=["valid", "same"],
+        default_factory="list",
+        is_mandatory=False,
+    )
+    assert p.default == 3
+    assert p.allowed_dtypes == ["float32", "float16"]
+    assert p.allowed_values == ["valid", "same"]
+    assert p.default_factory == "list"
+    assert p.is_mandatory is False
+
+    isa = GhostIsaRef(
+        name="HMMA",
+        api_path="nvidia_sass.hmma",
+        kind="instruction",
+        structured_modifiers={"rounding": "rn"},
+        structured_operands=[{"role": "dst", "reg": "R0"}],
+        condition_codes=["CC.EQ"],
+        supported_architectures=["sm_80", "sm_90"],
+    )
+    assert isa.structured_modifiers == {"rounding": "rn"}
+    assert isa.structured_operands == [{"role": "dst", "reg": "R0"}]
+    assert isa.condition_codes == ["CC.EQ"]
+    assert isa.supported_architectures == ["sm_80", "sm_90"]
+
+
+def test_migrate_ghost_ref_v2_polymorphic_branches() -> None:
+    """Test polymorphic hydration and inference branches in migrate_ghost_ref_v2."""
+    # 1. Python domain
+    py_dict = {
+        "name": "relu",
+        "api_path": "torch.nn.functional.relu",
+        "domain_type": "python",
+    }
+    migrated_py = migrate_ghost_ref_v2(py_dict)
+    assert isinstance(migrated_py, GhostPythonRef)
+    assert migrated_py.kind == "function"  # Inferred kind
+
+    # 2. Raw ISA mnemonic without name or api_path
+    raw_isa = {
+        "mnemonic": "FFMA_RAW",
+        "modifiers": [".SAT"],
+    }
+    migrated_raw_isa = migrate_ghost_ref_v2(raw_isa)
+    assert isinstance(migrated_raw_isa, GhostIsaRef)
+    assert migrated_raw_isa.name == "FFMA_RAW"
+    assert migrated_raw_isa.api_path == "FFMA_RAW"
+
+    # 3. Dict without name, but with api_path
+    api_only_dict = {
+        "api_path": "arith.addf",
+        "domain_type": "mlir",
+    }
+    migrated_api = migrate_ghost_ref_v2(api_only_dict)
+    assert isinstance(migrated_api, GhostMlirRef)
+    assert migrated_api.name == "addf"
+
+    # 4. Dict with neither name nor api_path
+    empty_names_dict = {
+        "kind": "custom",
+    }
+    migrated_empty = migrate_ghost_ref_v2(empty_names_dict)
+    assert migrated_empty.name is None or migrated_empty.api_path == "unknown"
