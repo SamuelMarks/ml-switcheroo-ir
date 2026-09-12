@@ -72,7 +72,10 @@ def get_coverage_metrics(
         Tuple[float, float, float]: (overall_pct, statement_pct, branch_pct).
     """
     try:
-        subprocess.run(["coverage", "json", "-o", coverage_json_path], check=False)
+        subprocess.run(
+            [sys.executable, "-m", "coverage", "json", "-o", coverage_json_path],
+            check=False,
+        )
         with open(coverage_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             totals = data.get("totals", {})
@@ -113,6 +116,8 @@ def get_doc_coverage() -> float:
     try:
         res = subprocess.run(
             [
+                sys.executable,
+                "-m",
                 "interrogate",
                 "-c",
                 "pyproject.toml",

@@ -4,3 +4,5 @@ ruff
 mypy
 interrogate
 build
+hypothesis
+jsonschema
