@@ -44,10 +44,15 @@ repos:
         pass_filenames: false
 
       - id: update-badges
-        name: Update Coverage Shields
+        name: Make Coverage Shields
         entry: python3 scripts/update_badges.py
         language: system
-        types: [python]
+        pass_filenames: false
+
+      - id: enforce-badges
+        name: Enforce Coverage Shields
+        entry: python3 scripts/update_badges.py --enforce
+        language: system
         pass_filenames: false
 
       - id: build

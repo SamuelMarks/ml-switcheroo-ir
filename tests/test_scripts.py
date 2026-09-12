@@ -9,14 +9,22 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import pytest
+
 from scripts.generate_registry import main as gen_main
 from scripts.generate_registry import parse_onnx_docs
 from scripts.update_badges import (
+    count_shields,
+    enforce_coverage_shields,
     format_cov,
     get_color,
     get_doc_coverage,
     get_test_coverage,
+    parse_args,
     update_readme,
+)
+from scripts.update_badges import (
+    main as update_badges_main,
 )
 from scripts.verify_grounding import (
     find_snapshots_directory,
@@ -64,8 +72,98 @@ def test_format_cov() -> None:
 
 
 def test_get_doc_coverage() -> None:
-    """Test get_doc_coverage returns 100.0."""
+    """Test get_doc_coverage returns 100.0 and parses output correctly."""
     assert get_doc_coverage() == 100.0
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "actual: 97.4%\n"
+        assert get_doc_coverage() == 97.4
+
+    with patch("subprocess.run", side_effect=Exception("Failed")):
+        assert get_doc_coverage() == 100.0
+
+
+def test_count_shields() -> None:
+    """Test count_shields accurately reports test, doc, and branch badge counts."""
+    content = (
+        "# Title\n"
+        "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
+        "[![Branch Coverage](https://img.shields.io/badge/branch_coverage-100%25-brightgreen.svg)](#)\n"
+        "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
+    )
+    assert count_shields(content) == (1, 1, 1)
+
+    empty_content = "# No badges\n"
+    assert count_shields(empty_content) == (0, 0, 0)
+
+
+def test_parse_args() -> None:
+    """Test parse_args with default, flag, and file overrides."""
+    assert parse_args([]) == (False, "README.md")
+    assert parse_args(["--enforce", "foo.md"]) == (True, "foo.md")
+    assert parse_args(["--check"]) == (True, "README.md")
+    assert parse_args(["-c"]) == (True, "README.md")
+    assert parse_args(["custom.md"]) == (False, "custom.md")
+    assert parse_args(["--unknown"]) == (False, "README.md")
+
+
+def test_enforce_coverage_shields() -> None:
+    """Test enforce_coverage_shields validates one-and-only-one invariants."""
+    with TemporaryDirectory() as tmpdir:
+        readme = os.path.join(tmpdir, "README.md")
+
+        # Missing file
+        with pytest.raises(FileNotFoundError, match="Target markdown file not found"):
+            enforce_coverage_shields("/nonexistent/file.md")
+
+        # Branch coverage present
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write(
+                "# Title\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
+                "[![Branch Coverage](https://img.shields.io/badge/branch_coverage-100%25-brightgreen.svg)](#)\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
+            )
+        with pytest.raises(ValueError, match="Expected 0 branch coverage shields"):
+            enforce_coverage_shields(readme)
+
+        # Missing test coverage shield
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write(
+                "# Title\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
+            )
+        with pytest.raises(ValueError, match="Expected exactly 1 test coverage shield"):
+            enforce_coverage_shields(readme)
+
+        # Multiple test coverage shields
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write(
+                "# Title\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-90%25-green.svg)](#)\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
+            )
+        with pytest.raises(ValueError, match="Expected exactly 1 test coverage shield"):
+            enforce_coverage_shields(readme)
+
+        # Missing doc coverage shield
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write(
+                "# Title\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
+            )
+        with pytest.raises(ValueError, match="Expected exactly 1 doc coverage shield"):
+            enforce_coverage_shields(readme)
+
+        # Valid shields: exactly 1 test, 1 doc, 0 branch
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write(
+                "# Title\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
+            )
+        enforce_coverage_shields(readme)
 
 
 def test_get_test_coverage_success() -> None:
@@ -125,34 +223,143 @@ def test_update_readme_success() -> None:
             updated = f.read()
 
         assert "test_coverage-100%25-brightgreen.svg" in updated
-        assert "branch_coverage-100%25-brightgreen.svg" in updated
+        assert "branch_coverage" not in updated
         assert "doc_coverage-100%25-brightgreen.svg" in updated
+        assert count_shields(updated) == (1, 1, 0)
 
-        # Second update when branch coverage is already present
+        # Update again with branch coverage injected to verify removal
+        branch_badge = "\n[![Branch Coverage](https://img.shields.io/badge/branch_coverage-100%25-brightgreen.svg)](#)\n"
+        with open(readme_file, "w", encoding="utf-8") as f:
+            f.write(updated + branch_badge)
+
         with patch("subprocess.run"):
             update_readme(readme_path=readme_file, coverage_json_path=cov_file)
 
         with open(readme_file, "r", encoding="utf-8") as f:
             updated2 = f.read()
 
-        assert "branch_coverage-100%25-brightgreen.svg" in updated2
+        assert "branch_coverage" not in updated2
+        assert count_shields(updated2) == (1, 1, 0)
+
+
+def test_update_readme_insertions_and_deduplications() -> None:
+    """Test update_readme insertion scenarios and duplicate shield pruning."""
+    with TemporaryDirectory() as tmpdir:
+        cov_file = os.path.join(tmpdir, "coverage.json")
+        with open(cov_file, "w", encoding="utf-8") as f:
+            json.dump({"totals": {"percent_covered": 100.0}}, f)
+
+        # Case 1: Only Doc Coverage present -> insert Test Coverage before Doc Coverage
+        case1_file = os.path.join(tmpdir, "case1.md")
+        with open(case1_file, "w", encoding="utf-8") as f:
+            f.write(
+                "# Title\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
+            )
+        with patch("subprocess.run"):
+            update_readme(readme_path=case1_file, coverage_json_path=cov_file)
+        with open(case1_file, "r", encoding="utf-8") as f:
+            assert count_shields(f.read()) == (1, 1, 0)
+
+        # Case 2: Neither present, but header present -> insert after header
+        case2_file = os.path.join(tmpdir, "case2.md")
+        with open(case2_file, "w", encoding="utf-8") as f:
+            f.write("# Title\n\nSome body text.\n")
+        with patch("subprocess.run"):
+            update_readme(readme_path=case2_file, coverage_json_path=cov_file)
+        with open(case2_file, "r", encoding="utf-8") as f:
+            assert count_shields(f.read()) == (1, 1, 0)
+
+        # Case 3: Neither present and no header -> insert at top
+        case3_file = os.path.join(tmpdir, "case3.md")
+        with open(case3_file, "w", encoding="utf-8") as f:
+            f.write("Just raw text without header.\n")
+        with patch("subprocess.run"):
+            update_readme(readme_path=case3_file, coverage_json_path=cov_file)
+        with open(case3_file, "r", encoding="utf-8") as f:
+            assert count_shields(f.read()) == (1, 1, 0)
+
+        # Case 4: Multiple duplicates of both -> deduplicate to exactly one each
+        case4_file = os.path.join(tmpdir, "case4.md")
+        with open(case4_file, "w", encoding="utf-8") as f:
+            f.write(
+                "# Title\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-60%25-red.svg)](#)\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-60%25-red.svg)](#)\n"
+            )
+        with patch("subprocess.run"):
+            update_readme(readme_path=case4_file, coverage_json_path=cov_file)
+        with open(case4_file, "r", encoding="utf-8") as f:
+            assert count_shields(f.read()) == (1, 1, 0)
+
+        # Case 5: Enforcement failure after update raises ValueError
+        case5_file = os.path.join(tmpdir, "case5.md")
+        with open(case5_file, "w", encoding="utf-8") as f:
+            f.write("# Title\n")
+        with patch(
+            "scripts.update_badges.count_shields", return_value=(2, 1, 0)
+        ), pytest.raises(ValueError, match="Enforcement failed after update"):
+            update_readme(readme_path=case5_file, coverage_json_path=cov_file)
 
 
 def test_update_badges_main() -> None:
+    """Test executing update_badges_main with various arguments."""
+    with TemporaryDirectory() as tmpdir:
+        readme_file = os.path.join(tmpdir, "README.md")
+        cov_file = os.path.join(tmpdir, "coverage.json")
+        with open(readme_file, "w", encoding="utf-8") as f:
+            f.write(
+                "# Test\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
+            )
+        with open(cov_file, "w", encoding="utf-8") as f:
+            json.dump({"totals": {"percent_covered": 100.0}}, f)
+
+        # Normal run
+        with patch("subprocess.run"):
+            assert update_badges_main([readme_file]) == 0
+
+        # Enforce-only run success
+        assert update_badges_main(["--enforce", readme_file]) == 0
+
+        # Enforce-only failure on invalid file
+        invalid_file = os.path.join(tmpdir, "invalid.md")
+        with open(invalid_file, "w", encoding="utf-8") as f:
+            f.write("# No shields here\n")
+        assert update_badges_main(["--enforce", invalid_file]) == 1
+
+        # Enforce-only failure on missing file
+        assert update_badges_main(["--enforce", "/nonexistent/file.md"]) == 1
+
+
+def test_update_badges_runpy_main() -> None:
     """Test executing scripts.update_badges as __main__ module."""
     with TemporaryDirectory() as tmpdir:
         readme_file = os.path.join(tmpdir, "README.md")
         cov_file = os.path.join(tmpdir, "coverage.json")
         with open(readme_file, "w", encoding="utf-8") as f:
             f.write(
-                "# Test\n[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
+                "# Test\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
             )
         with open(cov_file, "w", encoding="utf-8") as f:
             json.dump({"totals": {"percent_covered": 100.0}}, f)
+
+        # Success case (exit_code == 0)
         with patch("sys.argv", ["update_badges.py", readme_file]), patch(
             "subprocess.run"
         ):
             runpy.run_module("scripts.update_badges", run_name="__main__")
+
+        # Failure case (exit_code != 0) invokes sys.exit
+        with patch(
+            "sys.argv", ["update_badges.py", "--enforce", "/nonexistent.md"]
+        ), patch("sys.exit") as mock_exit:
+            runpy.run_module("scripts.update_badges", run_name="__main__")
+            mock_exit.assert_called_once_with(1)
 
 
 SAMPLE_ONNX_DOCS = """

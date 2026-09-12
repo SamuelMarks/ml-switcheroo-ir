@@ -199,6 +199,14 @@ class GhostRef(BaseModel):
     )
 
     is_public: bool | None = Field(default=None, description="Is public")
+    is_c_extension: bool | None = Field(
+        default=False,
+        description="Whether the symbol originates from a compiled C/C++ extension.",
+    )
+    accepted_kwargs: list[str] | None = Field(
+        default=None,
+        description="Explicit list of accepted keyword arguments when **kwargs is present.",
+    )
 
     aliases: list[str] | None = Field(default_factory=list, description="Aliases")
     returns_type: str | None = Field(default=None, description="Returns type")
@@ -242,6 +250,14 @@ class ExtendedGhostRef(GhostRef):
     signature_completeness: Literal["exact", "heuristic", "opaque"] | None = Field(
         default="exact",
         description="Completeness of signature resolution: exact, heuristic, or opaque.",
+    )
+    is_c_extension: bool | None = Field(
+        default=False,
+        description="Whether the symbol originates from a compiled C/C++ extension.",
+    )
+    accepted_kwargs: list[str] | None = Field(
+        default=None,
+        description="Explicit list of accepted keyword arguments when **kwargs is present.",
     )
 
 
@@ -379,6 +395,166 @@ RDNA_INSTRUCTION_PRIMITIVES: dict[str, dict[str, Any]] = {
             "src2": RegisterClass.VGPR,
         },
     },
+    "V_FMAC_F32": {
+        "mnemonic": "V_FMAC_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_MOV_B32": {
+        "mnemonic": "V_MOV_B32",
+        "operands": ["dst", "src0"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+        },
+    },
+    "V_CNDMASK_B32": {
+        "mnemonic": "V_CNDMASK_B32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_SUB_F32": {
+        "mnemonic": "V_SUB_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_FMAC_F32": {
+        "mnemonic": "V_DUAL_FMAC_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_FMAAK_F32": {
+        "mnemonic": "V_DUAL_FMAAK_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_FMAMK_F32": {
+        "mnemonic": "V_DUAL_FMAMK_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_MUL_F32": {
+        "mnemonic": "V_DUAL_MUL_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_ADD_F32": {
+        "mnemonic": "V_DUAL_ADD_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_SUB_F32": {
+        "mnemonic": "V_DUAL_SUB_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_SUBREV_F32": {
+        "mnemonic": "V_DUAL_SUBREV_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_MOV_B32": {
+        "mnemonic": "V_DUAL_MOV_B32",
+        "operands": ["dst", "src0"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_CNDMASK_B32": {
+        "mnemonic": "V_DUAL_CNDMASK_B32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DUAL_DOT2ACC_F32_F16": {
+        "mnemonic": "V_DUAL_DOT2ACC_F32_F16",
+        "operands": ["dst", "src0", "src1", "src2"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+            "src2": RegisterClass.VGPR,
+        },
+    },
+}
+
+# RDNA3 / GFX11 VOPD Dual-Issue Instruction Opcode Matrix
+RDNA3_VOPD_OPERATORS: dict[str, dict[str, Any]] = {
+    "V_DUAL_FMAC_F32": {"mnemonic": "V_DUAL_FMAC_F32", "slots": ["X", "Y"]},
+    "V_DUAL_FMAAK_F32": {"mnemonic": "V_DUAL_FMAAK_F32", "slots": ["X", "Y"]},
+    "V_DUAL_FMAMK_F32": {"mnemonic": "V_DUAL_FMAMK_F32", "slots": ["X", "Y"]},
+    "V_DUAL_MUL_F32": {"mnemonic": "V_DUAL_MUL_F32", "slots": ["X", "Y"]},
+    "V_DUAL_ADD_F32": {"mnemonic": "V_DUAL_ADD_F32", "slots": ["X", "Y"]},
+    "V_DUAL_SUB_F32": {"mnemonic": "V_DUAL_SUB_F32", "slots": ["X", "Y"]},
+    "V_DUAL_SUBREV_F32": {"mnemonic": "V_DUAL_SUBREV_F32", "slots": ["X", "Y"]},
+    "V_DUAL_MOV_B32": {"mnemonic": "V_DUAL_MOV_B32", "slots": ["X", "Y"]},
+    "V_DUAL_CNDMASK_B32": {"mnemonic": "V_DUAL_CNDMASK_B32", "slots": ["X"]},
+    "V_DUAL_DOT2ACC_F32_F16": {"mnemonic": "V_DUAL_DOT2ACC_F32_F16", "slots": ["Y"]},
+}
+
+# Standard RDNA equivalents that can be mapped to VOPD opcodes
+RDNA_TO_VOPD_MAP: dict[str, str] = {
+    "V_FMAC_F32": "V_DUAL_FMAC_F32",
+    "V_FMA_F32": "V_DUAL_FMAC_F32",
+    "V_MUL_F32": "V_DUAL_MUL_F32",
+    "V_ADD_F32": "V_DUAL_ADD_F32",
+    "V_SUB_F32": "V_DUAL_SUB_F32",
+    "V_MOV_B32": "V_DUAL_MOV_B32",
+    "V_CNDMASK_B32": "V_DUAL_CNDMASK_B32",
+    "V_DOT2_F32_F16": "V_DUAL_DOT2ACC_F32_F16",
+}
+
+SASS_PIPELINE_LATENCIES: dict[str, int] = {
+    "FFMA": 4,
+    "FADD": 4,
+    "FMUL": 4,
+    "HMMA": 8,
+    "LDG": 200,
+    "STS": 16,
 }
 
 SASS_INSTRUCTION_PRIMITIVES: dict[str, dict[str, Any]] = {
@@ -437,6 +613,38 @@ WGSL_PRIMITIVE_SIGNATURES: dict[str, dict[str, Any]] = {
         "inputs": ["texture", "sampler", "coords"],
         "outputs": ["result"],
     },
+    "storageStore": {
+        "inputs": ["buffer", "index", "value"],
+        "outputs": [],
+        "qualifier": WGSLQualifier.STORAGE_READ_WRITE,
+    },
+    "atomicAdd": {
+        "inputs": ["atomic_ptr", "value"],
+        "outputs": ["old_value"],
+        "qualifier": WGSLQualifier.STORAGE_READ_WRITE,
+    },
+}
+
+WGSL_COMPUTE_BUILTINS: set[str] = {
+    "workgroup_id",
+    "local_invocation_id",
+    "global_invocation_id",
+    "local_invocation_index",
+    "num_workgroups",
+}
+
+WGSL_MUTATING_OPS: set[str] = {
+    "storageStore",
+    "atomicAdd",
+    "atomicSub",
+    "atomicMax",
+    "atomicMin",
+    "atomicAnd",
+    "atomicOr",
+    "atomicXor",
+    "atomicExchange",
+    "atomicCompareExchangeWeak",
+    "textureStore",
 }
 
 

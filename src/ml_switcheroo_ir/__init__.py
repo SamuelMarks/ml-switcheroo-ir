@@ -9,11 +9,20 @@ It acts as the contract between the Frontend (Ingestion) and the Backend (Synthe
 
 from __future__ import annotations
 
+import gzip
+import io
 import json
+import os
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterator, Sequence, overload
+from pathlib import Path
+from typing import IO, Any, BinaryIO, Iterator, Sequence, TextIO, overload
+
+try:
+    import zstandard
+except ImportError:  # pragma: no cover
+    zstandard = None  # type: ignore[assignment]
 
 from ml_switcheroo_ir.types import AttributeValue, DType
 
@@ -33,6 +42,14 @@ __all__ = [
     "LogicalNode",
     "PartitionSpec",
     "__version__",
+    "eliminate_common_subexpressions",
+    "eliminate_dead_nodes",
+    "estimate_communication_volume",
+    "estimate_graph_communication_volume",
+    "export_schemas",
+    "generate_typescript_definitions",
+    "get_json_schema",
+    "propagate_shapes_and_constants",
     "topological_sort",
 ]
 
@@ -615,17 +632,151 @@ class LogicalGraph:
             data["edges"] = [asdict(edge) for edge in self.edges]
         return json.dumps(data, sort_keys=True, indent=indent, default=str)
 
-    @classmethod
-    def from_json(cls, json_str: str) -> LogicalGraph:
-        """Deserialize a graph from a JSON string.
+    def to_stream(
+        self,
+        fp: IO[Any] | TextIO,
+        format: str = "canonical",
+        indent: int = 2,
+    ) -> None:
+        """Stream the serialized graph directly into a file-like object.
+
+        Avoids allocating a single massive intermediate JSON string in memory.
 
         Args:
-            json_str (str): JSON string representation of the graph.
+            fp (IO[Any] | TextIO): Writable file-like stream.
+            format (str): Serialization format ('canonical' or 'legacy').
+            indent (int): Indentation spaces for JSON formatting.
+        """
+        data = asdict(self)
+        if format == "canonical":
+            data["edges"] = [asdict(edge) for edge in self.edges]
+        json.dump(data, fp, sort_keys=True, indent=indent, default=str)
+
+    def to_file(
+        self,
+        path: str | Path,
+        format: str = "canonical",
+        indent: int = 2,
+        compression: str | None = None,
+    ) -> None:
+        """Serialize graph directly to a file, supporting optional .gz or .zst compression.
+
+        Args:
+            path (str | Path): Destination file path.
+            format (str): Serialization format ('canonical' or 'legacy').
+            indent (int): Indentation spaces for JSON formatting.
+            compression (str | None): Optional compression algorithm ('gzip', 'gz', 'zstd', 'zst').
+                If None, compression is inferred from file path suffix.
+
+        Raises:
+            ImportError: If zstandard is requested but the library is not installed.
+            ValueError: If an unsupported compression algorithm is specified.
+        """
+        path_str = str(path)
+        comp = compression.lower() if compression else None
+        if comp in ("gzip", "gz") or (comp is None and path_str.endswith(".gz")):
+            with gzip.open(path, "wt", encoding="utf-8") as f:
+                self.to_stream(f, format=format, indent=indent)
+        elif comp in ("zstd", "zst") or (
+            comp is None and path_str.endswith((".zst", ".zstd"))
+        ):
+            if zstandard is None:
+                raise ImportError("zstandard library is required for .zst compression.")
+            cctx = zstandard.ZstdCompressor()
+            with open(path, "wb") as raw_f, cctx.stream_writer(raw_f) as compressor:
+                text_wrapper = io.TextIOWrapper(compressor, encoding="utf-8")
+                self.to_stream(text_wrapper, format=format, indent=indent)
+                text_wrapper.flush()
+        elif comp is None or comp in ("none", "identity"):
+            with open(path, "w", encoding="utf-8") as f:
+                self.to_stream(f, format=format, indent=indent)
+        else:
+            raise ValueError(f"Unsupported compression format: {compression}")
+
+    @classmethod
+    def from_file(
+        cls,
+        path: str | Path,
+        compression: str | None = None,
+    ) -> LogicalGraph:
+        """Deserialize graph directly from a file or compressed archive.
+
+        Supports streaming deserialization from uncompressed JSON, gzip (.gz),
+        and zstandard (.zst) formats without intermediate string allocations.
+
+        Args:
+            path (str | Path): Path to the input file.
+            compression (str | None): Optional compression algorithm ('gzip', 'gz', 'zstd', 'zst').
+                If None, compression is inferred from file path suffix.
 
         Returns:
             LogicalGraph: Deserialized graph instance.
+
+        Raises:
+            ImportError: If zstandard is requested but the library is not installed.
+            ValueError: If an unsupported compression algorithm is specified.
         """
-        data = json.loads(json_str)
+        path_str = str(path)
+        comp = compression.lower() if compression else None
+        if comp in ("gzip", "gz") or (comp is None and path_str.endswith(".gz")):
+            with gzip.open(path, "rt", encoding="utf-8") as f:
+                return cls.from_json(f)
+        elif comp in ("zstd", "zst") or (
+            comp is None and path_str.endswith((".zst", ".zstd"))
+        ):
+            if zstandard is None:
+                raise ImportError(
+                    "zstandard library is required for .zst decompression."
+                )
+            dctx = zstandard.ZstdDecompressor()
+            with open(path, "rb") as raw_f, dctx.stream_reader(raw_f) as reader:
+                text_wrapper = io.TextIOWrapper(reader, encoding="utf-8")
+                return cls.from_json(text_wrapper)
+        elif comp is None or comp in ("none", "identity"):
+            with open(path, "r", encoding="utf-8") as f:
+                return cls.from_json(f)
+        else:
+            raise ValueError(f"Unsupported compression format: {compression}")
+
+    @classmethod
+    def from_json(
+        cls,
+        json_str: str | bytes | IO[Any] | TextIO | BinaryIO | Path,
+    ) -> LogicalGraph:
+        """Deserialize a graph from a JSON string, stream, or file path.
+
+        Supports streaming deserialization from file-like objects (streams)
+        without allocating intermediate full-graph string representations.
+
+        Args:
+            json_str (str | bytes | IO[Any] | TextIO | BinaryIO | Path): JSON string, bytes,
+                file-like stream with read() method, or filesystem path.
+
+        Returns:
+            LogicalGraph: Deserialized graph instance.
+
+        Raises:
+            TypeError: If json_str is of an unsupported type.
+        """
+        if isinstance(json_str, Path):
+            return cls.from_file(json_str)
+        if hasattr(json_str, "read"):
+            data = json.load(json_str)
+        elif isinstance(json_str, bytes):
+            data = json.loads(json_str.decode("utf-8"))
+        elif isinstance(json_str, str):
+            stripped = json_str.strip()
+            if (
+                not stripped.startswith(("{", "["))
+                and "\n" not in json_str
+                and os.path.exists(json_str)
+            ):
+                return cls.from_file(json_str)
+            data = json.loads(json_str)
+        else:
+            raise TypeError(
+                f"Unsupported source type for from_json: {type(json_str).__name__}"
+            )
         nodes_data = data.get("nodes", {})
         nodes: dict[str, LogicalNode] = {}
         # Support both Dict and List representation of nodes for backward compatibility
@@ -768,3 +919,20 @@ class GraphFrontend(BaseFrontend):
 
         """
         raise NotImplementedError
+
+
+# Import export utilities after LogicalGraph and LogicalNode are defined
+from ml_switcheroo_ir.export import (
+    export_schemas,
+    generate_typescript_definitions,
+    get_json_schema,
+)
+from ml_switcheroo_ir.transforms import (
+    eliminate_common_subexpressions,
+    eliminate_dead_nodes,
+    propagate_shapes_and_constants,
+)
+from ml_switcheroo_ir.validator import (
+    estimate_communication_volume,
+    estimate_graph_communication_volume,
+)

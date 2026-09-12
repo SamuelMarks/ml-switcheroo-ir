@@ -8,9 +8,11 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import inspect
+import json
 import os
 import re
 import sys
+from pathlib import Path
 
 from ml_switcheroo_ir import (
     CompilerBackend,
@@ -235,6 +237,38 @@ def main(args: list[str] | None = None) -> None:
         help="Path to snapshot JSON file or directory",
     )
 
+    # Export schema command
+    export_parser = subparsers.add_parser(
+        "export-schema",
+        help="Export canonical JSON Schema definitions and TypeScript interfaces",
+    )
+    export_parser.add_argument(
+        "--target",
+        type=str,
+        default="all",
+        choices=["all", "LogicalGraph", "LogicalNode", "SnapshotEnvelope"],
+        help="Target schema to export (default: all)",
+    )
+    export_parser.add_argument(
+        "--out-dir",
+        "-o",
+        type=str,
+        default=None,
+        help="Directory to write exported JSON schemas",
+    )
+    export_parser.add_argument(
+        "--typescript",
+        "--ts",
+        action="store_true",
+        help="Export TypeScript definitions",
+    )
+    export_parser.add_argument(
+        "--ts-out",
+        type=str,
+        default=None,
+        help="File path to write TypeScript definitions",
+    )
+
     parsed_args = parser.parse_args(args)
 
     if parsed_args.command == "toposort":
@@ -330,7 +364,6 @@ def main(args: list[str] | None = None) -> None:
 
     elif parsed_args.command == "dump-snapshot":
         import datetime
-        import json
         from typing import Any
 
         from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
@@ -492,6 +525,32 @@ def main(args: list[str] | None = None) -> None:
         else:
             print("Graph is fully grounded against framework snapshots.")
             sys.exit(0)
+
+    elif parsed_args.command == "export-schema":
+        from ml_switcheroo_ir.export import (
+            export_schemas,
+            generate_typescript_definitions,
+            get_json_schema,
+        )
+
+        if parsed_args.out_dir:
+            exported = export_schemas(
+                parsed_args.out_dir, include_typescript=parsed_args.typescript
+            )
+            print(f"Exported {len(exported)} schemas to {parsed_args.out_dir}:")
+            for k, v in exported.items():
+                print(f" - {k}: {v}")
+        elif parsed_args.ts_out:
+            ts_code = generate_typescript_definitions()
+            Path(parsed_args.ts_out).parent.mkdir(parents=True, exist_ok=True)
+            with open(parsed_args.ts_out, "w", encoding="utf-8") as f:
+                f.write(ts_code)
+            print(f"Exported TypeScript interfaces to {parsed_args.ts_out}")
+        elif parsed_args.typescript:
+            print(generate_typescript_definitions())
+        else:
+            exported_schema = get_json_schema(parsed_args.target)
+            print(json.dumps(exported_schema, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

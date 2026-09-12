@@ -329,6 +329,177 @@ RMSNORM_BACKWARD_SCHEMA = CustomOpSchema(
     ],
 )
 
+COLLECTIVE_ALL_REDUCE_SCHEMA = CustomOpSchema(
+    name="collective.all_reduce",
+    domain="collective",
+    inputs=["input"],
+    outputs=["output"],
+    attributes=[
+        CustomAttributeSchema(
+            name="reduction_op",
+            type="str",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="mesh_axis",
+            type="str",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="channel_id",
+            type="int",
+            required=False,
+            default=0,
+        ),
+    ],
+)
+
+COLLECTIVE_ALL_GATHER_SCHEMA = CustomOpSchema(
+    name="collective.all_gather",
+    domain="collective",
+    inputs=["input"],
+    outputs=["output"],
+    attributes=[
+        CustomAttributeSchema(
+            name="gather_dimension",
+            type="int",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="mesh_axis",
+            type="str",
+            required=True,
+        ),
+    ],
+)
+
+COLLECTIVE_REDUCE_SCATTER_SCHEMA = CustomOpSchema(
+    name="collective.reduce_scatter",
+    domain="collective",
+    inputs=["input"],
+    outputs=["output"],
+    attributes=[
+        CustomAttributeSchema(
+            name="scatter_dimension",
+            type="int",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="reduction_op",
+            type="str",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="mesh_axis",
+            type="str",
+            required=True,
+        ),
+    ],
+)
+
+COLLECTIVE_ALL_TO_ALL_SCHEMA = CustomOpSchema(
+    name="collective.all_to_all",
+    domain="collective",
+    inputs=["input"],
+    outputs=["output"],
+    attributes=[
+        CustomAttributeSchema(
+            name="split_dimension",
+            type="int",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="concat_dimension",
+            type="int",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="mesh_axis",
+            type="str",
+            required=True,
+        ),
+    ],
+)
+
+COLLECTIVE_OPS_REGISTRY: dict[str, OpSchema] = {
+    COLLECTIVE_ALL_REDUCE_SCHEMA.name: COLLECTIVE_ALL_REDUCE_SCHEMA.to_op_schema(),
+    "all_reduce": COLLECTIVE_ALL_REDUCE_SCHEMA.to_op_schema(),
+    COLLECTIVE_ALL_GATHER_SCHEMA.name: COLLECTIVE_ALL_GATHER_SCHEMA.to_op_schema(),
+    "all_gather": COLLECTIVE_ALL_GATHER_SCHEMA.to_op_schema(),
+    COLLECTIVE_REDUCE_SCATTER_SCHEMA.name: COLLECTIVE_REDUCE_SCATTER_SCHEMA.to_op_schema(),
+    "reduce_scatter": COLLECTIVE_REDUCE_SCATTER_SCHEMA.to_op_schema(),
+    COLLECTIVE_ALL_TO_ALL_SCHEMA.name: COLLECTIVE_ALL_TO_ALL_SCHEMA.to_op_schema(),
+    "all_to_all": COLLECTIVE_ALL_TO_ALL_SCHEMA.to_op_schema(),
+}
+
+QUANTIZATION_BLOCK_QUANTIZE_SCHEMA = CustomOpSchema(
+    name="quantization.block_quantize",
+    domain="quantization",
+    inputs=["input"],
+    outputs=["output", "scale"],
+    attributes=[
+        CustomAttributeSchema(
+            name="block_size",
+            type="int",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="quant_dtype",
+            type="str",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="axis",
+            type="int",
+            required=False,
+            default=-1,
+        ),
+    ],
+)
+
+QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA = CustomOpSchema(
+    name="quantization.dequantize_grouped_int4",
+    domain="quantization",
+    inputs=["weight", "scales", "qzeros"],
+    outputs=["output"],
+    attributes=[
+        CustomAttributeSchema(
+            name="group_size",
+            type="int",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="packing_format",
+            type="str",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="symmetric",
+            type="bool",
+            required=False,
+            default=False,
+        ),
+        CustomAttributeSchema(
+            name="axis",
+            type="int",
+            required=False,
+            default=0,
+        ),
+        CustomAttributeSchema(
+            name="scales_shape",
+            type="list",
+            required=False,
+        ),
+    ],
+)
+
+QUANTIZATION_OPS_REGISTRY: dict[str, OpSchema] = {
+    QUANTIZATION_BLOCK_QUANTIZE_SCHEMA.name: QUANTIZATION_BLOCK_QUANTIZE_SCHEMA.to_op_schema(),
+    "block_quantize": QUANTIZATION_BLOCK_QUANTIZE_SCHEMA.to_op_schema(),
+    QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA.name: QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA.to_op_schema(),
+    "dequantize_grouped_int4": QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA.to_op_schema(),
+}
+
 CUSTOM_OPS_REGISTRY: dict[str, OpSchema] = {
     RMSNORM_SCHEMA.name: RMSNORM_SCHEMA.to_op_schema(),
     SWIGLU_SCHEMA.name: SWIGLU_SCHEMA.to_op_schema(),
@@ -341,4 +512,6 @@ CUSTOM_OPS_REGISTRY: dict[str, OpSchema] = {
     GELU_SCHEMA.name: GELU_SCHEMA.to_op_schema(),
     EMBEDDING_LOOKUP_SCHEMA.name: EMBEDDING_LOOKUP_SCHEMA.to_op_schema(),
     RMSNORM_BACKWARD_SCHEMA.name: RMSNORM_BACKWARD_SCHEMA.to_op_schema(),
+    **COLLECTIVE_OPS_REGISTRY,
+    **QUANTIZATION_OPS_REGISTRY,
 }

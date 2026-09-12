@@ -5,15 +5,25 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Sequence
 
 from ml_switcheroo_ir import LogicalGraph, LogicalMesh, LogicalNode
-from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
+from ml_switcheroo_ir.schema.custom_ops import (
+    COLLECTIVE_OPS_REGISTRY,
+    CUSTOM_OPS_REGISTRY,
+    QUANTIZATION_OPS_REGISTRY,
+)
 from ml_switcheroo_ir.schema.ghost import (
+    RDNA3_VOPD_OPERATORS,
     RDNA_INSTRUCTION_PRIMITIVES,
+    RDNA_TO_VOPD_MAP,
     SASS_INSTRUCTION_PRIMITIVES,
+    SASS_PIPELINE_LATENCIES,
+    WGSL_COMPUTE_BUILTINS,
+    WGSL_MUTATING_OPS,
     WGSL_PRIMITIVE_SIGNATURES,
 )
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
@@ -149,6 +159,321 @@ class ValidationError(Exception):
         return f"[{self.level.value}] Node '{self.node_id}' attribute '{self.attribute}': {self.message}"
 
 
+def _extract_vgpr_indices(node: LogicalNode) -> list[int]:
+    """Extract VGPR operand integer indices from a node.
+
+    Args:
+        node (LogicalNode): The node to extract VGPR indices from.
+
+    Returns:
+        list[int]: List of VGPR register indices.
+    """
+    indices: list[int] = []
+    for key in ("vgpr_operands", "src_vgprs"):
+        val = node.attributes.get(key)
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, int) and not isinstance(item, bool):
+                    indices.append(item)
+                else:
+                    for digit in re.findall(r"\d+", str(item)):
+                        indices.append(int(digit))
+
+    for inp in node.inputs:
+        for digit in re.findall(r"\d+", str(inp)):
+            indices.append(int(digit))
+
+    return indices
+
+
+def _extract_dst_vgpr(node: LogicalNode) -> int | None:
+    """Extract destination VGPR index from a node.
+
+    Args:
+        node (LogicalNode): The node to extract destination VGPR from.
+
+    Returns:
+        int | None: The destination VGPR index, or None if unspecified.
+    """
+    dst = node.attributes.get("dst_vgpr")
+    if dst is None:
+        dst = node.attributes.get("dst")
+    if isinstance(dst, int) and not isinstance(dst, bool):
+        return dst
+    if dst is not None:
+        for digit in re.findall(r"\d+", str(dst)):
+            return int(digit)
+    for out in node.outputs:
+        for digit in re.findall(r"\d+", str(out)):
+            return int(digit)
+    return None
+
+
+def _extract_sass_registers(node: LogicalNode, role: str = "src") -> list[str]:
+    """Extract SASS register operands (e.g., 'R0', 'R1') from a node.
+
+    Args:
+        node (LogicalNode): The SASS instruction node.
+        role (str): Operand role to extract ('src' or 'dst'). Defaults to 'src'.
+
+    Returns:
+        list[str]: Normalized register names.
+    """
+    regs: list[str] = []
+    if role == "dst":
+        dst = node.attributes.get("dst_reg")
+        if dst is None:
+            dst = node.attributes.get("dst")
+        if isinstance(dst, list):
+            for d in dst:
+                regs.append(str(d).upper())
+        elif dst is not None:
+            regs.append(str(dst).upper())
+        for out in node.outputs:
+            for reg in re.findall(r"^R\d+$", str(out), re.IGNORECASE):
+                regs.append(reg.upper())
+    else:
+        srcs = node.attributes.get("src_regs")
+        if srcs is None:
+            srcs = node.attributes.get("srcs")
+        if isinstance(srcs, list):
+            for s in srcs:
+                regs.append(str(s).upper())
+        elif srcs is not None:
+            regs.append(str(srcs).upper())
+        for inp in node.inputs:
+            for reg in re.findall(r"^R\d+$", str(inp), re.IGNORECASE):
+                regs.append(reg.upper())
+
+    seen: set[str] = set()
+    unique_regs: list[str] = []
+    for r in regs:
+        if r not in seen:
+            seen.add(r)
+            unique_regs.append(r)
+    return unique_regs
+
+
+def validate_vopd_pairing(
+    opX: LogicalNode,
+    opY: LogicalNode,
+) -> list[ValidationError]:
+    """Validate AMD RDNA3 / GFX11 dual-issue VOPD instruction pairing rules.
+
+    Checks opcode pairing matrix, Slot X/Y compatibility, register bank conflict
+    exclusivity, and destination register collisions.
+
+    Args:
+        opX (LogicalNode): Instruction for VOPD Slot X.
+        opY (LogicalNode): Instruction for VOPD Slot Y.
+
+    Returns:
+        list[ValidationError]: Detected VOPD pairing violations.
+    """
+    errors: list[ValidationError] = []
+
+    # 1. Domain verification
+    if opX.domain != "amd_rdna":
+        errors.append(
+            ValidationError(
+                node_id=opX.id,
+                attribute="domain",
+                message=f"opX domain must be 'amd_rdna', got '{opX.domain}'.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+    if opY.domain != "amd_rdna":
+        errors.append(
+            ValidationError(
+                node_id=opY.id,
+                attribute="domain",
+                message=f"opY domain must be 'amd_rdna', got '{opY.domain}'.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+
+    # 2. Canonicalize opcodes to VOPD format
+    canon_x = RDNA_TO_VOPD_MAP.get(opX.op_type, opX.op_type)
+    canon_y = RDNA_TO_VOPD_MAP.get(opY.op_type, opY.op_type)
+
+    # 3. Check VOPD opcode support and slot assignments
+    if canon_x not in RDNA3_VOPD_OPERATORS:
+        errors.append(
+            ValidationError(
+                node_id=opX.id,
+                attribute="vopd_opcode",
+                message=f"Opcode '{opX.op_type}' is not a valid RDNA3 VOPD instruction.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+    elif "X" not in RDNA3_VOPD_OPERATORS[canon_x]["slots"]:
+        errors.append(
+            ValidationError(
+                node_id=opX.id,
+                attribute="vopd_slot",
+                message=f"Opcode '{opX.op_type}' cannot be issued in VOPD Slot X.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+
+    if canon_y not in RDNA3_VOPD_OPERATORS:
+        errors.append(
+            ValidationError(
+                node_id=opY.id,
+                attribute="vopd_opcode",
+                message=f"Opcode '{opY.op_type}' is not a valid RDNA3 VOPD instruction.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+    elif "Y" not in RDNA3_VOPD_OPERATORS[canon_y]["slots"]:
+        errors.append(
+            ValidationError(
+                node_id=opY.id,
+                attribute="vopd_slot",
+                message=f"Opcode '{opY.op_type}' cannot be issued in VOPD Slot Y.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+
+    # 4. Destination register collision
+    dst_x = _extract_dst_vgpr(opX)
+    dst_y = _extract_dst_vgpr(opY)
+    if dst_x is not None and dst_y is not None and dst_x == dst_y:
+        errors.append(
+            ValidationError(
+                node_id=opY.id,
+                attribute="vopd_destination",
+                message=f"VOPD destination conflict: opX and opY both write to VGPR v{dst_x}.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+
+    # 5. Read port register bank conflict avoidance
+    src_x = _extract_vgpr_indices(opX)
+    src_y = _extract_vgpr_indices(opY)
+
+    for bank in range(4):
+        bank_x_regs = {r for r in src_x if r % 4 == bank}
+        bank_y_regs = {r for r in src_y if r % 4 == bank}
+        if (
+            bank_x_regs
+            and bank_y_regs
+            and (
+                bank_x_regs != bank_y_regs
+                or len(bank_x_regs) > 1
+                or len(bank_y_regs) > 1
+            )
+        ):
+            errors.append(
+                ValidationError(
+                    node_id=opX.id,
+                    attribute="vopd_bank_conflict",
+                    message=(
+                        f"VOPD register bank conflict on bank {bank}: "
+                        f"opX reads VGPRs {sorted(bank_x_regs)} and opY reads VGPRs {sorted(bank_y_regs)}."
+                    ),
+                    level=ValidationLevel.ERROR,
+                )
+            )
+
+    return errors
+
+
+def estimate_communication_volume(
+    node: LogicalNode, mesh: LogicalMesh | None = None
+) -> int:
+    """Calculate analytical communication volume in bytes for a collective communication node.
+
+    Args:
+        node (LogicalNode): The collective operation node.
+        mesh (Optional[LogicalMesh]): The logical device mesh defined on the graph.
+
+    Returns:
+        int: Analytical volume in bytes transferred per device during the collective.
+    """
+    element_count = 1
+    if isinstance(node.shape_metadata, (list, tuple)) and len(node.shape_metadata) > 0:
+        for dim in node.shape_metadata:
+            if isinstance(dim, int) and not isinstance(dim, bool) and dim > 0:
+                element_count *= dim
+    else:
+        numel = node.attributes.get("tensor_numel", 1024)
+        element_count = (
+            int(numel)
+            if isinstance(numel, int) and not isinstance(numel, bool)
+            else 1024
+        )
+
+    dtype_val = getattr(node, "dtype", None) or node.attributes.get("dtype", "float32")
+    dtype_str = str(dtype_val).lower()
+    if "64" in dtype_str:
+        itemsize = 8
+    elif "16" in dtype_str:
+        itemsize = 2
+    elif "8" in dtype_str:
+        itemsize = 1
+    else:
+        itemsize = 4
+    tensor_bytes = element_count * itemsize
+
+    axis_name = str(node.attributes.get("mesh_axis", "data"))
+    if mesh is not None and axis_name in mesh.shape:
+        n_devices = mesh.shape[axis_name]
+    else:
+        dev_count = node.attributes.get("device_count", 2)
+        n_devices = (
+            int(dev_count)
+            if isinstance(dev_count, int) and not isinstance(dev_count, bool)
+            else 2
+        )
+
+    if n_devices <= 1:
+        return 0
+
+    clean_op = node.op_type.replace("collective.", "").lower()
+    if clean_op == "all_reduce":
+        return int(2 * ((n_devices - 1) / n_devices) * tensor_bytes)
+    if clean_op in ("all_gather", "reduce_scatter", "all_to_all"):
+        return int(((n_devices - 1) / n_devices) * tensor_bytes)
+    return tensor_bytes
+
+
+def estimate_graph_communication_volume(
+    graph: LogicalGraph,
+) -> dict[str, Any]:
+    """Aggregate analytical communication volume across all collective operators in a graph.
+
+    Args:
+        graph (LogicalGraph): The computational graph to analyze.
+
+    Returns:
+        dict[str, Any]: Dictionary with total communication volume in bytes,
+            and breakdowns by mesh axis and operator type.
+    """
+    total_bytes = 0
+    by_axis: dict[str, int] = {}
+    by_op: dict[str, int] = {}
+
+    for node in graph.nodes.values():
+        if (
+            node.domain in ("collective", "ml.switcheroo.collective")
+            or node.op_type.startswith("collective.")
+            or node.op_type
+            in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all")
+        ):
+            vol = estimate_communication_volume(node, graph.mesh)
+            total_bytes += vol
+            axis = str(node.attributes.get("mesh_axis", "unknown"))
+            by_axis[axis] = by_axis.get(axis, 0) + vol
+            by_op[node.op_type] = by_op.get(node.op_type, 0) + vol
+
+    return {
+        "total_volume_bytes": total_bytes,
+        "by_axis": by_axis,
+        "by_op": by_op,
+    }
+
+
 class Validator:
     """Validates LogicalGraph and LogicalNode instances against schemas."""
 
@@ -189,6 +514,9 @@ class Validator:
         else:
             self.stablehlo_registry = stablehlo_registry
 
+        self.collective_registry = COLLECTIVE_OPS_REGISTRY
+        self.quantization_registry = QUANTIZATION_OPS_REGISTRY
+
         if strict:
             self.level = ValidationLevel.STRICT
         elif level == ValidationLevel.ERROR:
@@ -215,6 +543,14 @@ class Validator:
             )
         if node.domain == "stablehlo":
             return self.registry.get(node.op_type) or self.stablehlo_registry.get(
+                node.op_type
+            )
+        if node.domain in ("collective", "ml.switcheroo.collective"):
+            return self.registry.get(node.op_type) or self.collective_registry.get(
+                node.op_type
+            )
+        if node.domain in ("quantization", "ml.switcheroo.quantization"):
+            return self.registry.get(node.op_type) or self.quantization_registry.get(
                 node.op_type
             )
         return self.registry.get(node.op_type)
@@ -267,6 +603,32 @@ class Validator:
                         node_id=node.id,
                         attribute="kind",
                         message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("collective", "ml.switcheroo.collective"):
+            if (
+                node.op_type not in self.collective_registry
+                and node.op_type not in self.registry
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in collective registry.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("quantization", "ml.switcheroo.quantization"):
+            if (
+                node.op_type not in self.quantization_registry
+                and node.op_type not in self.registry
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in quantization registry.",
                         level=ValidationLevel.ERROR,
                     )
                 )
@@ -478,8 +840,26 @@ class Validator:
             )
             return errors
 
-        def check_axis(axis: Any) -> None:
-            """Recursively check axis names against mesh shape."""
+        # Validate partition spec rank against tensor shape metadata rank if known
+        if (
+            isinstance(node.shape_metadata, (list, tuple))
+            and len(node.shape_metadata) > 0
+            and len(node.sharding.axes) > len(node.shape_metadata)
+        ):
+            errors.append(
+                ValidationError(
+                    node_id=node.id,
+                    attribute="sharding",
+                    message=(
+                        f"PartitionSpec rank ({len(node.sharding.axes)}) "
+                        f"exceeds tensor rank ({len(node.shape_metadata)})."
+                    ),
+                    level=ValidationLevel.ERROR,
+                )
+            )
+
+        def check_axis(axis: Any, dim_idx: int | None = None) -> None:
+            """Recursively check axis names and dimension divisibility against mesh shape."""
             if axis is None:
                 return
             if isinstance(axis, str):
@@ -492,12 +872,36 @@ class Validator:
                             level=ValidationLevel.ERROR,
                         )
                     )
+                elif (
+                    dim_idx is not None
+                    and isinstance(node.shape_metadata, (list, tuple))
+                    and dim_idx < len(node.shape_metadata)
+                ):
+                    dim_size = node.shape_metadata[dim_idx]
+                    axis_size = mesh.shape[axis]
+                    if (
+                        isinstance(dim_size, int)
+                        and not isinstance(dim_size, bool)
+                        and axis_size > 0
+                        and dim_size % axis_size != 0
+                    ):
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute="sharding",
+                                message=(
+                                    f"Tensor dimension {dim_idx} size {dim_size} is not evenly "
+                                    f"divisible by mesh axis '{axis}' size {axis_size}."
+                                ),
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
             elif isinstance(axis, (list, tuple)):
                 for sub_axis in axis:
-                    check_axis(sub_axis)
+                    check_axis(sub_axis, dim_idx)
 
-        for axis in node.sharding.axes:
-            check_axis(axis)
+        for idx, axis in enumerate(node.sharding.axes):
+            check_axis(axis, idx)
 
         return errors
 
@@ -621,13 +1025,114 @@ class Validator:
                         )
                     )
 
+            # Stall count validation (0 to 15 clock cycles)
+            stall = (
+                node.attributes.get("stall_count")
+                if "stall_count" in node.attributes
+                else node.attributes.get("stall")
+            )
+            if stall is not None and (
+                not isinstance(stall, int)
+                or isinstance(stall, bool)
+                or not (0 <= stall <= 15)
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="stall_count",
+                        message=f"SASS instruction stall count must be an integer between 0 and 15, got {stall}.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+
+            # Yield flag validation
+            yield_val = (
+                node.attributes.get("yield_flag")
+                if "yield_flag" in node.attributes
+                else node.attributes.get("yield")
+            )
+            if yield_val is not None:
+                if isinstance(yield_val, str):
+                    if yield_val not in ("Y", "-", "yield", "noyield"):
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute="yield_flag",
+                                message=f"Invalid SASS yield flag '{yield_val}'. Expected 'Y' or '-'.",
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
+                elif not isinstance(yield_val, bool):
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="yield_flag",
+                            message=f"Invalid SASS yield flag '{yield_val}'.",
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+
+            # Read / Write / Wait Barrier masks
+            for barrier_key in ("read_barrier", "write_barrier", "wait_barrier_mask"):
+                b_val = node.attributes.get(barrier_key)
+                if b_val is not None:
+                    if isinstance(b_val, int) and not isinstance(b_val, bool):
+                        if not (0 <= b_val <= 63):
+                            errors.append(
+                                ValidationError(
+                                    node_id=node.id,
+                                    attribute=barrier_key,
+                                    message=f"Invalid SASS barrier mask '{b_val}'. Must be in range 0..63.",
+                                    level=ValidationLevel.ERROR,
+                                )
+                            )
+                    elif isinstance(b_val, list):
+                        if not all(
+                            isinstance(x, int)
+                            and not isinstance(x, bool)
+                            and 0 <= x <= 5
+                            for x in b_val
+                        ):
+                            errors.append(
+                                ValidationError(
+                                    node_id=node.id,
+                                    attribute=barrier_key,
+                                    message=f"Invalid SASS barrier list '{b_val}'. Entries must be barrier indices 0..5.",
+                                    level=ValidationLevel.ERROR,
+                                )
+                            )
+                    elif isinstance(b_val, str):
+                        if len(b_val) > 6 or not set(b_val).issubset(
+                            {"0", "1", "2", "3", "4", "5", "-", " "}
+                        ):
+                            errors.append(
+                                ValidationError(
+                                    node_id=node.id,
+                                    attribute=barrier_key,
+                                    message=f"Invalid SASS barrier mask string '{b_val}'.",
+                                    level=ValidationLevel.ERROR,
+                                )
+                            )
+                    else:
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute=barrier_key,
+                                message=f"Invalid SASS barrier mask type for '{barrier_key}'.",
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
+
         elif node.domain == "webgpu_wgsl":
             wg_size = node.attributes.get("workgroup_size")
             if wg_size is not None and (
                 not isinstance(wg_size, (list, tuple))
                 or len(wg_size) < 1
                 or len(wg_size) > 3
-                or not all(isinstance(x, int) and x > 0 for x in wg_size)
+                or not all(
+                    isinstance(x, int) and not isinstance(x, bool) and x > 0
+                    for x in wg_size
+                )
             ):
                 errors.append(
                     ValidationError(
@@ -658,6 +1163,225 @@ class Validator:
                         )
                     )
 
+            # Uniform buffer 16-byte alignment rules
+            if qualifier == "uniform":
+                align = (
+                    node.attributes.get("struct_alignment")
+                    if "struct_alignment" in node.attributes
+                    else node.attributes.get("alignment")
+                )
+                if align is not None and (
+                    not isinstance(align, int)
+                    or isinstance(align, bool)
+                    or align % 16 != 0
+                ):
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="struct_alignment",
+                            message=f"WGSL uniform buffer struct alignment must be a multiple of 16 bytes, got {align}.",
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+
+                stride = node.attributes.get("array_stride")
+                if stride is not None and (
+                    not isinstance(stride, int)
+                    or isinstance(stride, bool)
+                    or stride % 16 != 0
+                ):
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="array_stride",
+                            message=f"WGSL uniform buffer array stride must be a multiple of 16 bytes, got {stride}.",
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+
+            # Compute entrypoint builtins validation
+            builtin = node.attributes.get("builtin")
+            if builtin is not None and builtin not in WGSL_COMPUTE_BUILTINS:
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="builtin",
+                        message=f"Invalid WGSL compute builtin '{builtin}', expected one of {sorted(WGSL_COMPUTE_BUILTINS)}.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+
+            # Storage buffer access mode checks against mutating operation kinds
+            if qualifier in ("storage, read", "storage_read") and (
+                node.op_type in WGSL_MUTATING_OPS
+                or bool(node.attributes.get("is_mutating", False))
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="address_space",
+                        message=f"Mutating operation '{node.op_type}' is illegal on read-only storage buffer with address space '{qualifier}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+
+        return errors
+
+    def validate_quantization(self, node: LogicalNode) -> list[ValidationError]:
+        """Validate quantization operator attributes, alignment constraints, and packing formats.
+
+        Checks microscaling block divisibility for block_quantize, and group size,
+        packing format, and scale alignment for dequantize_grouped_int4.
+
+        Args:
+            node (LogicalNode): The quantization operator node.
+
+        Returns:
+            list[ValidationError]: Detected quantization validation errors.
+        """
+        errors: list[ValidationError] = []
+        clean_op = node.op_type.replace("quantization.", "").lower()
+
+        if clean_op == "block_quantize":
+            block_size = node.attributes.get("block_size")
+            if (
+                not isinstance(block_size, int)
+                or isinstance(block_size, bool)
+                or block_size <= 0
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="block_size",
+                        message=f"Quantization block_size must be a positive integer, got {block_size}.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+            elif (
+                isinstance(node.shape_metadata, (list, tuple))
+                and len(node.shape_metadata) > 0
+            ):
+                axis_attr = node.attributes.get("axis", -1)
+                axis = (
+                    axis_attr
+                    if isinstance(axis_attr, int) and not isinstance(axis_attr, bool)
+                    else -1
+                )
+                if -len(node.shape_metadata) <= axis < len(node.shape_metadata):
+                    dim = node.shape_metadata[axis]
+                    if (
+                        isinstance(dim, int)
+                        and not isinstance(dim, bool)
+                        and dim % block_size != 0
+                    ):
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute="block_size",
+                                message=(
+                                    f"Input tensor dimension {axis} size {dim} is not evenly "
+                                    f"divisible by block_size {block_size}."
+                                ),
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
+
+        elif clean_op == "dequantize_grouped_int4":
+            valid_packing = {"marlin", "exllama", "tensorrt_llm", "awq", "gptq"}
+            fmt = node.attributes.get("packing_format")
+            if fmt not in valid_packing:
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="packing_format",
+                        message=(
+                            f"Invalid packing format '{fmt}', expected one of {sorted(valid_packing)}."
+                        ),
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+
+            group_size = node.attributes.get("group_size")
+            if (
+                not isinstance(group_size, int)
+                or isinstance(group_size, bool)
+                or group_size <= 0
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="group_size",
+                        message=f"Quantization group_size must be a positive integer, got {group_size}.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+            elif (
+                isinstance(node.shape_metadata, (list, tuple))
+                and len(node.shape_metadata) > 0
+            ):
+                axis_attr = node.attributes.get("axis", 0)
+                axis = (
+                    axis_attr
+                    if isinstance(axis_attr, int) and not isinstance(axis_attr, bool)
+                    else 0
+                )
+                if -len(node.shape_metadata) <= axis < len(node.shape_metadata):
+                    dim = node.shape_metadata[axis]
+                    if (
+                        isinstance(dim, int)
+                        and not isinstance(dim, bool)
+                        and dim % group_size != 0
+                    ):
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute="group_size",
+                                message=(
+                                    f"Weight matrix dimension {axis} size {dim} is not evenly "
+                                    f"divisible by group_size {group_size}."
+                                ),
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
+
+            # Check scale alignment if provided
+            scales_shape = node.attributes.get("scales_shape")
+            if (
+                isinstance(scales_shape, (list, tuple))
+                and isinstance(node.shape_metadata, (list, tuple))
+                and len(node.shape_metadata) > 0
+            ):
+                axis_attr = node.attributes.get("axis", 0)
+                axis = (
+                    axis_attr
+                    if isinstance(axis_attr, int) and not isinstance(axis_attr, bool)
+                    else 0
+                )
+                if -len(node.shape_metadata) <= axis < len(
+                    node.shape_metadata
+                ) and -len(scales_shape) <= axis < len(scales_shape):
+                    dim = node.shape_metadata[axis]
+                    sc_dim = scales_shape[axis]
+                    if (
+                        isinstance(dim, int)
+                        and isinstance(sc_dim, int)
+                        and isinstance(group_size, int)
+                        and group_size > 0
+                        and dim % group_size == 0
+                        and sc_dim != dim // group_size
+                    ):
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute="scales_shape",
+                                message=(
+                                    f"Scales shape dimension {axis} ({sc_dim}) does not match "
+                                    f"expected groups {dim // group_size}."
+                                ),
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
+
         return errors
 
     def validate_node(
@@ -679,6 +1403,12 @@ class Validator:
         errors.extend(self.validate_sharding(node, mesh))
         if node.domain in ("amd_rdna", "nvidia_sass", "webgpu_wgsl"):
             errors.extend(self.validate_isa_instruction(node))
+        if (
+            node.domain in ("quantization", "ml.switcheroo.quantization")
+            or node.op_type.startswith("quantization.")
+            or node.op_type in ("block_quantize", "dequantize_grouped_int4")
+        ):
+            errors.extend(self.validate_quantization(node))
 
         # Check shape metadata in STRICT mode
         if self.level == ValidationLevel.STRICT and node.shape_metadata is None:
@@ -740,10 +1470,401 @@ class Validator:
         # Validate edges
         errors.extend(self.validate_edges(graph))
 
+        # Validate SASS scoreboarding if SASS instructions are present
+        sass_nodes = [n for n in graph.nodes.values() if n.domain == "nvidia_sass"]
+        if sass_nodes:
+            errors.extend(self.validate_sass_scoreboarding(sass_nodes))
+
+        # Validate SPaDe / GSPMD sharding propagation
+        errors.extend(self.validate_sharding_propagation(graph))
+
+        # Validate pipeline stages and activation checkpointing
+        errors.extend(self.validate_pipeline_and_checkpointing(graph))
+
         if self.level == ValidationLevel.LENIENT:
             errors = [e for e in errors if e.level == ValidationLevel.ERROR]
 
         return errors
+
+    def validate_vopd_pairing(
+        self, opX: LogicalNode, opY: LogicalNode
+    ) -> list[ValidationError]:
+        """Validate AMD RDNA3 / GFX11 dual-issue VOPD instruction pairing rules.
+
+        Checks opcode pairing matrix, Slot X/Y compatibility, register bank conflict
+        exclusivity, and destination register collisions.
+
+        Args:
+            opX (LogicalNode): The instruction proposed for VOPD Slot X.
+            opY (LogicalNode): The instruction proposed for VOPD Slot Y.
+
+        Returns:
+            list[ValidationError]: Detected VOPD pairing violations.
+        """
+        return validate_vopd_pairing(opX, opY)
+
+    def validate_sass_scoreboarding(
+        self, nodes: Sequence[LogicalNode]
+    ) -> list[ValidationError]:
+        """Validate NVIDIA SASS scoreboard dependency latencies between consecutive instructions.
+
+        Args:
+            nodes (Sequence[LogicalNode]): Sequential list of SASS instructions to audit.
+
+        Returns:
+            list[ValidationError]: Detected scoreboard hazards or dependency violations.
+        """
+        errors: list[ValidationError] = []
+        pending_writes: dict[str, tuple[str, str, int, int | None]] = {}
+
+        for node in nodes:
+            if node.domain != "nvidia_sass":
+                continue
+
+            # Check if any wait barrier clears pending writes
+            wait_mask = node.attributes.get("wait_barrier_mask")
+            cleared_barriers: set[int] = set()
+            if isinstance(wait_mask, int) and not isinstance(wait_mask, bool):
+                for b_idx in range(6):
+                    if (wait_mask >> b_idx) & 1:
+                        cleared_barriers.add(b_idx)
+            elif isinstance(wait_mask, list):
+                cleared_barriers.update(
+                    b
+                    for b in wait_mask
+                    if isinstance(b, int) and not isinstance(b, bool)
+                )
+
+            if cleared_barriers:
+                pending_writes = {
+                    r: info
+                    for r, info in pending_writes.items()
+                    if info[3] not in cleared_barriers
+                }
+
+            # Check consumed registers
+            src_regs = _extract_sass_registers(node, role="src")
+            for reg in src_regs:
+                if reg in pending_writes:
+                    prod_id, prod_op, rem_cycles, _ = pending_writes[reg]
+                    lvl = (
+                        ValidationLevel.ERROR
+                        if self.level == ValidationLevel.STRICT
+                        else ValidationLevel.WARNING
+                    )
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="scoreboarding",
+                            message=(
+                                f"Scoreboard dependency hazard: consumer '{node.id}' ({node.op_type}) "
+                                f"reads register '{reg}' produced by '{prod_id}' ({prod_op}) "
+                                f"before pipeline latency satisfied ({rem_cycles} stall cycles remaining) "
+                                f"without barrier synchronization."
+                            ),
+                            level=lvl,
+                        )
+                    )
+
+            # Register writes from this node
+            dst_regs = _extract_sass_registers(node, role="dst")
+            producer_latency = SASS_PIPELINE_LATENCIES.get(node.op_type, 4)
+            wb_attr = node.attributes.get("write_barrier")
+            wb_id: int | None = (
+                wb_attr
+                if isinstance(wb_attr, int) and not isinstance(wb_attr, bool)
+                else None
+            )
+            for reg in dst_regs:
+                pending_writes[reg] = (
+                    node.id,
+                    node.op_type,
+                    producer_latency,
+                    wb_id,
+                )
+
+            # Deduct stall count of this instruction from all pending writes
+            stall = node.attributes.get("stall_count")
+            if stall is None:
+                stall = node.attributes.get("stall", 0)
+            stall_cycles = (
+                stall if isinstance(stall, int) and not isinstance(stall, bool) else 0
+            )
+
+            # Advance cycles
+            new_pending: dict[str, tuple[str, str, int, int | None]] = {}
+            for r, (p_id, p_op, rem, wb) in pending_writes.items():
+                updated_rem = max(0, rem - stall_cycles)
+                if updated_rem > 0:
+                    new_pending[r] = (p_id, p_op, updated_rem, wb)
+            pending_writes = new_pending
+
+        return errors
+
+    def validate_sharding_propagation(
+        self, graph: LogicalGraph
+    ) -> list[ValidationError]:
+        """Validate SPaDe/GSPMD sharding propagation invariants across graph operations.
+
+        Audits elementwise operators for matching input/output partition specs,
+        contraction operators for matching contracted axis bindings, and reduction
+        operators for proper axis reduction without illegal sharding leaks.
+
+        Args:
+            graph (LogicalGraph): Computational graph to validate.
+
+        Returns:
+            list[ValidationError]: Detected sharding propagation violations.
+        """
+        errors: list[ValidationError] = []
+        elementwise_ops = {
+            "Add",
+            "Sub",
+            "Mul",
+            "Div",
+            "Relu",
+            "GELU",
+            "SwiGLU",
+            "Exp",
+            "Log",
+            "Sqrt",
+            "Tanh",
+            "Neg",
+            "Abs",
+        }
+        reduction_ops = {"ReduceSum", "ReduceMean", "ReduceMax", "ReduceMin"}
+
+        for node in graph.nodes.values():
+            # 1. Elementwise operations: input shardings must match each other and output sharding
+            if node.op_type in elementwise_ops and node.sharding is not None:
+                for inp_id in node.inputs:
+                    inp_node = graph.nodes.get(inp_id)
+                    if (
+                        inp_node is not None
+                        and inp_node.sharding is not None
+                        and inp_node.sharding.axes != node.sharding.axes
+                    ):
+                        lvl = (
+                            ValidationLevel.ERROR
+                            if self.level == ValidationLevel.STRICT
+                            else ValidationLevel.WARNING
+                        )
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute="sharding_propagation",
+                                message=(
+                                    f"Elementwise op '{node.id}' ({node.op_type}) has mismatched "
+                                    f"sharding between input '{inp_node.id}' ({inp_node.sharding.axes}) "
+                                    f"and output ({node.sharding.axes})."
+                                ),
+                                level=lvl,
+                            )
+                        )
+
+            # 2. Contraction operations (e.g. MatMul): contracted dimensions must match
+            elif node.op_type in ("MatMul", "Gemm") and len(node.inputs) >= 2:
+                node0 = graph.nodes.get(node.inputs[0])
+                node1 = graph.nodes.get(node.inputs[1])
+                if (
+                    node0 is not None
+                    and node1 is not None
+                    and node0.sharding is not None
+                    and node1.sharding is not None
+                ):
+                    contract_axis_0 = (
+                        node0.sharding.axes[-1]
+                        if len(node0.sharding.axes) >= 1
+                        else None
+                    )
+                    contract_axis_1 = (
+                        node1.sharding.axes[-2]
+                        if len(node1.sharding.axes) >= 2
+                        else node1.sharding.axes[0]
+                        if len(node1.sharding.axes) >= 1
+                        else None
+                    )
+                    if (
+                        contract_axis_0 is not None
+                        and contract_axis_1 is not None
+                        and contract_axis_0 != contract_axis_1
+                    ):
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute="sharding_propagation",
+                                message=(
+                                    f"Contraction op '{node.id}' ({node.op_type}) has mismatched "
+                                    f"contracted dimension sharding: '{node0.id}' axis is "
+                                    f"'{contract_axis_0}', '{node1.id}' axis is '{contract_axis_1}'."
+                                ),
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
+
+            # 3. Reduction operations: reduced axis cannot remain sharded in output
+            elif (
+                node.op_type in reduction_ops
+                and node.sharding is not None
+                and len(node.inputs) >= 1
+            ):
+                reduced_axes = node.attributes.get("axes")
+                inp_node = graph.nodes.get(node.inputs[0])
+                if (
+                    isinstance(reduced_axes, (list, tuple))
+                    and inp_node is not None
+                    and inp_node.sharding is not None
+                ):
+                    for r_axis in reduced_axes:
+                        if (
+                            isinstance(r_axis, int)
+                            and not isinstance(r_axis, bool)
+                            and 0 <= r_axis < len(inp_node.sharding.axes)
+                        ):
+                            sharded_mesh_axis = inp_node.sharding.axes[r_axis]
+                            if (
+                                sharded_mesh_axis is not None
+                                and sharded_mesh_axis in node.sharding.axes
+                            ):
+                                errors.append(
+                                    ValidationError(
+                                        node_id=node.id,
+                                        attribute="sharding_propagation",
+                                        message=(
+                                            f"Reduction op '{node.id}' reduces sharded axis "
+                                            f"'{sharded_mesh_axis}', but output retains sharding on it."
+                                        ),
+                                        level=ValidationLevel.ERROR,
+                                    )
+                                )
+
+        return errors
+
+    def validate_pipeline_and_checkpointing(
+        self, graph: LogicalGraph
+    ) -> list[ValidationError]:
+        """Validate pipeline parallel stage orderings, boundary markers, and activation checkpointing tags.
+
+        Args:
+            graph (LogicalGraph): Computational graph to validate.
+
+        Returns:
+            list[ValidationError]: Detected pipeline or checkpointing violations.
+        """
+        errors: list[ValidationError] = []
+
+        for node in graph.nodes.values():
+            tag = (
+                node.attributes.get("activation_checkpoint")
+                if "activation_checkpoint" in node.attributes
+                else node.attributes.get("checkpoint_policy")
+            )
+            if tag is not None:
+                if isinstance(tag, str):
+                    if tag not in {"recompute", "offload", "save", "full"}:
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute="activation_checkpoint",
+                                message=(
+                                    f"Invalid activation checkpoint tag '{tag}', "
+                                    f"expected one of {{'recompute', 'offload', 'save', 'full'}}."
+                                ),
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
+                elif not isinstance(tag, bool):
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="activation_checkpoint",
+                            message=f"Invalid activation checkpoint tag type: {type(tag).__name__}.",
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+
+            stage = (
+                node.attributes.get("pipeline_stage")
+                if "pipeline_stage" in node.attributes
+                else node.attributes.get("stage_id")
+            )
+            if stage is not None and (type(stage) is not int or stage < 0):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="pipeline_stage",
+                        message=f"Pipeline stage ID must be a non-negative integer, got {stage}.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+            elif type(stage) is int:
+                for inp_id in node.inputs:
+                    src_node = graph.nodes.get(inp_id)
+                    if src_node is not None:
+                        src_stage = (
+                            src_node.attributes.get("pipeline_stage")
+                            if "pipeline_stage" in src_node.attributes
+                            else src_node.attributes.get("stage_id")
+                        )
+                        if type(src_stage) is int:
+                            if src_stage > stage:
+                                errors.append(
+                                    ValidationError(
+                                        node_id=node.id,
+                                        attribute="pipeline_stage",
+                                        message=(
+                                            f"Pipeline stage dependency hazard: backward edge from "
+                                            f"stage {src_stage} (node '{src_node.id}') to "
+                                            f"stage {stage} (node '{node.id}')."
+                                        ),
+                                        level=ValidationLevel.ERROR,
+                                    )
+                                )
+                            elif stage - src_stage > 1 and not (
+                                bool(node.attributes.get("pipeline_boundary", False))
+                                or node.op_type in ("P2P", "collective.all_to_all")
+                            ):
+                                errors.append(
+                                    ValidationError(
+                                        node_id=node.id,
+                                        attribute="pipeline_boundary",
+                                        message=(
+                                            f"Cross-stage dataflow skipping stages ({src_stage} -> {stage}) "
+                                            f"requires an explicit boundary marker."
+                                        ),
+                                        level=ValidationLevel.WARNING,
+                                    )
+                                )
+
+        return errors
+
+    def estimate_communication_volume(
+        self, node: LogicalNode, mesh: LogicalMesh | None = None
+    ) -> int:
+        """Calculate analytical communication volume in bytes for a collective communication node.
+
+        Args:
+            node (LogicalNode): The collective operation node.
+            mesh (Optional[LogicalMesh]): The logical device mesh defined on the graph.
+
+        Returns:
+            int: Analytical volume in bytes transferred per device during the collective.
+        """
+        return estimate_communication_volume(node, mesh)
+
+    def estimate_graph_communication_volume(
+        self, graph: LogicalGraph
+    ) -> dict[str, Any]:
+        """Aggregate analytical communication volume across all collective operators in a graph.
+
+        Args:
+            graph (LogicalGraph): The computational graph to analyze.
+
+        Returns:
+            dict[str, Any]: Dictionary with total communication volume in bytes,
+                and breakdowns by mesh axis and operator type.
+        """
+        return estimate_graph_communication_volume(graph)
 
     def validate(
         self,

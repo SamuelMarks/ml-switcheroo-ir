@@ -19,6 +19,7 @@ from ml_switcheroo_ir.schema.ghost import (
     ParameterKind,
     RegisterClass,
     SnapshotEnvelope,
+    migrate_ghost_ref,
     migrate_ghost_ref_v2,
 )
 from ml_switcheroo_ir.validator import ValidationLevel, Validator
@@ -598,3 +599,72 @@ def test_wgsl_primitives_and_workgroup_size() -> None:
         attributes={"workgroup_size": [8, 8]},
     )
     assert not v.validate_node(wgsl_node)
+
+
+def test_ghost_v2_c_extension_and_accepted_kwargs() -> None:
+    """Test static typing and roundtrip preservation for is_c_extension and accepted_kwargs."""
+    # Test instantiation with explicit fields
+    ref = ExtendedGhostRef(
+        name="relu",
+        api_path="torch.nn.functional.relu",
+        kind="function",
+        is_c_extension=True,
+        accepted_kwargs=["inplace", "generator"],
+    )
+    # Verify static typing contracts under mypy
+    c_ext: bool | None = ref.is_c_extension
+    kwargs: list[str] | None = ref.accepted_kwargs
+    assert c_ext is True
+    assert kwargs == ["inplace", "generator"]
+
+    # Test serialization roundtrip preserves fields
+    dumped = ref.model_dump()
+    assert dumped["is_c_extension"] is True
+    assert dumped["accepted_kwargs"] == ["inplace", "generator"]
+
+    reloaded = ExtendedGhostRef.model_validate(dumped)
+    assert reloaded.is_c_extension is True
+    assert reloaded.accepted_kwargs == ["inplace", "generator"]
+
+    # Test JSON string roundtrip
+    json_data = ref.model_dump_json()
+    reloaded_json = ExtendedGhostRef.model_validate_json(json_data)
+    assert reloaded_json.is_c_extension is True
+    assert reloaded_json.accepted_kwargs == ["inplace", "generator"]
+
+    # Test migration from v1.x dictionary with fields present
+    v1_data = {
+        "name": "add",
+        "api_path": "torch.add",
+        "kind": "function",
+        "schema_version": "1.0",
+        "is_c_extension": True,
+        "accepted_kwargs": ["alpha", "out"],
+    }
+    migrated_v1_ref = migrate_ghost_ref(v1_data)
+    assert migrated_v1_ref.is_c_extension is True
+    assert migrated_v1_ref.accepted_kwargs == ["alpha", "out"]
+
+    migrated_v2_ref = migrate_ghost_ref_v2(v1_data)
+    assert migrated_v2_ref.is_c_extension is True
+    assert migrated_v2_ref.accepted_kwargs == ["alpha", "out"]
+    assert migrated_v2_ref.schema_version == "2.0.0"
+
+    # Test migration from v1.x dictionary without fields defaults appropriately
+    v1_no_c_data = {
+        "name": "cos",
+        "api_path": "torch.cos",
+        "kind": "function",
+        "schema_version": "1.0",
+    }
+    migrated_default = migrate_ghost_ref_v2(v1_no_c_data)
+    assert migrated_default.is_c_extension is False
+    assert migrated_default.accepted_kwargs is None
+
+    # Test bidirectional serialization roundtrip across v1.x and v2.x
+    v2_dump = migrated_v2_ref.model_dump()
+    assert v2_dump["is_c_extension"] is True
+    assert v2_dump["accepted_kwargs"] == ["alpha", "out"]
+    roundtrip_v2 = migrate_ghost_ref_v2(v2_dump)
+    assert roundtrip_v2.is_c_extension is True
+    assert roundtrip_v2.accepted_kwargs == ["alpha", "out"]

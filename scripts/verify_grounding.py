@@ -117,9 +117,9 @@ def verify_custom_ops_grounding() -> list[str]:
     for op_name, schema in CUSTOM_OPS_REGISTRY.items():
         if not schema.name:
             errors.append("Custom op has empty name.")
-        if schema.domain != "ml.switcheroo.custom":
+        if schema.domain not in ("ml.switcheroo.custom", "collective", "quantization"):
             errors.append(
-                f"Custom op '{op_name}' has invalid domain '{schema.domain}', expected 'ml.switcheroo.custom'."
+                f"Custom op '{op_name}' has invalid domain '{schema.domain}', expected 'ml.switcheroo.custom', 'collective', or 'quantization'."
             )
         if not schema.outputs:
             errors.append(f"Custom op '{op_name}' has no defined outputs.")
