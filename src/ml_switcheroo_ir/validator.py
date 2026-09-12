@@ -11,6 +11,11 @@ from typing import Any
 
 from ml_switcheroo_ir import LogicalGraph, LogicalMesh, LogicalNode
 from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
+from ml_switcheroo_ir.schema.ghost import (
+    RDNA_INSTRUCTION_PRIMITIVES,
+    SASS_INSTRUCTION_PRIMITIVES,
+    WGSL_PRIMITIVE_SIGNATURES,
+)
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 
@@ -68,11 +73,14 @@ CORE_MLIR_DIALECTS: dict[str, dict[str, int]] = {
     },
     "math": {
         "exp": 1,
+        "exp2": 1,
         "log": 1,
         "sin": 1,
         "cos": 1,
-        "sqrt": 1,
         "tanh": 1,
+        "sqrt": 1,
+        "rsqrt": 1,
+        "erf": 1,
         "absf": 1,
     },
     "tensor": {
@@ -81,18 +89,23 @@ CORE_MLIR_DIALECTS: dict[str, dict[str, int]] = {
         "empty": 0,
         "cast": 1,
         "dim": 2,
+        "expand_shape": 1,
+        "collapse_shape": 1,
     },
     "linalg": {
-        "matmul": 3,
         "generic": 2,
+        "matmul": 3,
+        "conv2d": 3,
         "fill": 2,
+        "batch_matmul": 3,
         "dot": 3,
     },
     "scf": {
         "for": 3,
-        "while": 1,
         "if": 1,
+        "while": 1,
         "yield": 1,
+        "condition": 1,
     },
     "func": {
         "func": 0,
@@ -103,14 +116,16 @@ CORE_MLIR_DIALECTS: dict[str, dict[str, int]] = {
 
 
 class ValidationLevel(Enum):
-    """Severity levels for validation errors."""
+    """Severity levels for validation errors and validator configuration."""
 
+    STRICT = "STRICT"
     WARNING = "WARNING"
+    LENIENT = "LENIENT"
     ERROR = "ERROR"
 
 
 @dataclass
-class ValidationError:
+class ValidationError(Exception):
     """Represents an error found during graph or node validation.
 
     Attributes:
@@ -123,7 +138,15 @@ class ValidationError:
     node_id: str
     attribute: str
     message: str
-    level: ValidationLevel
+    level: ValidationLevel = ValidationLevel.ERROR
+
+    def __str__(self) -> str:
+        """Return formatted string description of the validation error.
+
+        Returns:
+            str: Human-readable error message with severity level.
+        """
+        return f"[{self.level.value}] Node '{self.node_id}' attribute '{self.attribute}': {self.message}"
 
 
 class Validator:
@@ -134,16 +157,22 @@ class Validator:
         registry: dict[str, OpSchema] | None = None,
         custom_registry: dict[str, OpSchema] | None = None,
         stablehlo_registry: dict[str, OpSchema] | None = None,
+        level: ValidationLevel = ValidationLevel.WARNING,
+        strict: bool = False,
+        grounding_validator: GroundingValidator | None = None,
     ) -> None:
-        """Initialize the validator.
+        """Initialize the validator with configurable registries and severity thresholds.
 
         Args:
-            registry (Dict[str, OpSchema], optional): The operator registry to use.
+            registry (Optional[Dict[str, OpSchema]]): The operator registry to use.
                 Defaults to the built-in ONNX_REGISTRY.
-            custom_registry (Dict[str, OpSchema], optional): The custom operator registry.
+            custom_registry (Optional[Dict[str, OpSchema]]): The custom operator registry.
                 Defaults to the built-in CUSTOM_OPS_REGISTRY.
-            stablehlo_registry (Dict[str, OpSchema], optional): The StableHLO operator registry.
+            stablehlo_registry (Optional[Dict[str, OpSchema]]): The StableHLO operator registry.
                 Defaults to the built-in STABLEHLO_REGISTRY.
+            level (ValidationLevel): The validation severity threshold (default: ValidationLevel.WARNING).
+            strict (bool): Convenience flag; if True, sets level to ValidationLevel.STRICT.
+            grounding_validator (Optional[GroundingValidator]): Optional grounding validator for snapshot verification.
         """
         if registry is None:
             self.registry = ONNX_REGISTRY
@@ -159,6 +188,15 @@ class Validator:
             self.stablehlo_registry = STABLEHLO_REGISTRY
         else:
             self.stablehlo_registry = stablehlo_registry
+
+        if strict:
+            self.level = ValidationLevel.STRICT
+        elif level == ValidationLevel.ERROR:
+            self.level = ValidationLevel.LENIENT
+        else:
+            self.level = level
+
+        self.grounding_validator = grounding_validator
 
     def _get_schema(self, node: LogicalNode) -> OpSchema | None:
         """Retrieve the schema for a node across registered domains.
@@ -206,12 +244,17 @@ class Validator:
                 node.op_type not in self.custom_registry
                 and node.op_type not in self.registry
             ):
+                lvl = (
+                    ValidationLevel.ERROR
+                    if self.level == ValidationLevel.STRICT
+                    else ValidationLevel.WARNING
+                )
                 errors.append(
                     ValidationError(
                         node_id=node.id,
                         attribute="kind",
                         message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
+                        level=lvl,
                     )
                 )
         elif node.domain == "stablehlo":
@@ -249,6 +292,45 @@ class Validator:
                             level=ValidationLevel.ERROR,
                         )
                     )
+        elif node.domain == "amd_rdna":
+            if (
+                node.op_type not in RDNA_INSTRUCTION_PRIMITIVES
+                and node.op_type not in self.registry
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain == "nvidia_sass":
+            if (
+                node.op_type not in SASS_INSTRUCTION_PRIMITIVES
+                and node.op_type not in self.registry
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain == "webgpu_wgsl":
+            if (
+                node.op_type not in WGSL_PRIMITIVE_SIGNATURES
+                and node.op_type not in self.registry
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
         elif (
             node.domain not in ("ai.custom", "custom")
             and node.op_type not in self.registry
@@ -306,12 +388,17 @@ class Validator:
 
         for key, value in node.attributes.items():
             if key not in schema.attributes:
+                lvl = (
+                    ValidationLevel.ERROR
+                    if self.level == ValidationLevel.STRICT
+                    else ValidationLevel.WARNING
+                )
                 errors.append(
                     ValidationError(
                         node_id=node.id,
                         attribute=key,
                         message=f"Attribute '{key}' is not recognized for '{node.op_type}'.",
-                        level=ValidationLevel.WARNING,
+                        level=lvl,
                     )
                 )
                 continue
@@ -432,6 +519,209 @@ class Validator:
             ):
                 node.attributes[attr_name] = attr_schema.default
 
+    def validate_isa_instruction(self, node: LogicalNode) -> list[ValidationError]:
+        """Validate GPU accelerator ISA instructions (AMD RDNA, NVIDIA SASS, and WebGPU WGSL).
+
+        Args:
+            node (LogicalNode): The node representing an ISA instruction or WGSL primitive.
+
+        Returns:
+            List[ValidationError]: A list of detected validation errors or warnings.
+        """
+        errors: list[ValidationError] = []
+
+        if node.domain == "amd_rdna":
+            wavefront = node.attributes.get("wavefront_size")
+            if wavefront is not None and wavefront not in (32, 64):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="wavefront_size",
+                        message=f"AMD RDNA wavefront_size must be 32 or 64, got {wavefront}.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+
+            reg_classes = node.attributes.get("register_classes")
+            if isinstance(reg_classes, dict):
+                valid_classes = {"VGPR", "SGPR", "AGPR"}
+                for op_name, rclass in reg_classes.items():
+                    if rclass not in valid_classes:
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute=f"register_classes.{op_name}",
+                                message=f"Invalid RDNA register class '{rclass}', expected one of {valid_classes}.",
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
+
+            vgpr_indices = node.attributes.get("vgpr_operands")
+            if isinstance(vgpr_indices, list) and len(vgpr_indices) >= 2:
+                banks = [idx % 4 for idx in vgpr_indices if isinstance(idx, int)]
+                if len(banks) != len(set(banks)):
+                    lvl = (
+                        ValidationLevel.ERROR
+                        if self.level == ValidationLevel.STRICT
+                        else ValidationLevel.WARNING
+                    )
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="vgpr_operands",
+                            message=f"VGPR bank conflict detected in instruction '{node.op_type}': operands map to same bank ({banks}).",
+                            level=lvl,
+                        )
+                    )
+
+        elif node.domain == "nvidia_sass":
+            barrier = node.attributes.get("barrier_predicate")
+            if (
+                barrier is not None
+                and isinstance(barrier, str)
+                and not (
+                    barrier.startswith(("@P", "@!P")) or barrier in ("@PT", "@!PT")
+                )
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="barrier_predicate",
+                        message=f"Invalid SASS barrier predicate '{barrier}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+
+            sync = node.attributes.get("warp_sync")
+            if sync is not None and sync not in (
+                "sync",
+                "yield",
+                "diverge",
+                "arrive",
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="warp_sync",
+                        message=f"Invalid warp synchronization marker '{sync}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+
+            mem_space = node.attributes.get("memory_space")
+            if mem_space is not None:
+                valid_spaces = {"global", "shared", "constant", "local"}
+                if mem_space not in valid_spaces:
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="memory_space",
+                            message=f"Invalid SASS memory space '{mem_space}', expected one of {valid_spaces}.",
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+
+        elif node.domain == "webgpu_wgsl":
+            wg_size = node.attributes.get("workgroup_size")
+            if wg_size is not None and (
+                not isinstance(wg_size, (list, tuple))
+                or len(wg_size) < 1
+                or len(wg_size) > 3
+                or not all(isinstance(x, int) and x > 0 for x in wg_size)
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="workgroup_size",
+                        message=f"WGSL @workgroup_size must be 1 to 3 positive integers, got {wg_size}.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+
+            qualifier = node.attributes.get("address_space")
+            if qualifier is not None:
+                valid_qualifiers = {
+                    "uniform",
+                    "storage, read",
+                    "storage, read_write",
+                    "workgroup",
+                    "private",
+                    "function",
+                }
+                if qualifier not in valid_qualifiers:
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="address_space",
+                            message=f"Invalid WGSL address space qualifier '{qualifier}', expected one of {valid_qualifiers}.",
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+
+        return errors
+
+    def validate_node(
+        self, node: LogicalNode, mesh: LogicalMesh | None = None
+    ) -> list[ValidationError]:
+        """Validate a single LogicalNode against schemas and configured severity level.
+
+        Args:
+            node (LogicalNode): The node to validate.
+            mesh (Optional[LogicalMesh]): Optional logical device mesh for sharding validation.
+
+        Returns:
+            List[ValidationError]: Aggregated list of validation errors and warnings for the node.
+        """
+        errors: list[ValidationError] = []
+        errors.extend(self.validate_kind(node))
+        errors.extend(self.validate_required_attributes(node))
+        errors.extend(self.validate_attribute_types(node))
+        errors.extend(self.validate_sharding(node, mesh))
+        if node.domain in ("amd_rdna", "nvidia_sass", "webgpu_wgsl"):
+            errors.extend(self.validate_isa_instruction(node))
+
+        # Check shape metadata in STRICT mode
+        if self.level == ValidationLevel.STRICT and node.shape_metadata is None:
+            errors.append(
+                ValidationError(
+                    node_id=node.id,
+                    attribute="shape_metadata",
+                    message=f"Node '{node.id}' missing required shape_metadata in STRICT validation mode.",
+                    level=ValidationLevel.ERROR,
+                )
+            )
+
+        # Check grounding if grounding validator is configured
+        if self.grounding_validator is not None:
+            grounding_errs = self.grounding_validator.validate_grounding(node)
+            for g_err in grounding_errs:
+                if self.level == ValidationLevel.STRICT:
+                    errors.append(
+                        ValidationError(
+                            node_id=g_err.node_id,
+                            attribute=g_err.attribute,
+                            message=g_err.message,
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+                elif self.level == ValidationLevel.WARNING:
+                    errors.append(
+                        ValidationError(
+                            node_id=g_err.node_id,
+                            attribute=g_err.attribute,
+                            message=g_err.message,
+                            level=ValidationLevel.WARNING,
+                        )
+                    )
+
+        self.populate_defaults(node)
+
+        # In LENIENT mode, filter out non-fatal WARNINGs
+        if self.level == ValidationLevel.LENIENT:
+            errors = [e for e in errors if e.level == ValidationLevel.ERROR]
+
+        return errors
+
     def validate_graph(self, graph: LogicalGraph) -> list[ValidationError]:
         """Validate all nodes, sharding, and edges in a LogicalGraph.
 
@@ -445,14 +735,42 @@ class Validator:
 
         # Validate nodes
         for node in graph.nodes.values():
-            errors.extend(self.validate_kind(node))
-            errors.extend(self.validate_required_attributes(node))
-            errors.extend(self.validate_attribute_types(node))
-            errors.extend(self.validate_sharding(node, graph.mesh))
-            self.populate_defaults(node)
+            errors.extend(self.validate_node(node, graph.mesh))
 
         # Validate edges
         errors.extend(self.validate_edges(graph))
+
+        if self.level == ValidationLevel.LENIENT:
+            errors = [e for e in errors if e.level == ValidationLevel.ERROR]
+
+        return errors
+
+    def validate(
+        self,
+        target: LogicalGraph | LogicalNode,
+        raise_on_error: bool = False,
+    ) -> list[ValidationError]:
+        """Validate a LogicalGraph or LogicalNode instance against configured validation level.
+
+        Args:
+            target (Union[LogicalGraph, LogicalNode]): Graph or node instance to validate.
+            raise_on_error (bool): If True, raises the first fatal ValidationError encountered.
+
+        Returns:
+            List[ValidationError]: List of validation errors and warnings.
+
+        Raises:
+            ValidationError: If raise_on_error is True and a fatal ValidationError is found.
+        """
+        if isinstance(target, LogicalGraph):
+            errors = self.validate_graph(target)
+        else:
+            errors = self.validate_node(target)
+
+        if raise_on_error:
+            fatal_errors = [e for e in errors if e.level == ValidationLevel.ERROR]
+            if fatal_errors:
+                raise fatal_errors[0]
 
         return errors
 
@@ -503,6 +821,20 @@ class GroundingAuditReport:
     diagnostics: list[ValidationError]
 
 
+DEFAULT_SNAPSHOT_DIR = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR") or os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "..",
+        "ml-framework-snapshots",
+        "src",
+        "ml_framework_snapshots",
+        "snapshots",
+    )
+)
+
+
 class GroundingValidator(Validator):
     """Validator that audits graphs strictly against external ground-truth snapshot manifests."""
 
@@ -510,19 +842,23 @@ class GroundingValidator(Validator):
         self,
         snapshot_manifest: dict[str, Any] | list[Any] | str | None = None,
         registry: dict[str, OpSchema] | None = None,
+        use_default_if_none: bool = False,
     ) -> None:
         """Initialize GroundingValidator with external snapshot file, directory, list, or dict.
 
         Args:
             snapshot_manifest (Union[Dict[str, Any], List[Any], str, None]): Snapshot dictionary,
                 list of records, file path, directory path, or collection.
-            registry (Dict[str, OpSchema], optional): Base operator registry.
+            registry (Optional[Dict[str, OpSchema]]): Base operator registry.
+            use_default_if_none (bool): If True and snapshot_manifest is None, load from DEFAULT_SNAPSHOT_DIR.
         """
         super().__init__(registry=registry)
         self.grounded_symbols: dict[str, dict[str, Any]] = {}
 
         if snapshot_manifest is not None:
             self._ingest_manifest_target(snapshot_manifest)
+        elif use_default_if_none and os.path.isdir(DEFAULT_SNAPSHOT_DIR):
+            self._load_directory(DEFAULT_SNAPSHOT_DIR)
 
     def _ingest_manifest_target(self, target: Any) -> None:
         """Ingest snapshot manifest from diverse target types.
@@ -618,10 +954,18 @@ class GroundingValidator(Validator):
                         for item in cat_list:
                             if isinstance(item, dict):
                                 self._register_symbol_record(item)
+                    elif isinstance(cat_list, dict):
+                        for item in cat_list.values():
+                            if isinstance(item, dict):
+                                self._register_symbol_record(item)
             else:
                 for k, v in data.items():
                     if isinstance(v, dict):
                         self._register_symbol_record(v, default_key=k)
+                    elif isinstance(v, list):
+                        for item in v:
+                            if isinstance(item, dict):
+                                self._register_symbol_record(item)
 
     def _find_best_symbol_match(self, op_type: str, domain: str) -> str | None:
         """Find the closest matching symbol in the snapshot within an edit distance threshold.
@@ -804,5 +1148,10 @@ def audit_graph_grounding(
     Returns:
         GroundingAuditReport: Resulting grounding audit report.
     """
-    validator = GroundingValidator(snapshot_manifest=snapshots_path)
+    resolved_path = (
+        DEFAULT_SNAPSHOT_DIR
+        if snapshots_path is None and os.path.isdir(DEFAULT_SNAPSHOT_DIR)
+        else snapshots_path
+    )
+    validator = GroundingValidator(snapshot_manifest=resolved_path)
     return validator.audit_graph(graph)

@@ -13,8 +13,11 @@ import json
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass, field
+from typing import Any, Iterator, Sequence, overload
 
 from ml_switcheroo_ir.types import AttributeValue, DType
+
+__version__ = "0.0.3"
 
 __all__ = [
     "AttributeValue",
@@ -29,6 +32,7 @@ __all__ = [
     "LogicalMesh",
     "LogicalNode",
     "PartitionSpec",
+    "__version__",
     "topological_sort",
 ]
 
@@ -113,30 +117,239 @@ class LogicalNode:
     """
 
     id: str
-    op_type: str
+    op_type: str = ""
     domain: str = "ai.onnx"
     version: int = 1
     attributes: dict[str, AttributeValue] = field(default_factory=dict)
     inputs: list[str] = field(default_factory=list)
     outputs: list[str] = field(default_factory=list)
-    shape_metadata: tuple[int | str, ...] | None = None
+    shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None
     source_ast_ref: str | None = None
     sharding: PartitionSpec | None = None
 
-    def __post_init__(self) -> None:
-        """Initialize default values after dataclass initialization."""
-        if not self.outputs:
-            self.outputs = [self.id]
+    @overload
+    def __init__(
+        self,
+        id: str,
+        op_type: str = ...,
+        domain: str = "ai.onnx",
+        version: int = 1,
+        attributes: dict[str, AttributeValue] | None = None,
+        inputs: list[str] | None = None,
+        outputs: list[str] | None = None,
+        shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None,
+        source_ast_ref: str | None = None,
+        sharding: PartitionSpec | None = None,
+    ) -> None:
+        """Initialize LogicalNode using canonical op_type and attributes.
+
+        Args:
+            id (str): Unique identifier for the node.
+            op_type (str): Operation type.
+            domain (str): Operator domain (default: 'ai.onnx').
+            version (int): Operator version (default: 1).
+            attributes (Optional[Dict[str, AttributeValue]]): Operator attributes.
+            inputs (Optional[List[str]]): Ordered list of upstream input IDs.
+            outputs (Optional[List[str]]): Ordered list of output SSA names.
+            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Tensor
+                shape metadata, accepting standard integer/string dimension tuples/lists, duck-typed metadata
+                objects defining a `.shape` attribute, or arbitrary custom non-iterable objects.
+            source_ast_ref (Optional[str]): Source AST trace reference.
+            sharding (Optional[PartitionSpec]): Distributed partition layout.
+        """
+
+    @overload
+    def __init__(
+        self,
+        id: str,
+        *,
+        kind: str,
+        domain: str = "ai.onnx",
+        version: int = 1,
+        metadata: dict[str, AttributeValue] | None = None,
+        inputs: list[str] | None = None,
+        outputs: list[str] | None = None,
+        shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None,
+        source_ast_ref: str | None = None,
+        sharding: PartitionSpec | None = None,
+    ) -> None:
+        """Initialize LogicalNode using legacy/alternative kind and metadata.
+
+        Args:
+            id (str): Unique identifier for the node.
+            kind (str): Alternative alias for op_type.
+            domain (str): Operator domain (default: 'ai.onnx').
+            version (int): Operator version (default: 1).
+            metadata (Optional[Dict[str, AttributeValue]]): Alternative alias for attributes.
+            inputs (Optional[List[str]]): Ordered list of upstream input IDs.
+            outputs (Optional[List[str]]): Ordered list of output SSA names.
+            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Tensor
+                shape metadata, accepting standard integer/string dimension tuples/lists, duck-typed metadata
+                objects defining a `.shape` attribute, or arbitrary custom non-iterable objects.
+            source_ast_ref (Optional[str]): Source AST trace reference.
+            sharding (Optional[PartitionSpec]): Distributed partition layout.
+        """
+
+    @overload
+    def __init__(
+        self,
+        id: str,
+        op_type: str | None = None,
+        domain: str = "ai.onnx",
+        version: int = 1,
+        attributes: dict[str, AttributeValue] | None = None,
+        inputs: list[str] | None = None,
+        outputs: list[str] | None = None,
+        shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None,
+        source_ast_ref: str | None = None,
+        sharding: PartitionSpec | None = None,
+        *,
+        kind: str | None = None,
+        metadata: dict[str, AttributeValue] | None = None,
+    ) -> None:
+        """Initialize LogicalNode with flexible parameter naming conventions.
+
+        Args:
+            id (str): Unique identifier for the node.
+            op_type (Optional[str]): Operation type.
+            domain (str): Operator domain (default: 'ai.onnx').
+            version (int): Operator version (default: 1).
+            attributes (Optional[Dict[str, AttributeValue]]): Operator attributes.
+            inputs (Optional[List[str]]): Ordered list of upstream input IDs.
+            outputs (Optional[List[str]]): Ordered list of output SSA names.
+            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Tensor
+                shape metadata, accepting standard integer/string dimension tuples/lists, duck-typed metadata
+                objects defining a `.shape` attribute, or arbitrary custom non-iterable objects.
+            source_ast_ref (Optional[str]): Source AST trace reference.
+            sharding (Optional[PartitionSpec]): Distributed partition layout.
+            kind (Optional[str]): Alternative alias for op_type.
+            metadata (Optional[Dict[str, AttributeValue]]): Alternative alias for attributes.
+        """
+
+    def __init__(
+        self,
+        id: str,
+        op_type: str | None = None,
+        domain: str = "ai.onnx",
+        version: int = 1,
+        attributes: dict[str, AttributeValue] | None = None,
+        inputs: list[str] | None = None,
+        outputs: list[str] | None = None,
+        shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None,
+        source_ast_ref: str | None = None,
+        sharding: PartitionSpec | None = None,
+        *,
+        kind: str | None = None,
+        metadata: dict[str, AttributeValue] | None = None,
+    ) -> None:
+        """Initialize a LogicalNode instance with dual parameter naming support.
+
+        Args:
+            id (str): Unique identifier for the node.
+            op_type (Optional[str]): Operation type (e.g. 'Conv', 'Relu').
+            domain (str): Operator domain (default: 'ai.onnx').
+            version (int): Operator set version (default: 1).
+            attributes (Optional[Dict[str, AttributeValue]]): Operator configuration attributes.
+            inputs (Optional[List[str]]): Ordered list of upstream LogicalNode IDs.
+            outputs (Optional[List[str]]): Ordered list of output SSA names.
+            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Tensor
+                shape metadata, accepting standard integer/string dimension tuples/lists, duck-typed metadata
+                objects defining a `.shape` attribute, or arbitrary custom non-iterable objects.
+            source_ast_ref (Optional[str]): Source AST trace reference.
+            sharding (Optional[PartitionSpec]): Distributed partition layout.
+            kind (Optional[str]): Alternative alias for op_type.
+            metadata (Optional[Dict[str, AttributeValue]]): Alternative alias for attributes.
+
+        Raises:
+            ValueError: If neither op_type nor kind is provided, or if both are provided with conflicting values.
+        """
+        if op_type is None and kind is None:
+            raise ValueError(
+                "Either 'op_type' or 'kind' must be specified for LogicalNode."
+            )
+        if op_type is not None and kind is not None and op_type != kind:
+            raise ValueError(
+                f"Conflicting op_type ({op_type!r}) and kind ({kind!r}) specified for LogicalNode."
+            )
+
+        resolved_op_type = op_type if op_type is not None else kind
+        assert resolved_op_type is not None
+
+        resolved_attributes: dict[str, AttributeValue] = {}
+        if metadata is not None:
+            resolved_attributes.update(metadata)
+        if attributes is not None:
+            resolved_attributes.update(attributes)
+
+        self.id = id
+        self.op_type = resolved_op_type
+        self.domain = domain
+        self.version = version
+        self.attributes = resolved_attributes
+        self.inputs = list(inputs) if inputs is not None else []
+        self.outputs = (
+            list(outputs) if outputs is not None and len(outputs) > 0 else [id]
+        )
+        if shape_metadata is None:
+            self.shape_metadata = None
+        elif isinstance(shape_metadata, tuple):
+            self.shape_metadata = shape_metadata
+        elif isinstance(shape_metadata, list):
+            self.shape_metadata = tuple(shape_metadata)
+        elif hasattr(shape_metadata, "shape"):
+            inner_shape = shape_metadata.shape
+            if isinstance(inner_shape, tuple):
+                self.shape_metadata = inner_shape
+            elif isinstance(inner_shape, list):
+                self.shape_metadata = tuple(inner_shape)
+            else:
+                try:
+                    self.shape_metadata = tuple(inner_shape)
+                except TypeError:
+                    self.shape_metadata = inner_shape
+        else:
+            try:
+                self.shape_metadata = tuple(shape_metadata)
+            except TypeError:
+                self.shape_metadata = shape_metadata
+        self.source_ast_ref = source_ast_ref
+        self.sharding = sharding
 
     @property
     def kind(self) -> str:
-        """Alias for op_type for backward compatibility."""
+        """Alias for op_type for backward compatibility.
+
+        Returns:
+            str: The operation type of this node.
+        """
         return self.op_type
+
+    @kind.setter
+    def kind(self, value: str) -> None:
+        """Set op_type via kind alias.
+
+        Args:
+            value (str): The operation type to set.
+        """
+        self.op_type = value
 
     @property
     def metadata(self) -> dict[str, AttributeValue]:
-        """Alias for attributes for backward compatibility."""
+        """Alias for attributes for backward compatibility.
+
+        Returns:
+            dict[str, AttributeValue]: Dictionary of attribute metadata.
+        """
         return self.attributes
+
+    @metadata.setter
+    def metadata(self, value: dict[str, AttributeValue]) -> None:
+        """Set attributes via metadata alias.
+
+        Args:
+            value (dict[str, AttributeValue]): Dictionary of attribute metadata to set.
+        """
+        self.attributes = value
 
 
 @dataclass
@@ -155,6 +368,98 @@ class LogicalGraph:
     nodes: dict[str, LogicalNode] = field(default_factory=dict)
     outputs: list[str] = field(default_factory=list)
     mesh: LogicalMesh | None = None
+
+    @overload
+    def __init__(
+        self,
+        name: str = "Model",
+        nodes: dict[str, LogicalNode] | None = None,
+        outputs: list[str] | None = None,
+        mesh: LogicalMesh | None = None,
+        *,
+        edges: list[LogicalEdge] | None = None,
+    ) -> None:
+        """Initialize LogicalGraph with nodes specified as a dictionary mapping id to LogicalNode.
+
+        Args:
+            name (str): Name of the graph model/class.
+            nodes (Optional[Dict[str, LogicalNode]]): Map of node ID to LogicalNode instance.
+            outputs (Optional[List[str]]): List of explicit output IDs.
+            mesh (Optional[LogicalMesh]): Optional logical device mesh.
+            edges (Optional[List[LogicalEdge]]): Optional list of directed edges to populate.
+        """
+
+    @overload
+    def __init__(
+        self,
+        name: str = "Model",
+        nodes: list[LogicalNode] | None = None,
+        outputs: list[str] | None = None,
+        mesh: LogicalMesh | None = None,
+        *,
+        edges: list[LogicalEdge] | None = None,
+    ) -> None:
+        """Initialize LogicalGraph with nodes specified as a list of LogicalNode instances.
+
+        Args:
+            name (str): Name of the graph model/class.
+            nodes (Optional[List[LogicalNode]]): List of LogicalNode instances.
+            outputs (Optional[List[str]]): List of explicit output IDs.
+            mesh (Optional[LogicalMesh]): Optional logical device mesh.
+            edges (Optional[List[LogicalEdge]]): Optional list of directed edges to populate.
+        """
+
+    def __init__(
+        self,
+        name: str = "Model",
+        nodes: dict[str, LogicalNode] | list[LogicalNode] | None = None,
+        outputs: list[str] | None = None,
+        mesh: LogicalMesh | None = None,
+        *,
+        edges: list[LogicalEdge] | None = None,
+    ) -> None:
+        """Initialize a LogicalGraph instance with flexible node and edge specifications.
+
+        Args:
+            name (str): Name of the graph model or class (default: 'Model').
+            nodes (Optional[Union[Dict[str, LogicalNode], List[LogicalNode]]]): Mapping of node IDs
+                to LogicalNode instances, or a list of LogicalNode instances.
+            outputs (Optional[List[str]]): List of explicit output IDs. If omitted, deduced from
+                nodes with out-degree zero (leaf nodes).
+            mesh (Optional[LogicalMesh]): Optional logical device mesh for distributed execution.
+            edges (Optional[List[LogicalEdge]]): Optional list of directed edges to populate
+                directly into each target node's inputs list.
+        """
+        self.name = name
+
+        if nodes is None:
+            self.nodes = {}
+        elif isinstance(nodes, list):
+            self.nodes = {node.id: node for node in nodes}
+        else:
+            self.nodes = dict(nodes)
+
+        if edges is not None:
+            for edge in edges:
+                if edge.target in self.nodes:
+                    target_node = self.nodes[edge.target]
+                    if edge.source not in target_node.inputs:
+                        target_node.inputs.append(edge.source)
+
+        if outputs is not None:
+            self.outputs = list(outputs)
+        else:
+            consumed: set[str] = set()
+            for n in self.nodes.values():
+                for inp in n.inputs:
+                    consumed.add(inp)
+            out_ids: list[str] = []
+            for nid, n in self.nodes.items():
+                if nid not in consumed and not any(o in consumed for o in n.outputs):
+                    out_ids.append(nid)
+            self.outputs = out_ids
+
+        self.mesh = mesh
 
     @property
     def nodes_list(self) -> list[LogicalNode]:
@@ -268,7 +573,7 @@ class LogicalGraph:
             if any(inp in output_ids for inp in node.inputs)
         ]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[LogicalNode]:
         """Yield nodes in dictionary insertion order.
 
         Returns:
@@ -308,7 +613,7 @@ class LogicalGraph:
         data = asdict(self)
         if format == "canonical":
             data["edges"] = [asdict(edge) for edge in self.edges]
-        return json.dumps(data, sort_keys=True, indent=indent)
+        return json.dumps(data, sort_keys=True, indent=indent, default=str)
 
     @classmethod
     def from_json(cls, json_str: str) -> LogicalGraph:
@@ -340,8 +645,6 @@ class LogicalGraph:
                         tuple(a) if isinstance(a, list) else a for a in sharding["axes"]
                     )
                 )
-            if ndata_copy.get("shape_metadata"):
-                ndata_copy["shape_metadata"] = tuple(ndata_copy["shape_metadata"])
             if "outputs" in ndata_copy and ndata_copy["outputs"] is not None:
                 ndata_copy["outputs"] = list(ndata_copy["outputs"])
             nodes[nid] = LogicalNode(**ndata_copy)
@@ -358,7 +661,7 @@ class LogicalGraph:
         mesh_data = data.get("mesh")
         mesh = LogicalMesh(shape=mesh_data["shape"]) if mesh_data else None
 
-        outputs = data.get("outputs", [])
+        outputs = data.get("outputs")
         return cls(
             name=data.get("name", "Model"), nodes=nodes, outputs=outputs, mesh=mesh
         )

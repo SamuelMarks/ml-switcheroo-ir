@@ -11,7 +11,7 @@ from ml_switcheroo_ir.cli import main as cli_main
 
 def test_cli_compliance_verbose(
     tmp_path: pathlib.Path,
-    capsys: pytest.CaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test compliance subcommand verbose output."""
@@ -50,7 +50,7 @@ def test_cli_compliance_verbose(
 
 
 def test_cli_compliance_verbose_mapping(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test compliance subcommand verbose output with mapping."""
     import json
@@ -82,7 +82,7 @@ def test_cli_compliance_verbose_mapping(
 
 
 def test_cli_compliance_verbose_mapping_empty(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test compliance subcommand verbose output with empty mapping."""
     import json

@@ -69,6 +69,43 @@ def test_stablehlo_unrecognized_op() -> None:
     assert "non_existent_op" in errors[0].message
 
 
+def test_stablehlo_expanded_ops_validation() -> None:
+    """Test validating expanded StableHLO operators."""
+    v = Validator()
+
+    # broadcast_in_dim
+    bcast = LogicalNode(
+        id="b1",
+        op_type="broadcast_in_dim",
+        domain="stablehlo",
+        inputs=["op1"],
+        attributes={"broadcast_dimensions": [1, 2]},
+    )
+    assert not v.validate_kind(bcast)
+    assert not v.validate_required_attributes(bcast)
+
+    # iota
+    iota_node = LogicalNode(
+        id="i1",
+        op_type="iota",
+        domain="stablehlo",
+        attributes={"iota_dimension": 0},
+    )
+    assert not v.validate_kind(iota_node)
+    assert not v.validate_required_attributes(iota_node)
+
+    # cholesky
+    cholesky_node = LogicalNode(
+        id="ch1",
+        op_type="cholesky",
+        domain="stablehlo",
+        inputs=["mat"],
+        attributes={"lower": True},
+    )
+    assert not v.validate_kind(cholesky_node)
+    assert not v.validate_required_attributes(cholesky_node)
+
+
 def test_mlir_dialect_validation_success() -> None:
     """Test validating core MLIR dialects."""
     v = Validator()
@@ -100,6 +137,44 @@ def test_mlir_dialect_validation_success() -> None:
     errors = v.validate_kind(bad_op_node)
     assert len(errors) == 1
     assert "fake_op" in errors[0].message
+
+    # Test all added MLIR ops
+    exp2_node = LogicalNode(id="m1", op_type="exp2", domain="math", inputs=["%x"])
+    assert not v.validate_kind(exp2_node)
+
+    rsqrt_node = LogicalNode(id="m2", op_type="rsqrt", domain="math", inputs=["%x"])
+    assert not v.validate_kind(rsqrt_node)
+
+    erf_node = LogicalNode(id="m3", op_type="erf", domain="math", inputs=["%x"])
+    assert not v.validate_kind(erf_node)
+
+    expand_node = LogicalNode(
+        id="t1", op_type="expand_shape", domain="tensor", inputs=["%t"]
+    )
+    assert not v.validate_kind(expand_node)
+
+    collapse_node = LogicalNode(
+        id="t2", op_type="collapse_shape", domain="tensor", inputs=["%t"]
+    )
+    assert not v.validate_kind(collapse_node)
+
+    conv2d_node = LogicalNode(
+        id="l1", op_type="conv2d", domain="linalg", inputs=["%in", "%f", "%out"]
+    )
+    assert not v.validate_kind(conv2d_node)
+
+    bmm_node = LogicalNode(
+        id="l2",
+        op_type="batch_matmul",
+        domain="linalg",
+        inputs=["%a", "%b", "%out"],
+    )
+    assert not v.validate_kind(bmm_node)
+
+    cond_node = LogicalNode(
+        id="s1", op_type="condition", domain="scf", inputs=["%flag"]
+    )
+    assert not v.validate_kind(cond_node)
 
 
 def test_grounding_validator_dict_manifest() -> None:

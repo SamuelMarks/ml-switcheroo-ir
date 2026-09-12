@@ -8,7 +8,7 @@ from ml_switcheroo_ir.cli import main as cli_main
 
 
 def test_cli_compliance_framework_adapter(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test compliance subcommand scanning mock framework adapters."""
     import json
@@ -53,7 +53,7 @@ class MockAdapter:
 
 def test_cli_compliance_branch_coverage(
     tmp_path: pathlib.Path,
-    capsys: pytest.CaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test compliance subcommand branch coverage."""

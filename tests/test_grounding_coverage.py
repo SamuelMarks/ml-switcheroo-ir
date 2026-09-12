@@ -52,6 +52,10 @@ def test_grounding_validator_edge_branches(tmp_path: Path) -> None:
     gv_none = GroundingValidator(snapshot_manifest=None)
     assert gv_none.grounded_symbols == {}
 
+    # Default if none
+    gv_default = GroundingValidator(snapshot_manifest=None, use_default_if_none=True)
+    assert len(gv_default.grounded_symbols) > 0
+
     # Manifest with flat dict where value is non-dict
     manifest_mixed = {
         "meta": "not_a_dict",
@@ -102,11 +106,23 @@ def test_grounding_validator_edge_branches(tmp_path: Path) -> None:
                 {"other_key": "val"},
                 {"name": "only_name"},
             ],
-            "cat2": "not_a_list",
+            "cat2": {
+                "sub_dict_item": {"name": "sub_dict_name"},
+                "invalid_sub": "not_a_dict",
+            },
+            "cat3": "not_a_list",
         }
     }
     gv_cat = GroundingValidator(snapshot_manifest=cat_manifest)
     assert "only_name" in gv_cat.grounded_symbols
+    assert "sub_dict_name" in gv_cat.grounded_symbols
+
+    # Top-level list in non-categorized dict
+    manifest_top_list = {
+        "ops_list": [{"name": "list_op_name"}, "not_a_dict"],
+    }
+    gv_top_list = GroundingValidator(snapshot_manifest=manifest_top_list)
+    assert "list_op_name" in gv_top_list.grounded_symbols
 
 
 def test_compute_levenshtein() -> None:
@@ -318,21 +334,48 @@ def test_grounding_against_ml_framework_snapshots_golden() -> None:
     snapshots_repo = (
         Path(__file__).resolve().parent.parent.parent / "ml-framework-snapshots"
     )
-    frameworks_dir = snapshots_repo / "src" / "ml_framework_snapshots" / "frameworks"
-    if not frameworks_dir.exists():
-        return
+    snapshots_dir = snapshots_repo / "src" / "ml_framework_snapshots" / "snapshots"
+    assert snapshots_dir.exists()
 
-    stablehlo_file = frameworks_dir / "stablehlo_exhaustive.json"
-    if stablehlo_file.exists():
-        gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
-        assert "stablehlo.dot_general" in gv.grounded_symbols
-        assert "stablehlo.convolution" in gv.grounded_symbols
+    stablehlo_file = snapshots_dir / "stablehlo_v1.0.0.json"
+    assert stablehlo_file.exists()
+    gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
+    assert "stablehlo.dot_general" in gv.grounded_symbols
+    assert "stablehlo.convolution" in gv.grounded_symbols
+    assert "stablehlo.reduce" in gv.grounded_symbols
 
-        # Audit a valid StableHLO node
-        valid_node = LogicalNode(
-            id="dot1",
-            op_type="dot_general",
-            domain="stablehlo",
-            attributes={"dot_dimension_numbers": {}},
-        )
-        assert not gv.validate_grounding(valid_node)
+    # Audit a valid StableHLO node
+    valid_node = LogicalNode(
+        id="dot1",
+        op_type="dot_general",
+        domain="stablehlo",
+        attributes={"dot_dimension_numbers": {}},
+    )
+    assert not gv.validate_grounding(valid_node)
+
+    ir_file = snapshots_dir / "ir_v0.0.3.json"
+    if not ir_file.exists():
+        candidates = sorted(snapshots_dir.glob("ir_v*.json"))
+        assert len(candidates) > 0
+        ir_file = candidates[-1]
+    assert ir_file.exists()
+    gv_ir = GroundingValidator(snapshot_manifest=str(ir_file))
+    assert (
+        "LogicalGraph" in gv_ir.grounded_symbols
+        or "ml_switcheroo_ir.LogicalGraph" in gv_ir.grounded_symbols
+    )
+    assert (
+        "LogicalNode" in gv_ir.grounded_symbols
+        or "ml_switcheroo_ir.LogicalNode" in gv_ir.grounded_symbols
+    )
+    assert (
+        "PartitionSpec" in gv_ir.grounded_symbols
+        or "ml_switcheroo_ir.PartitionSpec" in gv_ir.grounded_symbols
+    )
+
+    node_graph = LogicalNode(id="lg", op_type="LogicalGraph", domain="ml_switcheroo_ir")
+    assert not gv_ir.validate_grounding(node_graph)
+    node_node = LogicalNode(id="ln", op_type="LogicalNode", domain="ml_switcheroo_ir")
+    assert not gv_ir.validate_grounding(node_node)
+    node_spec = LogicalNode(id="ps", op_type="PartitionSpec", domain="ml_switcheroo_ir")
+    assert not gv_ir.validate_grounding(node_spec)

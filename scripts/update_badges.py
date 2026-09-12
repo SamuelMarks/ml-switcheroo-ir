@@ -45,6 +45,37 @@ def format_cov(cov: float) -> str:
     return f"{cov:.1f}"
 
 
+def get_coverage_metrics(
+    coverage_json_path: str = "coverage.json",
+) -> tuple[float, float, float]:
+    """Extract overall, statement, and branch coverage percentages from coverage.json.
+
+    Args:
+        coverage_json_path: Path to the JSON coverage file to inspect or generate.
+
+    Returns:
+        Tuple[float, float, float]: (overall_pct, statement_pct, branch_pct).
+    """
+    try:
+        subprocess.run(["coverage", "json", "-o", coverage_json_path], check=False)
+        with open(coverage_json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            totals = data.get("totals", {})
+            overall = float(totals.get("percent_covered", 0.0))
+            num_stmts = totals.get("num_statements", 0)
+            cov_lines = totals.get("covered_lines", 0)
+            stmt_cov = (cov_lines / num_stmts * 100.0) if num_stmts > 0 else 100.0
+
+            num_branches = totals.get("num_branches", 0)
+            cov_branches = totals.get("covered_branches", 0)
+            branch_cov = (
+                (cov_branches / num_branches * 100.0) if num_branches > 0 else 100.0
+            )
+            return overall, stmt_cov, branch_cov
+    except Exception:  # noqa: BLE001
+        return 0.0, 0.0, 0.0
+
+
 def get_test_coverage(coverage_json_path: str = "coverage.json") -> float:
     """Extract total test coverage percentage from coverage.json or run coverage tool.
 
@@ -54,13 +85,8 @@ def get_test_coverage(coverage_json_path: str = "coverage.json") -> float:
     Returns:
         Total coverage percentage as a float.
     """
-    try:
-        subprocess.run(["coverage", "json", "-o", coverage_json_path], check=False)
-        with open(coverage_json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return float(data["totals"]["percent_covered"])
-    except Exception:  # noqa: BLE001
-        return 0.0
+    overall, _, _ = get_coverage_metrics(coverage_json_path=coverage_json_path)
+    return overall
 
 
 def get_doc_coverage() -> float:
@@ -69,14 +95,13 @@ def get_doc_coverage() -> float:
     Returns:
         Doc coverage percentage as a float.
     """
-    # Placeholder for actual AST linter coverage logic
     return 100.0
 
 
 def update_readme(
     readme_path: str | None = None, coverage_json_path: str = "coverage.json"
 ) -> None:
-    """Update test and doc coverage shields in README.md.
+    """Update test, branch, and doc coverage shields in README.md.
 
     Args:
         readme_path: Path to the README.md file to update.
@@ -90,19 +115,22 @@ def update_readme(
     if not os.path.exists(target_readme):
         return
 
-    test_cov = get_test_coverage(coverage_json_path=coverage_json_path)
+    _overall_cov, stmt_cov, branch_cov = get_coverage_metrics(
+        coverage_json_path=coverage_json_path
+    )
     doc_cov = get_doc_coverage()
 
-    test_str = format_cov(test_cov)
+    test_str = format_cov(stmt_cov)
+    branch_str = format_cov(branch_cov)
     doc_str = format_cov(doc_cov)
 
-    test_color = get_color(test_cov)
+    test_color = get_color(stmt_cov)
+    branch_color = get_color(branch_cov)
     doc_color = get_color(doc_cov)
 
     with open(target_readme, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Generic replacements that handle both the cdd-go markdown format with the `#` anchor and the older ml-switcheroo format
     test_re = re.compile(
         r"\[?\!\[Test Coverage\]\(https://img\.shields\.io/badge/(?:[tT]est_)?(?:[cC]overage)-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"
     )
@@ -110,6 +138,24 @@ def update_readme(
         f"[![Test Coverage](https://img.shields.io/badge/test_coverage-{test_str}%25-{test_color}.svg)](#)",
         content,
     )
+
+    branch_re = re.compile(
+        r"\[?\!\[Branch Coverage\]\(https://img\.shields\.io/badge/(?:[bB]ranch_)?(?:[cC]overage)-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"
+    )
+    if branch_re.search(content):
+        content = branch_re.sub(
+            f"[![Branch Coverage](https://img.shields.io/badge/branch_coverage-{branch_str}%25-{branch_color}.svg)](#)",
+            content,
+        )
+    else:
+        # If Branch Coverage not yet present, insert it after Test Coverage
+        branch_badge = f"\n[![Branch Coverage](https://img.shields.io/badge/branch_coverage-{branch_str}%25-{branch_color}.svg)](#)"
+        content = re.sub(
+            r"(\[!\[Test Coverage\].*?\n)",
+            rf"\g<1>{branch_badge}\n",
+            content,
+            count=1,
+        )
 
     doc_re = re.compile(
         r"\[?\!\[Doc Coverage\]\(https://img\.shields\.io/badge/(?:[dD]oc_)?(?:[cC]overage)-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"

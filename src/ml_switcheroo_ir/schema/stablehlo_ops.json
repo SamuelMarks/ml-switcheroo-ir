@@ -136,6 +136,22 @@
           "name": "call_target_name",
           "type": "str",
           "required": true
+        },
+        {
+          "name": "has_side_effect",
+          "type": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "backend_config",
+          "type": "str",
+          "required": false
+        },
+        {
+          "name": "api_version",
+          "type": "int",
+          "required": false
         }
       ]
     },
@@ -152,6 +168,168 @@
       "inputs": ["lhs", "rhs"],
       "outputs": ["result"],
       "attributes": []
+    },
+    {
+      "name": "broadcast_in_dim",
+      "domain": "stablehlo",
+      "inputs": ["operand"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "broadcast_dimensions",
+          "type": "List[int]",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "reduce_window",
+      "domain": "stablehlo",
+      "inputs": ["inputs", "init_values"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "window_dimensions",
+          "type": "List[int]",
+          "required": true
+        },
+        {
+          "name": "window_strides",
+          "type": "List[int]",
+          "required": false
+        },
+        {
+          "name": "base_dilations",
+          "type": "List[int]",
+          "required": false
+        },
+        {
+          "name": "window_dilations",
+          "type": "List[int]",
+          "required": false
+        },
+        {
+          "name": "padding",
+          "type": "List[int]",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "select_and_scatter",
+      "domain": "stablehlo",
+      "inputs": ["operand", "source", "init_value"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "window_dimensions",
+          "type": "List[int]",
+          "required": false
+        },
+        {
+          "name": "window_strides",
+          "type": "List[int]",
+          "required": false
+        },
+        {
+          "name": "padding",
+          "type": "List[int]",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "rng_bit_generator",
+      "domain": "stablehlo",
+      "inputs": ["initial_state"],
+      "outputs": ["output_state", "output"],
+      "attributes": [
+        {
+          "name": "rng_algorithm",
+          "type": "str",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "cholesky",
+      "domain": "stablehlo",
+      "inputs": ["a"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "lower",
+          "type": "bool",
+          "required": false,
+          "default": false
+        }
+      ]
+    },
+    {
+      "name": "dynamic_slice",
+      "domain": "stablehlo",
+      "inputs": ["operand", "start_indices"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "slice_sizes",
+          "type": "List[int]",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "dynamic_update_slice",
+      "domain": "stablehlo",
+      "inputs": ["operand", "update", "start_indices"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "reverse",
+      "domain": "stablehlo",
+      "inputs": ["operand"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "dimensions",
+          "type": "List[int]",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "sort",
+      "domain": "stablehlo",
+      "inputs": ["inputs"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "dimension",
+          "type": "int",
+          "required": false,
+          "default": -1
+        },
+        {
+          "name": "is_stable",
+          "type": "bool",
+          "required": false,
+          "default": false
+        }
+      ]
+    },
+    {
+      "name": "iota",
+      "domain": "stablehlo",
+      "inputs": [],
+      "outputs": ["output"],
+      "attributes": [
+        {
+          "name": "iota_dimension",
+          "type": "int",
+          "required": true
+        }
+      ]
     }
   ]
 }

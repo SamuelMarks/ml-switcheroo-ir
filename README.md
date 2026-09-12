@@ -2,7 +2,9 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/SamuelMarks/ml-switcheroo-ir/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelMarks/ml-switcheroo-ir/actions)
-[![Test Coverage](https://img.shields.io/badge/test_coverage-99.9%25-green.svg)](#)
+[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)
+
+[![Branch Coverage](https://img.shields.io/badge/branch_coverage-100%25-brightgreen.svg)](#)
 [![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)
 
 > The universal, zero-dependency Intermediate Representation (IR), schema validator, and anti-hallucination grounding contract for the `ml-switcheroo` and `zero-*` compilation ecosystem.
@@ -13,17 +15,37 @@
 
 ## The $N \times M$ Translation Problem
 
-Machine learning framework interoperability suffers from an $N \times M$ translation bottleneck: translating $N$ source frameworks (PyTorch, JAX, TensorFlow, Keras) directly to $M$ execution targets (WASM, WebGPU, TensorRT, XLA, MLIR, CUDA) requires $N \times M$ bespoke point-to-point translators.
+Machine learning framework interoperability suffers from an $N \times M$ translation bottleneck: translating $N$ source frameworks (Flax, Keras, PyTorch, MLX, JAX, TensorFlow) directly to $M$ execution targets (WASM, WebGPU, StableHLO, MLIR, AMD RDNA, NVIDIA SASS) requires $N \times M$ bespoke point-to-point translators.
 
-```
-Frontends (N)                    Canonical IR                      Backends (M)
-+------------------+                                            +------------------+
-| PyTorch / Keras  | \                                        / | WASM / WebGPU    |
-+------------------+  \                                      /  +------------------+
-| JAX / Flax       | --- [ ml-switcheroo-ir (LogicalGraph) ] --- | TensorRT / CUDA  |
-+------------------+  /                                      \  +------------------+
-| TensorFlow / MLX | /                                        \ | MLIR / StableHLO |
-+------------------+                                            +------------------+
+```mermaid
+flowchart LR
+    subgraph Frontends["Frontends (N)"]
+        direction TB
+        Flax["Flax"] ~~~ PyTorch["PyTorch"] ~~~ JAX["JAX"]
+        Keras["Keras"] ~~~ MLX["MLX"] ~~~ TensorFlow["TensorFlow"]
+    end
+
+    IR["ml-switcheroo-ir<br/>(LogicalGraph)"]
+
+    subgraph Backends["Backends (M)"]
+        direction TB
+        WASM["WASM"] ~~~ StableHLO["StableHLO"] ~~~ RDNA["AMD RDNA"]
+        WebGPU["WebGPU"] ~~~ MLIR["MLIR"] ~~~ SASS["NVIDIA SASS"]
+    end
+
+    Flax --> IR
+    Keras --> IR
+    PyTorch --> IR
+    MLX --> IR
+    JAX --> IR
+    TensorFlow --> IR
+
+    IR --> WASM
+    IR --> WebGPU
+    IR --> StableHLO
+    IR --> MLIR
+    IR --> RDNA
+    IR --> SASS
 ```
 
 By decoupling ingestion from code generation through a canonical, strictly validated Intermediate Representation (`ml-switcheroo-ir`), the complexity collapses to $N + M$.
@@ -34,20 +56,14 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 
 `ml-switcheroo-ir` sits at **Tier 1** of the abstract machine compilation ecosystem, serving as the foundational contract with **zero external dependencies** (using strictly the Python Standard Library):
 
-```
-+---------------------------------------------------------------------------------------+
-|                                    Ecosystem Tiers                                    |
-+---------------------------------------------------------------------------------------+
-|  Tier 1: Core Definitions  | ml-switcheroo-ir                                        |
-|  Tier 2: Computational AD   | ml-switcheroo-compiler (AOT Tracing, Reverse-Mode AD)    |
-|  Ground-Truth Grounding    | ml-framework-snapshots (Ghost Protocol, Anti-Hallucination)
-|  Source Transpilation      | ml-switcheroo (CST/AST Rewriting & Framework Adapters)   |
-|  Tiers 3-4: zero-* Frontends| zero-jax, zero-flax, zero-pytorch, zero-keras,           |
-|                            | zero-tensorflow, zero-mlx, zero-pax, zero-optax,        |
-|                            | zero-chex, zero-grain, zero-orbax                        |
-|  Tier 5: Proving Grounds   | zero-zoo (Golden Seed float-for-float verification)      |
-+---------------------------------------------------------------------------------------+
-```
+| Ecosystem Tier | Description / Repositories |
+| :--- | :--- |
+| **Tier 1: Core Definitions** | `ml-switcheroo-ir` |
+| **Tier 2: Computational AD** | `ml-switcheroo-compiler` (AOT Tracing, Reverse-Mode AD) |
+| **Ground-Truth Grounding** | `ml-framework-snapshots` (Ghost Protocol, Anti-Hallucination) |
+| **Source Transpilation** | `ml-switcheroo` (CST/AST Rewriting & Framework Adapters) |
+| **Tiers 3-4: zero-* Frontends** | `zero-jax`, `zero-flax`, `zero-pytorch`, `zero-keras`, `zero-tensorflow`, `zero-mlx`, `zero-pax`, `zero-optax`, `zero-chex`, `zero-grain`, `zero-orbax` |
+| **Tier 5: Proving Grounds** | `zero-zoo` (Golden Seed float-for-float verification) |
 
 ### Interoperating Repositories
 

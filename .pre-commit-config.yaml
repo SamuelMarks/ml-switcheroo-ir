@@ -15,9 +15,30 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: mypy
+        name: Mypy Strict Type Check
+        entry: mypy src tests scripts
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: interrogate
+        name: Interrogate Doc Coverage
+        entry: interrogate -vv -f 100 -M -i -c pyproject.toml src scripts tests
+        language: system
+        types: [python]
+        pass_filenames: false
+
       - id: pytest-coverage
         name: Run Pytest Coverage
-        entry: pytest --cov=. --cov-report=term-missing
+        entry: pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-fail-under=100
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: verify-grounding
+        name: Verify Grounding
+        entry: python3 scripts/verify_grounding.py
         language: system
         types: [python]
         pass_filenames: false

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import runpy
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -16,6 +17,17 @@ from scripts.update_badges import (
     get_doc_coverage,
     get_test_coverage,
     update_readme,
+)
+from scripts.verify_grounding import (
+    find_snapshots_directory,
+    verify_custom_ops_grounding,
+    verify_ir_snapshot_grounding,
+    verify_mlir_grounding,
+    verify_onnx_grounding,
+    verify_stablehlo_grounding,
+)
+from scripts.verify_grounding import (
+    main as verify_grounding_main,
 )
 
 
@@ -93,7 +105,18 @@ def test_update_readme_success() -> None:
         with open(readme_file, "w", encoding="utf-8") as f:
             f.write(initial_content)
         with open(cov_file, "w", encoding="utf-8") as f:
-            json.dump({"totals": {"percent_covered": 100.0}}, f)
+            json.dump(
+                {
+                    "totals": {
+                        "percent_covered": 100.0,
+                        "num_statements": 10,
+                        "covered_lines": 10,
+                        "num_branches": 2,
+                        "covered_branches": 2,
+                    }
+                },
+                f,
+            )
 
         with patch("subprocess.run"):
             update_readme(readme_path=readme_file, coverage_json_path=cov_file)
@@ -102,7 +125,17 @@ def test_update_readme_success() -> None:
             updated = f.read()
 
         assert "test_coverage-100%25-brightgreen.svg" in updated
+        assert "branch_coverage-100%25-brightgreen.svg" in updated
         assert "doc_coverage-100%25-brightgreen.svg" in updated
+
+        # Second update when branch coverage is already present
+        with patch("subprocess.run"):
+            update_readme(readme_path=readme_file, coverage_json_path=cov_file)
+
+        with open(readme_file, "r", encoding="utf-8") as f:
+            updated2 = f.read()
+
+        assert "branch_coverage-100%25-brightgreen.svg" in updated2
 
 
 def test_update_badges_main() -> None:
@@ -256,3 +289,240 @@ def test_generate_registry_module_main() -> None:
             runpy.run_module("scripts.generate_registry", run_name="__main__")
         assert os.path.exists(tmp_json)
         assert os.path.exists(tmp_py)
+
+
+def test_verify_grounding_find_snapshots_directory() -> None:
+    """Test find_snapshots_directory resolution and fallbacks."""
+    with TemporaryDirectory() as tmpdir:
+        # Override path that is a dir
+        assert find_snapshots_directory(tmpdir) is not None
+
+        # Override path that is not a dir
+        non_existent = os.path.join(tmpdir, "does_not_exist")
+        assert find_snapshots_directory(non_existent) is None
+
+    # Without override, should find existing DEFAULT_SNAPSHOT_DIR or fallback
+    assert find_snapshots_directory() is not None
+
+    # Test fallback to script_relative when default_path does not exist
+    with patch(
+        "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"
+    ), patch("pathlib.Path.is_dir", side_effect=[False, True]):
+        assert find_snapshots_directory() is not None
+
+    # Test when default path does not exist and script relative does not exist
+    with patch(
+        "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"
+    ), patch("pathlib.Path.is_dir", return_value=False):
+        assert find_snapshots_directory() is None
+
+
+def test_verify_grounding_stablehlo() -> None:
+    """Test verify_stablehlo_grounding with missing file, invalid op, and valid snapshot."""
+    from pathlib import Path
+
+    with TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        # Snapshot file missing
+        errs = verify_stablehlo_grounding(tmp_path)
+        assert any("file not found" in e for e in errs)
+
+        # Snapshot file with missing op and invalid attribute
+        fake_snapshot = {
+            "categories": {
+                "stablehlo_op": [
+                    {
+                        "name": "dot_general",
+                        "api_path": "stablehlo.dot_general",
+                        "params": [{"name": "unknown_param"}, "not_dict", {}],
+                        "attributes": [{"name": "unknown_attr"}, "not_dict", {}],
+                    }
+                ]
+            }
+        }
+        snap_file = tmp_path / "stablehlo_v1.0.0.json"
+        with open(snap_file, "w", encoding="utf-8") as f:
+            json.dump(fake_snapshot, f)
+
+        errs_missing = verify_stablehlo_grounding(tmp_path)
+        assert len(errs_missing) > 0
+
+
+def test_verify_grounding_custom_and_onnx() -> None:
+    """Test verify_custom_ops_grounding and verify_onnx_grounding under normal and defective conditions."""
+    # Healthy cases
+    assert verify_custom_ops_grounding() == []
+    assert verify_onnx_grounding() == []
+
+    # Defective custom ops
+    from ml_switcheroo_ir.schema.onnx_registry import OpSchema
+
+    fake_custom = {
+        "bad1": OpSchema(
+            name="",
+            domain="ml.switcheroo.custom",
+            version=1,
+            attributes={},
+            inputs=[],
+            outputs=["out"],
+        ),
+        "bad2": OpSchema(
+            name="bad2",
+            domain="wrong.domain",
+            version=1,
+            attributes={},
+            inputs=[],
+            outputs=["out"],
+        ),
+        "bad3": OpSchema(
+            name="bad3",
+            domain="ml.switcheroo.custom",
+            version=1,
+            attributes={},
+            inputs=[],
+            outputs=[],
+        ),
+    }
+    with patch("scripts.verify_grounding.CUSTOM_OPS_REGISTRY", fake_custom):
+        custom_errs = verify_custom_ops_grounding()
+        assert len(custom_errs) == 3
+
+    # Defective ONNX registry
+    with patch("scripts.verify_grounding.ONNX_REGISTRY", {}):
+        assert len(verify_onnx_grounding()) == 1
+
+    fake_onnx = {
+        "Mismatch": OpSchema(
+            name="OtherName",
+            domain="ai.onnx",
+            version=1,
+            attributes={},
+            inputs=[],
+            outputs=[],
+        ),
+        "WrongDomain": OpSchema(
+            name="WrongDomain",
+            domain="not.onnx",
+            version=1,
+            attributes={},
+            inputs=[],
+            outputs=[],
+        ),
+    }
+    with patch("scripts.verify_grounding.ONNX_REGISTRY", fake_onnx):
+        onnx_errs = verify_onnx_grounding()
+        assert len(onnx_errs) == 2
+
+
+def test_verify_grounding_main_paths() -> None:
+    """Test verify_grounding main function under various scenarios."""
+    # When snapshots directory not found but schemas are valid
+    with patch("scripts.verify_grounding.find_snapshots_directory", return_value=None):
+        assert verify_grounding_main([]) == 0
+
+    # When snapshots directory not found and schemas are invalid
+    with patch(
+        "scripts.verify_grounding.find_snapshots_directory", return_value=None
+    ), patch(
+        "scripts.verify_grounding.verify_custom_ops_grounding", return_value=["error"]
+    ):
+        assert verify_grounding_main([]) == 1
+
+    # When snapshots directory found and all schemas valid
+    real_dir = find_snapshots_directory()
+    assert real_dir is not None
+    assert verify_grounding_main(["--snapshots-dir", str(real_dir)]) == 0
+
+    # When snapshots directory found but errors detected
+    with patch(
+        "scripts.verify_grounding.verify_stablehlo_grounding",
+        return_value=["stablehlo error"],
+    ):
+        assert verify_grounding_main([]) == 1
+
+
+def test_verify_grounding_runpy_main() -> None:
+    """Test executing scripts.verify_grounding as __main__ module."""
+    with patch("sys.argv", ["verify_grounding.py"]), patch("sys.exit") as mock_exit:
+        runpy.run_module("scripts.verify_grounding", run_name="__main__")
+        mock_exit.assert_called_once_with(0)
+
+
+def test_find_snapshots_directory_env_and_override() -> None:
+    """Test find_snapshots_directory with environment variable and explicit override."""
+    with TemporaryDirectory() as tmpdir:
+        # Explicit override
+        assert find_snapshots_directory(tmpdir) == Path(tmpdir).resolve()
+        assert find_snapshots_directory("/non/existent/path") is None
+
+        # Environment variable valid and invalid
+        with patch.dict(os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": tmpdir}):
+            assert find_snapshots_directory() == Path(tmpdir).resolve()
+
+        with patch.dict(
+            os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": "/invalid/nonexistent/dir"}
+        ):
+            # Should fall back to default_path or relative
+            assert find_snapshots_directory() is not None
+
+
+def test_verify_mlir_grounding_paths() -> None:
+    """Test verify_mlir_grounding with missing file, valid snapshot, and missing dialects."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # Missing file returns []
+        assert verify_mlir_grounding(tmppath) == []
+
+        # File with missing dialects and edge items (non-list, non-dict, dict without api_path)
+        mlir_json = tmppath / "mlir_v0.4.30.json"
+        with open(mlir_json, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "util": [{"api_path": "arith.addf"}, "not_a_dict", {}],
+                        "non_list": "scalar_val",
+                    }
+                },
+                f,
+            )
+        errs = verify_mlir_grounding(tmppath)
+        assert len(errs) > 0
+
+
+def test_verify_ir_snapshot_grounding_paths() -> None:
+    """Test verify_ir_snapshot_grounding with missing file, valid snapshot, and defective entries."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # Missing file and no candidates returns []
+        assert verify_ir_snapshot_grounding(tmppath) == []
+
+        # Test candidate fallback with ir_v0.1.0.json when ir_v0.0.3.json is missing
+        candidate_json = tmppath / "ir_v0.1.0.json"
+        with open(candidate_json, "w", encoding="utf-8") as f:
+            json.dump({"categories": {"classes": [], "functions": []}}, f)
+        assert verify_ir_snapshot_grounding(tmppath) == []
+
+        # File with unresolvable classes and functions
+        ir_json = tmppath / "ir_v0.0.3.json"
+        with open(ir_json, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "classes": [
+                            {"api_path": ""},
+                            {"api_path": "nonexistent_module.BadClass"},
+                            {"api_path": "ml_switcheroo_ir.NonExistentClass"},
+                            {"api_path": "ml_switcheroo_ir.LogicalNode.bad_method"},
+                        ],
+                        "functions": [
+                            {"api_path": ""},
+                            {"api_path": "ml_switcheroo_ir.topological_sort"},
+                            {"api_path": "ml_switcheroo_ir.nonexistent_fn"},
+                            {"api_path": "nonexistent_module.bad_fn"},
+                        ],
+                    }
+                },
+                f,
+            )
+        errs = verify_ir_snapshot_grounding(tmppath)
+        assert len(errs) >= 5

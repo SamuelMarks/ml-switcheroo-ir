@@ -20,13 +20,13 @@ from ml_switcheroo_ir import (
 from ml_switcheroo_ir.schema.custom_ops import Registry
 from ml_switcheroo_ir.validator import ValidationError, ValidationLevel, Validator
 
+__all__ = ["main", "tabulate"]
+
 try:
     from tabulate import tabulate
 except ImportError:
     # Fallback if tabulate is not available
-    def tabulate(  # type: ignore[misc]
-        data: list[list[object]], headers: list[str], **kwargs: object
-    ) -> str:
+    def tabulate(data: list[list[object]], headers: list[str], **kwargs: object) -> str:
         """Fallback for tabulate.
 
         Args:

@@ -15,6 +15,12 @@ def test_custom_ops_registry_contains_modern_primitives() -> None:
         "RoPE",
         "FlashAttention",
         "VisionPatchEmbedding",
+        "ScaledDotProductAttention",
+        "LayerNorm",
+        "GroupNorm",
+        "GELU",
+        "EmbeddingLookup",
+        "RMSNormBackward",
     ]
     for name in expected:
         assert name in CUSTOM_OPS_REGISTRY
@@ -131,3 +137,106 @@ def test_vision_patch_embedding_validation() -> None:
     errors = v.validate_required_attributes(missing_attr_node)
     assert len(errors) == 1
     assert errors[0].attribute == "embed_dim"
+
+
+def test_scaled_dot_product_attention_validation() -> None:
+    """Validate ScaledDotProductAttention with query, key, value, attn_mask."""
+    v = Validator()
+    node = LogicalNode(
+        id="sdpa1",
+        op_type="ScaledDotProductAttention",
+        domain="ml.switcheroo.custom",
+        inputs=["query", "key", "value", "attn_mask"],
+        attributes={"scale": 0.125, "dropout_p": 0.1, "is_causal": True},
+    )
+    assert not v.validate_kind(node)
+    assert not v.validate_required_attributes(node)
+    assert not v.validate_attribute_types(node)
+
+
+def test_layer_norm_validation() -> None:
+    """Validate LayerNorm with X, scale, bias."""
+    v = Validator()
+    node = LogicalNode(
+        id="ln1",
+        op_type="LayerNorm",
+        domain="ml.switcheroo.custom",
+        inputs=["X", "scale", "bias"],
+        attributes={"axis": -1, "epsilon": 1e-5, "elementwise_affine": True},
+    )
+    assert not v.validate_kind(node)
+    assert not v.validate_required_attributes(node)
+    assert not v.validate_attribute_types(node)
+
+
+def test_group_norm_validation() -> None:
+    """Validate GroupNorm with num_groups required attribute."""
+    v = Validator()
+    node = LogicalNode(
+        id="gn1",
+        op_type="GroupNorm",
+        domain="ml.switcheroo.custom",
+        inputs=["X", "scale", "bias"],
+        attributes={"num_groups": 32, "epsilon": 1e-5},
+    )
+    assert not v.validate_kind(node)
+    assert not v.validate_required_attributes(node)
+    assert not v.validate_attribute_types(node)
+
+    # Missing required attribute num_groups
+    missing = LogicalNode(
+        id="gn2",
+        op_type="GroupNorm",
+        domain="ml.switcheroo.custom",
+        inputs=["X", "scale", "bias"],
+        attributes={"epsilon": 1e-5},
+    )
+    errors = v.validate_required_attributes(missing)
+    assert len(errors) == 1
+    assert errors[0].attribute == "num_groups"
+
+
+def test_gelu_validation() -> None:
+    """Validate GELU with approximate attribute."""
+    v = Validator()
+    node = LogicalNode(
+        id="gelu1",
+        op_type="GELU",
+        domain="ml.switcheroo.custom",
+        inputs=["X"],
+        attributes={"approximate": "tanh"},
+    )
+    assert not v.validate_kind(node)
+    assert not v.validate_required_attributes(node)
+    assert not v.validate_attribute_types(node)
+
+
+def test_embedding_lookup_validation() -> None:
+    """Validate EmbeddingLookup with padding_idx and scale_grad_by_freq."""
+    v = Validator()
+    node = LogicalNode(
+        id="emb1",
+        op_type="EmbeddingLookup",
+        domain="ml.switcheroo.custom",
+        inputs=["indices", "weight"],
+        attributes={"padding_idx": 0, "scale_grad_by_freq": False},
+    )
+    assert not v.validate_kind(node)
+    assert not v.validate_required_attributes(node)
+    assert not v.validate_attribute_types(node)
+
+
+def test_rmsnorm_backward_validation() -> None:
+    """Validate RMSNormBackward with grad_output, X, weight."""
+    v = Validator()
+    node = LogicalNode(
+        id="rmsnorm_bwd",
+        op_type="RMSNormBackward",
+        domain="ml.switcheroo.custom",
+        inputs=["grad_output", "X", "weight"],
+        outputs=["grad_X", "grad_weight"],
+        attributes={"eps": 1e-6},
+    )
+    assert not v.validate_kind(node)
+    assert not v.validate_required_attributes(node)
+    assert not v.validate_attribute_types(node)

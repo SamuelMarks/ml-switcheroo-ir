@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from ml_switcheroo_ir import LogicalNode
 from ml_switcheroo_ir.schema.ghost import (
+    RDNA_INSTRUCTION_PRIMITIVES,
+    SASS_INSTRUCTION_PRIMITIVES,
+    WGSL_PRIMITIVE_SIGNATURES,
     ExtendedGhostParam,
     ExtendedGhostRef,
     GhostIsaRef,
@@ -13,9 +17,11 @@ from ml_switcheroo_ir.schema.ghost import (
     IRParameterRole,
     OperandDirection,
     ParameterKind,
+    RegisterClass,
     SnapshotEnvelope,
     migrate_ghost_ref_v2,
 )
+from ml_switcheroo_ir.validator import ValidationLevel, Validator
 
 
 def test_ghost_v2_enums_and_results() -> None:
@@ -332,3 +338,263 @@ def test_migrate_ghost_ref_v2_polymorphic_branches() -> None:
     }
     migrated_empty = migrate_ghost_ref_v2(empty_names_dict)
     assert migrated_empty.name is None or migrated_empty.api_path == "unknown"
+
+
+def test_rdna_instruction_grounding_and_bank_conflicts() -> None:
+    """Test RDNA instruction primitives, register classes, and VGPR bank conflict validation."""
+    for op_name in (
+        "V_FMA_F32",
+        "V_ADD_F32",
+        "V_MUL_F32",
+        "V_DOT2_F32_F16",
+        "V_DOT4_I32_I8",
+    ):
+        assert op_name in RDNA_INSTRUCTION_PRIMITIVES
+        prim = RDNA_INSTRUCTION_PRIMITIVES[op_name]
+        assert prim["mnemonic"] == op_name
+        assert prim["register_classes"]["dst"] == RegisterClass.VGPR
+
+    v_strict = Validator(level=ValidationLevel.STRICT)
+    v_warn = Validator(level=ValidationLevel.WARNING)
+
+    # Valid RDNA node
+    valid_node = LogicalNode(
+        id="fma1",
+        op_type="V_FMA_F32",
+        domain="amd_rdna",
+        shape_metadata=(1,),
+        attributes={
+            "wavefront_size": 32,
+            "register_classes": {"src0": "VGPR", "src1": "VGPR"},
+            "vgpr_operands": [0, 1, 2],  # banks 0, 1, 2 (no conflict)
+        },
+    )
+    assert not v_strict.validate_isa_instruction(valid_node)
+
+    # Invalid wavefront size
+    bad_wave = LogicalNode(
+        id="fma2",
+        op_type="V_FMA_F32",
+        domain="amd_rdna",
+        shape_metadata=(1,),
+        attributes={"wavefront_size": 16},
+    )
+    errs = v_strict.validate_isa_instruction(bad_wave)
+    assert len(errs) == 1
+    assert "wavefront_size must be 32 or 64" in errs[0].message
+
+    # Invalid register class
+    bad_reg = LogicalNode(
+        id="fma3",
+        op_type="V_FMA_F32",
+        domain="amd_rdna",
+        shape_metadata=(1,),
+        attributes={"register_classes": {"src0": "INVALID_REG"}},
+    )
+    errs = v_strict.validate_isa_instruction(bad_reg)
+    assert len(errs) == 1
+    assert "Invalid RDNA register class" in errs[0].message
+
+    # Bank conflict in strict vs warning mode (operands 0 and 4 both map to bank 0)
+    conflict_node = LogicalNode(
+        id="fma4",
+        op_type="V_FMA_F32",
+        domain="amd_rdna",
+        shape_metadata=(1,),
+        attributes={"vgpr_operands": [0, 4]},
+    )
+    errs_strict = v_strict.validate_isa_instruction(conflict_node)
+    assert len(errs_strict) == 1
+    assert errs_strict[0].level == ValidationLevel.ERROR
+    assert "VGPR bank conflict detected" in errs_strict[0].message
+
+    errs_warn = v_warn.validate_isa_instruction(conflict_node)
+    assert len(errs_warn) == 1
+    assert errs_warn[0].level == ValidationLevel.WARNING
+
+
+def test_sass_instruction_grounding_and_barriers() -> None:
+    """Test SASS instruction primitives, barrier predicates, sync markers, and memory spaces."""
+    for op_name in ("FFMA", "FADD", "FMUL", "HMMA", "LDG", "STS"):
+        assert op_name in SASS_INSTRUCTION_PRIMITIVES
+
+    v = Validator()
+
+    # Valid SASS node
+    valid_sass = LogicalNode(
+        id="ffma1",
+        op_type="FFMA",
+        domain="nvidia_sass",
+        shape_metadata=(1,),
+        attributes={
+            "barrier_predicate": "@P0",
+            "warp_sync": "sync",
+            "memory_space": "global",
+        },
+    )
+    assert not v.validate_isa_instruction(valid_sass)
+
+    # Invalid barrier predicate
+    bad_barrier = LogicalNode(
+        id="ffma2",
+        op_type="FFMA",
+        domain="nvidia_sass",
+        shape_metadata=(1,),
+        attributes={"barrier_predicate": "INVALID"},
+    )
+    errs = v.validate_isa_instruction(bad_barrier)
+    assert len(errs) == 1
+    assert "Invalid SASS barrier predicate" in errs[0].message
+
+    # Invalid warp sync
+    bad_sync = LogicalNode(
+        id="ffma3",
+        op_type="FFMA",
+        domain="nvidia_sass",
+        shape_metadata=(1,),
+        attributes={"warp_sync": "bad_sync"},
+    )
+    errs = v.validate_isa_instruction(bad_sync)
+    assert len(errs) == 1
+    assert "Invalid warp synchronization marker" in errs[0].message
+
+    # Invalid memory space
+    bad_mem = LogicalNode(
+        id="ldg1",
+        op_type="LDG",
+        domain="nvidia_sass",
+        shape_metadata=(1,),
+        attributes={"memory_space": "invalid_space"},
+    )
+    errs = v.validate_isa_instruction(bad_mem)
+    assert len(errs) == 1
+    assert "Invalid SASS memory space" in errs[0].message
+
+
+def test_wgsl_primitives_and_workgroup_size() -> None:
+    """Test WGSL primitive signatures, workgroup size configurations, and address space qualifiers."""
+    for op_name in (
+        "workgroupBarrier",
+        "storageBarrier",
+        "fma",
+        "dot",
+        "textureSample",
+    ):
+        assert op_name in WGSL_PRIMITIVE_SIGNATURES
+
+    v = Validator()
+
+    # Valid WGSL node
+    valid_wgsl = LogicalNode(
+        id="wgsl1",
+        op_type="workgroupBarrier",
+        domain="webgpu_wgsl",
+        shape_metadata=(1,),
+        attributes={
+            "workgroup_size": [16, 16, 1],
+            "address_space": "storage, read_write",
+        },
+    )
+    assert not v.validate_isa_instruction(valid_wgsl)
+
+    # Invalid workgroup size (empty, too many dimensions, or negative)
+    bad_wg1 = LogicalNode(
+        id="wgsl2",
+        op_type="fma",
+        domain="webgpu_wgsl",
+        shape_metadata=(1,),
+        attributes={"workgroup_size": []},
+    )
+    assert len(v.validate_isa_instruction(bad_wg1)) == 1
+
+    bad_wg2 = LogicalNode(
+        id="wgsl3",
+        op_type="fma",
+        domain="webgpu_wgsl",
+        shape_metadata=(1,),
+        attributes={"workgroup_size": [1, 2, 3, 4]},
+    )
+    assert len(v.validate_isa_instruction(bad_wg2)) == 1
+
+    bad_wg3 = LogicalNode(
+        id="wgsl4",
+        op_type="fma",
+        domain="webgpu_wgsl",
+        shape_metadata=(1,),
+        attributes={"workgroup_size": [-1, 2]},
+    )
+    assert len(v.validate_isa_instruction(bad_wg3)) == 1
+
+    bad_wg_type = LogicalNode(
+        id="wgsl_type",
+        op_type="fma",
+        domain="webgpu_wgsl",
+        shape_metadata=(1,),
+        attributes={"workgroup_size": "invalid_type"},
+    )
+    assert len(v.validate_isa_instruction(bad_wg_type)) == 1
+
+    # Invalid address space qualifier
+    bad_qual = LogicalNode(
+        id="wgsl5",
+        op_type="fma",
+        domain="webgpu_wgsl",
+        shape_metadata=(1,),
+        attributes={"address_space": "invalid_qualifier"},
+    )
+    errs = v.validate_isa_instruction(bad_qual)
+    assert len(errs) == 1
+    assert "Invalid WGSL address space qualifier" in errs[0].message
+
+    # Test non-ISA domain returns empty list in validate_isa_instruction
+    onnx_node = LogicalNode(id="o1", op_type="Relu", domain="ai.onnx")
+    assert not v.validate_isa_instruction(onnx_node)
+
+    # Test full validate_node routing for ISA domain
+    node_routed = LogicalNode(
+        id="routed",
+        op_type="V_FMA_F32",
+        domain="amd_rdna",
+        shape_metadata=(1,),
+        attributes={"wavefront_size": 32},
+    )
+    assert not v.validate_node(node_routed)
+
+    # Test unrecognized ops in ISA domains
+    bad_rdna_kind = LogicalNode(id="b1", op_type="UNKNOWN_RDNA", domain="amd_rdna")
+    errs_rdna = v.validate_kind(bad_rdna_kind)
+    assert len(errs_rdna) == 1
+    assert "UNKNOWN_RDNA" in errs_rdna[0].message
+
+    good_sass_kind = LogicalNode(id="s1", op_type="FFMA", domain="nvidia_sass")
+    assert not v.validate_kind(good_sass_kind)
+    bad_sass_kind = LogicalNode(id="s2", op_type="UNKNOWN_SASS", domain="nvidia_sass")
+    errs_sass = v.validate_kind(bad_sass_kind)
+    assert len(errs_sass) == 1
+    assert "UNKNOWN_SASS" in errs_sass[0].message
+
+    good_wgsl_kind = LogicalNode(id="w1", op_type="fma", domain="webgpu_wgsl")
+    assert not v.validate_kind(good_wgsl_kind)
+    bad_wgsl_kind = LogicalNode(id="w2", op_type="UNKNOWN_WGSL", domain="webgpu_wgsl")
+    errs_wgsl = v.validate_kind(bad_wgsl_kind)
+    assert len(errs_wgsl) == 1
+    assert "UNKNOWN_WGSL" in errs_wgsl[0].message
+
+    # Test SASS and WGSL through validate_node
+    sass_node = LogicalNode(
+        id="s3",
+        op_type="FFMA",
+        domain="nvidia_sass",
+        shape_metadata=(1,),
+        attributes={"barrier_predicate": "@P0"},
+    )
+    assert not v.validate_node(sass_node)
+
+    wgsl_node = LogicalNode(
+        id="w3",
+        op_type="dot",
+        domain="webgpu_wgsl",
+        shape_metadata=(1,),
+        attributes={"workgroup_size": [8, 8]},
+    )
+    assert not v.validate_node(wgsl_node)

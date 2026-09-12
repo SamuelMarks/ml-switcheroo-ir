@@ -8,16 +8,16 @@
 
 ## 1. The $N \times M$ Translation Problem
 
-The Abstract ML Machine compiler ecosystem is designed to solve the classical $N \times M$ translation bottleneck in machine learning. In the absence of a canonical representation, supporting $N$ machine learning frameworks (PyTorch, JAX, Keras, TensorFlow, MLX) across $M$ execution targets (WASM, WebGPU, TensorRT, MLIR, StableHLO, CUDA) requires $N \times M$ bespoke, point-to-point translators.
+The Abstract ML Machine compiler ecosystem is designed to solve the classical $N \times M$ translation bottleneck in machine learning. In the absence of a canonical representation, supporting $N$ machine learning frameworks (Flax, Keras, PyTorch, MLX, JAX, TensorFlow) across $M$ execution targets (WASM, WebGPU, StableHLO, MLIR, AMD RDNA, NVIDIA SASS) requires $N \times M$ bespoke, point-to-point translators.
 
 ```
 Frontends (N)                    Canonical IR                      Backends (M)
 +------------------+                                            +------------------+
-| PyTorch / Keras  | \                                        / | WASM / WebGPU    |
+| Flax / Keras     | \                                        / | WASM / WebGPU    |
 +------------------+  \                                      /  +------------------+
-| JAX / Flax       | --- [ ml-switcheroo-ir (LogicalGraph) ] --- | TensorRT / CUDA  |
+| PyTorch / MLX    | --- [ ml-switcheroo-ir (LogicalGraph) ] --- | StableHLO / MLIR |
 +------------------+  /                                      \  +------------------+
-| TensorFlow / MLX | /                                        \ | MLIR / StableHLO |
+| JAX / TensorFlow | /                                        \ | RDNA / SASS      |
 +------------------+                                            +------------------+
 ```
 

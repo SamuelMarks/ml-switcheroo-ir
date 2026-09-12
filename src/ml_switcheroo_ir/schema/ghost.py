@@ -41,6 +41,40 @@ class IRParameterRole(str, Enum):
     REGION = "REGION"
 
 
+class RegisterClass(str, Enum):
+    """Register classes for GPU architectures (AMD RDNA/CDNA and NVIDIA)."""
+
+    VGPR = "VGPR"
+    SGPR = "SGPR"
+    AGPR = "AGPR"
+    GPR = "GPR"
+    PRED = "PRED"
+    ACCUM = "ACCUM"
+
+
+class MemorySpace(str, Enum):
+    """Memory space qualifiers for low-level GPU and shader ISAs."""
+
+    GLOBAL = "global"
+    SHARED = "shared"
+    CONSTANT = "constant"
+    LOCAL = "local"
+    UNIFORM = "uniform"
+    STORAGE_READ = "storage, read"
+    STORAGE_READ_WRITE = "storage, read_write"
+
+
+class WGSLQualifier(str, Enum):
+    """Address space qualifiers for WebGPU WGSL shaders."""
+
+    UNIFORM = "uniform"
+    STORAGE_READ = "storage, read"
+    STORAGE_READ_WRITE = "storage, read_write"
+    WORKGROUP = "workgroup"
+    PRIVATE = "private"
+    FUNCTION = "function"
+
+
 class SemanticTier(str, Enum):
     """Categorization of API operations to distinct knowledge base tiers."""
 
@@ -194,7 +228,7 @@ class ExtendedGhostRef(GhostRef):
 
     model_config = ConfigDict(extra="allow")
 
-    params: list[ExtendedGhostParam | GhostParam] = Field(  # type: ignore[assignment]
+    params: list[ExtendedGhostParam | GhostParam] = Field(
         default_factory=list,
         description="List of extended parameter specifications.",
     )
@@ -295,6 +329,115 @@ class GhostMlirRef(ExtendedGhostRef):
 # First-class domain IR and ISA schema aliases
 GhostInstructionRef = GhostIsaRef
 GhostOperationRef = GhostMlirRef
+
+RDNA_INSTRUCTION_PRIMITIVES: dict[str, dict[str, Any]] = {
+    "V_FMA_F32": {
+        "mnemonic": "V_FMA_F32",
+        "operands": ["dst", "src0", "src1", "src2"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+            "src2": RegisterClass.VGPR,
+        },
+    },
+    "V_ADD_F32": {
+        "mnemonic": "V_ADD_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_MUL_F32": {
+        "mnemonic": "V_MUL_F32",
+        "operands": ["dst", "src0", "src1"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    },
+    "V_DOT2_F32_F16": {
+        "mnemonic": "V_DOT2_F32_F16",
+        "operands": ["dst", "src0", "src1", "src2"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+            "src2": RegisterClass.VGPR,
+        },
+    },
+    "V_DOT4_I32_I8": {
+        "mnemonic": "V_DOT4_I32_I8",
+        "operands": ["dst", "src0", "src1", "src2"],
+        "register_classes": {
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+            "src2": RegisterClass.VGPR,
+        },
+    },
+}
+
+SASS_INSTRUCTION_PRIMITIVES: dict[str, dict[str, Any]] = {
+    "FFMA": {
+        "mnemonic": "FFMA",
+        "operands": ["dst", "src0", "src1", "src2"],
+        "barrier_predicates": ["@P0", "@!P0", "@PT"],
+    },
+    "FADD": {
+        "mnemonic": "FADD",
+        "operands": ["dst", "src0", "src1"],
+        "barrier_predicates": ["@P0", "@!P0", "@PT"],
+    },
+    "FMUL": {
+        "mnemonic": "FMUL",
+        "operands": ["dst", "src0", "src1"],
+        "barrier_predicates": ["@P0", "@!P0", "@PT"],
+    },
+    "HMMA": {
+        "mnemonic": "HMMA",
+        "operands": ["dst", "src0", "src1", "src2"],
+        "barrier_predicates": ["@P0", "@!P0", "@PT"],
+    },
+    "LDG": {
+        "mnemonic": "LDG",
+        "operands": ["dst", "src0"],
+        "memory_space": MemorySpace.GLOBAL,
+    },
+    "STS": {
+        "mnemonic": "STS",
+        "operands": ["dst", "src0"],
+        "memory_space": MemorySpace.SHARED,
+    },
+}
+
+WGSL_PRIMITIVE_SIGNATURES: dict[str, dict[str, Any]] = {
+    "workgroupBarrier": {
+        "inputs": [],
+        "outputs": [],
+        "qualifier": WGSLQualifier.WORKGROUP,
+    },
+    "storageBarrier": {
+        "inputs": [],
+        "outputs": [],
+        "qualifier": WGSLQualifier.STORAGE_READ_WRITE,
+    },
+    "fma": {
+        "inputs": ["a", "b", "c"],
+        "outputs": ["result"],
+    },
+    "dot": {
+        "inputs": ["a", "b"],
+        "outputs": ["result"],
+    },
+    "textureSample": {
+        "inputs": ["texture", "sampler", "coords"],
+        "outputs": ["result"],
+    },
+}
 
 
 class SnapshotEnvelope(BaseModel):

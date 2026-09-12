@@ -204,10 +204,141 @@ VISION_PATCH_EMBEDDING_SCHEMA = CustomOpSchema(
     ],
 )
 
+SCALED_DOT_PRODUCT_ATTENTION_SCHEMA = CustomOpSchema(
+    name="ScaledDotProductAttention",
+    domain="ml.switcheroo.custom",
+    inputs=["query", "key", "value", "attn_mask"],
+    outputs=["output"],
+    attributes=[
+        CustomAttributeSchema(
+            name="scale",
+            type="float",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="dropout_p",
+            type="float",
+            required=False,
+            default=0.0,
+        ),
+        CustomAttributeSchema(
+            name="is_causal",
+            type="bool",
+            required=False,
+            default=False,
+        ),
+    ],
+)
+
+LAYER_NORM_SCHEMA = CustomOpSchema(
+    name="LayerNorm",
+    domain="ml.switcheroo.custom",
+    inputs=["X", "scale", "bias"],
+    outputs=["Y"],
+    attributes=[
+        CustomAttributeSchema(
+            name="axis",
+            type="int",
+            required=False,
+            default=-1,
+        ),
+        CustomAttributeSchema(
+            name="epsilon",
+            type="float",
+            required=False,
+            default=1e-5,
+        ),
+        CustomAttributeSchema(
+            name="elementwise_affine",
+            type="bool",
+            required=False,
+            default=True,
+        ),
+    ],
+)
+
+GROUP_NORM_SCHEMA = CustomOpSchema(
+    name="GroupNorm",
+    domain="ml.switcheroo.custom",
+    inputs=["X", "scale", "bias"],
+    outputs=["Y"],
+    attributes=[
+        CustomAttributeSchema(
+            name="num_groups",
+            type="int",
+            required=True,
+        ),
+        CustomAttributeSchema(
+            name="epsilon",
+            type="float",
+            required=False,
+            default=1e-5,
+        ),
+    ],
+)
+
+GELU_SCHEMA = CustomOpSchema(
+    name="GELU",
+    domain="ml.switcheroo.custom",
+    inputs=["X"],
+    outputs=["Y"],
+    attributes=[
+        CustomAttributeSchema(
+            name="approximate",
+            type="str",
+            required=False,
+            default="none",
+        ),
+    ],
+)
+
+EMBEDDING_LOOKUP_SCHEMA = CustomOpSchema(
+    name="EmbeddingLookup",
+    domain="ml.switcheroo.custom",
+    inputs=["indices", "weight"],
+    outputs=["output"],
+    attributes=[
+        CustomAttributeSchema(
+            name="padding_idx",
+            type="int",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="scale_grad_by_freq",
+            type="bool",
+            required=False,
+            default=False,
+        ),
+    ],
+)
+
+RMSNORM_BACKWARD_SCHEMA = CustomOpSchema(
+    name="RMSNormBackward",
+    domain="ml.switcheroo.custom",
+    inputs=["grad_output", "X", "weight"],
+    outputs=["grad_X", "grad_weight"],
+    attributes=[
+        CustomAttributeSchema(
+            name="eps",
+            type="float",
+            required=False,
+            default=1e-6,
+        ),
+    ],
+)
+
 CUSTOM_OPS_REGISTRY: dict[str, OpSchema] = {
     RMSNORM_SCHEMA.name: RMSNORM_SCHEMA.to_op_schema(),
     SWIGLU_SCHEMA.name: SWIGLU_SCHEMA.to_op_schema(),
     ROPE_SCHEMA.name: ROPE_SCHEMA.to_op_schema(),
     FLASH_ATTENTION_SCHEMA.name: FLASH_ATTENTION_SCHEMA.to_op_schema(),
     VISION_PATCH_EMBEDDING_SCHEMA.name: VISION_PATCH_EMBEDDING_SCHEMA.to_op_schema(),
+    SCALED_DOT_PRODUCT_ATTENTION_SCHEMA.name: SCALED_DOT_PRODUCT_ATTENTION_SCHEMA.to_op_schema(),
+    LAYER_NORM_SCHEMA.name: LAYER_NORM_SCHEMA.to_op_schema(),
+    GROUP_NORM_SCHEMA.name: GROUP_NORM_SCHEMA.to_op_schema(),
+    GELU_SCHEMA.name: GELU_SCHEMA.to_op_schema(),
+    EMBEDDING_LOOKUP_SCHEMA.name: EMBEDDING_LOOKUP_SCHEMA.to_op_schema(),
+    RMSNORM_BACKWARD_SCHEMA.name: RMSNORM_BACKWARD_SCHEMA.to_op_schema(),
 }

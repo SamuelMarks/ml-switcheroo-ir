@@ -8,11 +8,21 @@ import os
 import sys
 from typing import Any
 
+__all__ = [
+    "analyze_python_file",
+    "collect_files",
+    "extract_dynamic_definitions",
+    "get_dialect_ops",
+    "parse_json_file",
+    "run_compliance_check",
+    "tabulate",
+]
+
 try:
     from tabulate import tabulate
 except ImportError:
     # Fallback if tabulate is not available
-    def tabulate(  # type: ignore[misc]
+    def tabulate(
         tabular_data: Any,
         headers: Any = (),
         **kwargs: Any,

@@ -8,20 +8,20 @@ from ml_switcheroo_ir.cli import main as cli_main
 from ml_switcheroo_ir.compliance import run_compliance_check
 
 
-def test_cli_compliance_no_targets(capsys: pytest.CaptureFixture) -> None:
+def test_cli_compliance_no_targets(capsys: pytest.CaptureFixture[str]) -> None:
     """Test."""
     with pytest.raises(SystemExit):
         cli_main(["compliance"])
 
 
-def test_cli_compliance_empty_targets(capsys: pytest.CaptureFixture) -> None:
+def test_cli_compliance_empty_targets(capsys: pytest.CaptureFixture[str]) -> None:
     """Test."""
     with pytest.raises(SystemExit):
         run_compliance_check([])
 
 
 def test_cli_compliance_invalid_json(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     f = tmp_path / "bad.json"
@@ -31,7 +31,7 @@ def test_cli_compliance_invalid_json(
 
 
 def test_cli_compliance_onnx9000_adapter_and_decorator(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     f = tmp_path / "my_importer.py"
@@ -55,7 +55,7 @@ def _map_abs(): pass
 
 
 def test_cli_compliance_dynamic_defs_adjacent(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # simulate load_definitions falling back to adjacent folder
     """Test."""
@@ -76,7 +76,7 @@ class MyAdapter:
 
 
 def test_cli_compliance_multiple_targets(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     f1 = tmp_path / "f1.py"

@@ -16,10 +16,16 @@ from ml_switcheroo_ir import (
     LogicalMesh,
     LogicalNode,
     PartitionSpec,
+    __version__,
     topological_sort,
 )
 from ml_switcheroo_ir.cli import _parse_graph_from_json
 from ml_switcheroo_ir.cli import main as cli_main
+
+
+def test_package_version() -> None:
+    """Test package version exposure."""
+    assert __version__ == "0.0.3"
 
 
 def test_topological_sort_linear() -> None:
@@ -104,22 +110,22 @@ def test_not_implemented_errors() -> None:
     class PartialBackend(CompilerBackend):
         """A partial implementation of CompilerBackend for testing."""
 
-        def compile(self, graph: object) -> None:
+        def compile(self, graph: LogicalGraph) -> object:
             """Override compile to call super().
 
             Args:
                 graph (LogicalGraph): The logical graph.
 
             Returns:
-                Any: The compiled output.
+                object: The compiled output.
 
             """
-            return super().compile(graph)
+            return CompilerBackend.compile(self, graph)
 
     class PartialFrontend(GraphFrontend):
         """A partial implementation of GraphFrontend for testing."""
 
-        def parse_to_graph(self, code: str) -> object:
+        def parse_to_graph(self, code: str) -> LogicalGraph:
             """Override parse_to_graph to call super().
 
             Args:
@@ -129,7 +135,7 @@ def test_not_implemented_errors() -> None:
                 LogicalGraph: The parsed graph.
 
             """
-            return super().parse_to_graph(code)
+            return GraphFrontend.parse_to_graph(self, code)
 
     with pytest.raises(NotImplementedError):
         PartialBackend().compile(LogicalGraph())
@@ -162,7 +168,7 @@ def test_cli_parse_json() -> None:
     assert len(graph_empty.nodes) == 0
 
 
-def test_cli_main(capsys: pytest.CaptureFixture) -> None:
+def test_cli_main(capsys: pytest.CaptureFixture[str]) -> None:
     """Test CLI main entrypoint.
 
     Args:
@@ -192,7 +198,7 @@ def test_cli_main(capsys: pytest.CaptureFixture) -> None:
 
 
 def test_cli_main_sys_argv(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test CLI main using sys.argv.
 
@@ -238,7 +244,7 @@ def test_runpy_cli_module() -> None:
 
 
 def test_cli_main_other_command(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test CLI main with another mock command.
 
@@ -259,7 +265,7 @@ def test_cli_main_other_command(
     cli_main(["other"])
 
 
-def test_verify_backend_missing_file(capsys: pytest.CaptureFixture) -> None:
+def test_verify_backend_missing_file(capsys: pytest.CaptureFixture[str]) -> None:
     """Test verify-backend with a missing file.
 
     Args:
@@ -273,7 +279,7 @@ def test_verify_backend_missing_file(capsys: pytest.CaptureFixture) -> None:
 
 
 def test_verify_backend_spec_none(
-    capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test verify-backend when importlib spec is None.
 
@@ -291,7 +297,7 @@ def test_verify_backend_spec_none(
     assert "Error: Could not load module" in captured.out
 
 
-def test_verify_backend_execution_error(capsys: pytest.CaptureFixture) -> None:
+def test_verify_backend_execution_error(capsys: pytest.CaptureFixture[str]) -> None:
     """Test verify-backend when module execution fails.
 
     Args:
@@ -307,7 +313,7 @@ def test_verify_backend_execution_error(capsys: pytest.CaptureFixture) -> None:
     assert "Compliance: 0%" in captured.out
 
 
-def test_verify_backend_missing_class(capsys: pytest.CaptureFixture) -> None:
+def test_verify_backend_missing_class(capsys: pytest.CaptureFixture[str]) -> None:
     """Test verify-backend when the specified class is missing.
 
     Args:
@@ -323,7 +329,7 @@ def test_verify_backend_missing_class(capsys: pytest.CaptureFixture) -> None:
     assert "Compliance: 20%" in captured.out
 
 
-def test_verify_backend_not_a_class(capsys: pytest.CaptureFixture) -> None:
+def test_verify_backend_not_a_class(capsys: pytest.CaptureFixture[str]) -> None:
     """Test verify-backend when the specified name is not a class.
 
     Args:
@@ -338,7 +344,7 @@ def test_verify_backend_not_a_class(capsys: pytest.CaptureFixture) -> None:
     assert "Compliance: 40%" in captured.out
 
 
-def test_verify_backend_no_graph_arg(capsys: pytest.CaptureFixture) -> None:
+def test_verify_backend_no_graph_arg(capsys: pytest.CaptureFixture[str]) -> None:
     """Test verify-backend when the compile method is missing the graph arg.
 
     Args:
@@ -355,7 +361,7 @@ def test_verify_backend_no_graph_arg(capsys: pytest.CaptureFixture) -> None:
     assert "Compliance: 80%" in captured.out
 
 
-def test_verify_backend_perfect(capsys: pytest.CaptureFixture) -> None:
+def test_verify_backend_perfect(capsys: pytest.CaptureFixture[str]) -> None:
     """Test verify-backend with a perfect implementation.
 
     Args:
@@ -372,7 +378,9 @@ def test_verify_backend_perfect(capsys: pytest.CaptureFixture) -> None:
     assert "Compliance: 100%" in captured.out
 
 
-def test_verify_backend_class_not_inheriting(capsys: pytest.CaptureFixture) -> None:
+def test_verify_backend_class_not_inheriting(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """Test verify-backend when the class does not inherit CompilerBackend.
 
     Args:
@@ -388,7 +396,7 @@ def test_verify_backend_class_not_inheriting(capsys: pytest.CaptureFixture) -> N
 
 
 def test_cli_tabulate_fallback(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     import sys
@@ -416,7 +424,7 @@ def test_cli_main_invalid_command() -> None:
 
 
 def test_cli_main_validate_valid(
-    capsys: pytest.CaptureFixture, tmp_path: pathlib.Path
+    capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -430,7 +438,7 @@ def test_cli_main_validate_valid(
 
 
 def test_cli_main_validate_invalid(
-    capsys: pytest.CaptureFixture, tmp_path: pathlib.Path
+    capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -444,7 +452,7 @@ def test_cli_main_validate_invalid(
 
 
 def test_cli_main_validate_custom_ops(
-    capsys: pytest.CaptureFixture, tmp_path: pathlib.Path
+    capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -458,7 +466,7 @@ def test_cli_main_validate_custom_ops(
     assert e.value.code == 0
 
 
-def test_cli_main_list_ops(capsys: pytest.CaptureFixture) -> None:
+def test_cli_main_list_ops(capsys: pytest.CaptureFixture[str]) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
@@ -467,7 +475,7 @@ def test_cli_main_list_ops(capsys: pytest.CaptureFixture) -> None:
     assert "Abs" in out
 
 
-def test_cli_main_list_ops_no_filters(capsys: pytest.CaptureFixture) -> None:
+def test_cli_main_list_ops_no_filters(capsys: pytest.CaptureFixture[str]) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
 
@@ -477,7 +485,7 @@ def test_cli_main_list_ops_no_filters(capsys: pytest.CaptureFixture) -> None:
     assert "Add" in out
 
 
-def test_cli_compliance_not_found(capsys: pytest.CaptureFixture) -> None:
+def test_cli_compliance_not_found(capsys: pytest.CaptureFixture[str]) -> None:
     """Test."""
     import pytest
 
@@ -489,7 +497,7 @@ def test_cli_compliance_not_found(capsys: pytest.CaptureFixture) -> None:
 
 
 def test_cli_compliance_file(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -502,7 +510,7 @@ def test_cli_compliance_file(
 
 
 def test_cli_compliance_register_framework(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -517,7 +525,7 @@ def test_cli_compliance_register_framework(
 
 
 def test_cli_compliance_backend_frontend(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -532,7 +540,7 @@ def test_cli_compliance_backend_frontend(
 
 
 def test_cli_compliance_verbose(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -545,7 +553,7 @@ def test_cli_compliance_verbose(
 
 
 def test_cli_compliance_no_targets(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -559,7 +567,7 @@ def test_cli_compliance_no_targets(
 
 
 def test_cli_compliance_directory(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -576,7 +584,7 @@ def test_cli_compliance_directory(
 
 
 def test_cli_main_validate_warnings_only(
-    capsys: pytest.CaptureFixture, tmp_path: pathlib.Path
+    capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -600,7 +608,7 @@ def test_cli_main_validate_warnings_only(
 def test_cli_compliance_exception(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
-    capsys: pytest.CaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -613,7 +621,7 @@ def test_cli_compliance_exception(
 
 
 def test_cli_compliance_json_exception(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Test."""
     from ml_switcheroo_ir.cli import main as cli_main
@@ -642,5 +650,6 @@ def test_to_json_from_json() -> None:
     assert "Linear" in json_str
 
     graph2 = LogicalGraph.from_json(json_str)
+    assert graph2.nodes["x"].sharding is not None
     assert graph2.nodes["x"].sharding.axes == ("data", None)
     assert graph2.nodes["x"].shape_metadata == (1, 2)

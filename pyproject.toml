@@ -5,12 +5,25 @@ build-backend = "hatchling.build"
 [project]
 name = "ml-switcheroo-ir"
 version = "0.0.3"
-description = "Intermediate Representation for ml-switcheroo* and ml-framework-snapshots"
+description = "Intermediate Representation for Abstract ML Machine Compiler Ecosystem (Tier 1)"
 authors = [
     { name = "Samuel Marks <807580+SamuelMarks@users.noreply.github.com>" }
 ]
 readme = "README.md"
 requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Compilers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 dynamic = ["dependencies", "optional-dependencies"]
 
 [project.scripts]
@@ -36,10 +49,27 @@ branch = true
 
 [tool.mypy]
 python_version = "3.9"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
 warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
 module = "tabulate.*"
 ignore_missing_imports = true
+
+[tool.interrogate]
+fail-under = 100
+ignore-init-module = false
+ignore-init-method = false
+ignore-nested-classes = false
+ignore-private = false
+ignore-semiprivate = false
+
 
