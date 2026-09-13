@@ -508,8 +508,9 @@ def test_verify_grounding_find_snapshots_directory() -> None:
         non_existent = os.path.join(tmpdir, "does_not_exist")
         assert find_snapshots_directory(non_existent) is None
 
-    # Without override, should find existing DEFAULT_SNAPSHOT_DIR or fallback
-    assert find_snapshots_directory() is not None
+        # Without override, should find existing DEFAULT_SNAPSHOT_DIR or fallback
+        with patch("scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir):
+            assert find_snapshots_directory() == Path(tmpdir).resolve()
 
     # Test fallback to script_relative when default_path does not exist
     with patch(
@@ -636,16 +637,30 @@ def test_verify_grounding_main_paths() -> None:
         assert verify_grounding_main([]) == 1
 
     # When snapshots directory found and all schemas valid
-    real_dir = find_snapshots_directory()
-    assert real_dir is not None
-    assert verify_grounding_main(["--snapshots-dir", str(real_dir)]) == 0
+    with TemporaryDirectory() as tmpdir:
+        with patch(
+            "scripts.verify_grounding.find_snapshots_directory",
+            return_value=Path(tmpdir),
+        ), patch(
+            "scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]
+        ), patch(
+            "scripts.verify_grounding.verify_mlir_grounding", return_value=[]
+        ), patch(
+            "scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]
+        ), patch(
+            "scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]
+        ), patch("scripts.verify_grounding.verify_onnx_grounding", return_value=[]):
+            assert verify_grounding_main(["--snapshots-dir", tmpdir]) == 0
 
-    # When snapshots directory found but errors detected
-    with patch(
-        "scripts.verify_grounding.verify_stablehlo_grounding",
-        return_value=["stablehlo error"],
-    ):
-        assert verify_grounding_main([]) == 1
+        # When snapshots directory found but errors detected
+        with patch(
+            "scripts.verify_grounding.find_snapshots_directory",
+            return_value=Path(tmpdir),
+        ), patch(
+            "scripts.verify_grounding.verify_stablehlo_grounding",
+            return_value=["stablehlo error"],
+        ):
+            assert verify_grounding_main(["--snapshots-dir", tmpdir]) == 1
 
 
 def test_verify_grounding_runpy_main() -> None:
@@ -668,9 +683,9 @@ def test_find_snapshots_directory_env_and_override() -> None:
 
         with patch.dict(
             os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": "/invalid/nonexistent/dir"}
-        ):
+        ), patch("scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir):
             # Should fall back to default_path or relative
-            assert find_snapshots_directory() is not None
+            assert find_snapshots_directory() == Path(tmpdir).resolve()
 
 
 def test_verify_mlir_grounding_paths() -> None:

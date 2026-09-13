@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from ml_switcheroo_ir import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.onnx_registry import OpSchema
@@ -52,9 +56,27 @@ def test_grounding_validator_edge_branches(tmp_path: Path) -> None:
     gv_none = GroundingValidator(snapshot_manifest=None)
     assert gv_none.grounded_symbols == {}
 
-    # Default if none
-    gv_default = GroundingValidator(snapshot_manifest=None, use_default_if_none=True)
-    assert len(gv_default.grounded_symbols) > 0
+    # Default if none when directory exists
+    default_dir = tmp_path / "default_snaps"
+    default_dir.mkdir()
+    (default_dir / "sample.json").write_text(
+        json.dumps({"test_op": {"name": "test_op"}}), encoding="utf-8"
+    )
+    with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(default_dir)):
+        gv_default = GroundingValidator(
+            snapshot_manifest=None, use_default_if_none=True
+        )
+        assert len(gv_default.grounded_symbols) > 0
+
+    # Default if none when directory does not exist
+    with patch(
+        "ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR",
+        str(tmp_path / "non_existent_snaps"),
+    ):
+        gv_no_default = GroundingValidator(
+            snapshot_manifest=None, use_default_if_none=True
+        )
+        assert len(gv_no_default.grounded_symbols) == 0
 
     # Manifest with flat dict where value is non-dict
     manifest_mixed = {
@@ -335,7 +357,10 @@ def test_grounding_against_ml_framework_snapshots_golden() -> None:
         Path(__file__).resolve().parent.parent.parent / "ml-framework-snapshots"
     )
     snapshots_dir = snapshots_repo / "src" / "ml_framework_snapshots" / "snapshots"
-    assert snapshots_dir.exists()
+    if not snapshots_dir.exists():
+        pytest.skip(
+            "ml-framework-snapshots repository not present in sibling directory."
+        )
 
     stablehlo_file = snapshots_dir / "stablehlo_v1.0.0.json"
     assert stablehlo_file.exists()
