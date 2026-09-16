@@ -95,3 +95,36 @@ def test_cli_ground_directory_path(
     captured = capsys.readouterr()
     assert "Grounding Audit: 1/1 nodes grounded" in captured.out
     assert "Graph is fully grounded against framework snapshots." in captured.out
+
+
+def test_cli_ground_default_snapshots_dir(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test CLI ground command without --snapshots-dir using default snapshots directory.
+
+    Args:
+        tmp_path (Path): Temporary test directory.
+        capsys (pytest.CaptureFixture[str]): Pytest capsys fixture.
+    """
+    from unittest.mock import patch
+
+    snap_dir = tmp_path / "default_snaps"
+    snap_dir.mkdir()
+    (snap_dir / "s1.json").write_text(
+        json.dumps([{"name": "addf", "api_path": "arith.addf"}]), encoding="utf-8"
+    )
+
+    graph = LogicalGraph(
+        nodes={"n1": LogicalNode(id="n1", op_type="addf", domain="arith")}
+    )
+    graph_file = tmp_path / "graph.json"
+    graph_file.write_text(graph.to_json(), encoding="utf-8")
+
+    with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(snap_dir)):
+        with pytest.raises(SystemExit) as exc_info:
+            cli_main(["ground", str(graph_file)])
+        assert exc_info.value.code == 0
+
+    captured = capsys.readouterr()
+    assert "Grounding Audit: 1/1 nodes grounded" in captured.out
+    assert "Graph is fully grounded against framework snapshots." in captured.out

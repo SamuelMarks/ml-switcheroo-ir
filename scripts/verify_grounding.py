@@ -246,6 +246,23 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
     return errors
 
 
+def _verify_local_schemas_only() -> int:
+    """Verify local custom ops and ONNX registries when snapshot directory is missing or empty.
+
+    Returns:
+        int: Process exit code (0 for success, 1 for failure).
+    """
+    custom_errors = verify_custom_ops_grounding()
+    onnx_errors = verify_onnx_grounding()
+    all_errors = custom_errors + onnx_errors
+    if all_errors:
+        for err in all_errors:
+            print(f"[ERROR] {err}")
+        return 1
+    print("[SUCCESS] Local schema definitions are valid and structurally sound.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run anti-hallucination grounding verification for all schemas.
 
@@ -269,27 +286,17 @@ def main(argv: list[str] | None = None) -> int:
     print("=== Auditing ml-switcheroo-ir Schema Grounding ===")
 
     snapshots_dir = find_snapshots_directory(args.snapshots_dir)
-    if snapshots_dir is None or (
-        args.snapshots_dir is None and not any(snapshots_dir.glob("*.json"))
-    ):
-        if snapshots_dir is None:
-            print(
-                "[WARNING] ml-framework-snapshots directory not found. Skipping live snapshot checks."
-            )
-        else:
-            print(
-                "[WARNING] ml-framework-snapshots directory contains no snapshot files. Skipping live snapshot checks."
-            )
-        # Verify custom ops and ONNX registries
-        custom_errors = verify_custom_ops_grounding()
-        onnx_errors = verify_onnx_grounding()
-        all_errors = custom_errors + onnx_errors
-        if all_errors:
-            for err in all_errors:
-                print(f"[ERROR] {err}")
-            return 1
-        print("[SUCCESS] Local schema definitions are valid and structurally sound.")
-        return 0
+    if snapshots_dir is None:
+        print(
+            "[WARNING] ml-framework-snapshots directory not found. Skipping live snapshot checks."
+        )
+        return _verify_local_schemas_only()
+
+    if args.snapshots_dir is None and not any(snapshots_dir.glob("*.json")):
+        print(
+            "[WARNING] ml-framework-snapshots directory contains no snapshot files. Skipping live snapshot checks."
+        )
+        return _verify_local_schemas_only()
 
     print(f"Using snapshots directory: {snapshots_dir}")
 

@@ -651,6 +651,31 @@ def test_verify_grounding_main_paths() -> None:
     ):
         assert verify_grounding_main([]) == 1
 
+    # When snapshots directory is empty and no --snapshots-dir argument given
+    with TemporaryDirectory() as empty_tmpdir, patch(
+        "scripts.verify_grounding.find_snapshots_directory",
+        return_value=Path(empty_tmpdir),
+    ):
+        assert verify_grounding_main([]) == 0
+
+    # When snapshots directory found with snapshots and no --snapshots-dir argument given
+    with TemporaryDirectory() as populated_tmpdir:
+        dummy_file = Path(populated_tmpdir) / "snapshot.json"
+        dummy_file.write_text("{}", encoding="utf-8")
+        with patch(
+            "scripts.verify_grounding.find_snapshots_directory",
+            return_value=Path(populated_tmpdir),
+        ), patch(
+            "scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]
+        ), patch(
+            "scripts.verify_grounding.verify_mlir_grounding", return_value=[]
+        ), patch(
+            "scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]
+        ), patch(
+            "scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]
+        ), patch("scripts.verify_grounding.verify_onnx_grounding", return_value=[]):
+            assert verify_grounding_main([]) == 0
+
     # When snapshots directory found and all schemas valid
     with TemporaryDirectory() as tmpdir:
         with patch(
@@ -680,7 +705,9 @@ def test_verify_grounding_main_paths() -> None:
 
 def test_verify_grounding_runpy_main() -> None:
     """Test executing scripts.verify_grounding as __main__ module."""
-    with patch("sys.argv", ["verify_grounding.py"]), patch("sys.exit") as mock_exit:
+    with patch(
+        "scripts.verify_grounding.find_snapshots_directory", return_value=None
+    ), patch("sys.argv", ["verify_grounding.py"]), patch("sys.exit") as mock_exit:
         runpy.run_module("scripts.verify_grounding", run_name="__main__")
         mock_exit.assert_called_once_with(0)
 

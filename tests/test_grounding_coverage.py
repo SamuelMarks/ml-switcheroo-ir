@@ -248,7 +248,7 @@ def test_grounding_validator_multi_format_and_directory(tmp_path: Path) -> None:
     assert "dial.op_plain" in gv_coll.grounded_symbols
     assert "custom_target" in gv_coll.grounded_symbols
 
-    # 4. audit_graph_grounding function with list and directory
+    # 4. audit_graph_grounding function with list, directory, and None (with/without DEFAULT_SNAPSHOT_DIR)
     from ml_switcheroo_ir.validator import audit_graph_grounding
 
     test_graph = LogicalGraph(
@@ -259,6 +259,19 @@ def test_grounding_validator_multi_format_and_directory(tmp_path: Path) -> None:
 
     rep_list = audit_graph_grounding(test_graph, snapshots_path=list_manifest)
     assert rep_list.total_nodes == 1
+
+    # audit_graph_grounding with snapshots_path=None and existing DEFAULT_SNAPSHOT_DIR
+    with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(snap_dir)):
+        rep_default_dir = audit_graph_grounding(test_graph, snapshots_path=None)
+        assert rep_default_dir.grounded_count == 1
+
+    # audit_graph_grounding with snapshots_path=None and non-existing DEFAULT_SNAPSHOT_DIR
+    with patch(
+        "ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR",
+        str(tmp_path / "non_existing_dir"),
+    ):
+        rep_no_dir = audit_graph_grounding(test_graph, snapshots_path=None)
+        assert rep_no_dir.grounded_count == 0
 
     # Symbol with attributes and operands that have dicts without 'name'
     unnamed_manifest = [

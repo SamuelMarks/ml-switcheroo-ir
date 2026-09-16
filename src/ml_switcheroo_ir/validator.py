@@ -2269,10 +2269,10 @@ def audit_graph_grounding(
     Returns:
         GroundingAuditReport: Resulting grounding audit report.
     """
-    resolved_path = (
-        DEFAULT_SNAPSHOT_DIR
-        if snapshots_path is None and os.path.isdir(DEFAULT_SNAPSHOT_DIR)
-        else snapshots_path
-    )
+    resolved_path: str | list[Any] | dict[str, Any] | None
+    if snapshots_path is None and os.path.isdir(DEFAULT_SNAPSHOT_DIR):
+        resolved_path = DEFAULT_SNAPSHOT_DIR
+    else:
+        resolved_path = snapshots_path
     validator = GroundingValidator(snapshot_manifest=resolved_path)
     return validator.audit_graph(graph)

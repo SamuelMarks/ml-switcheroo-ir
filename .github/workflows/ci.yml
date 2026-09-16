@@ -43,7 +43,7 @@ jobs:
 
     - name: Test & Branch Coverage
       run: |
-        pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=xml --cov-fail-under=100
+        pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=100
 
     - name: Verify Grounding
       run: python scripts/verify_grounding.py
