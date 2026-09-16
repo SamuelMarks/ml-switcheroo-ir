@@ -171,6 +171,9 @@ print([node.id for node in ordered_nodes])
 # 5. Access first-class edges derived from data flow
 for edge in graph.edges:
     print(f"{edge.source} -> {edge.target}")
+# Output:
+# input_x -> norm1
+# norm1_out -> proj1
 ```
 
 ### 2. Validating Against Operator Schemas
@@ -179,25 +182,40 @@ for edge in graph.edges:
 from ml_switcheroo_ir import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.validator import Validator
 
-graph = LogicalGraph(
-    nodes={
-        "attn": LogicalNode(
-            id="attn",
-            op_type="FlashAttention",
-            domain="ml.switcheroo.custom",
-            attributes={"causal": True, "scale": 0.125},
-            inputs=["Q", "K", "V"],
-        )
-    }
+# 1. Validate a single operator node against its canonical schema
+attn_node = LogicalNode(
+    id="attn",
+    op_type="FlashAttention",
+    domain="ml.switcheroo.custom",
+    attributes={"causal": True, "scale": 0.125},
+    inputs=["Q", "K", "V"],
+    outputs=["attn_out"],
 )
 
 validator = Validator()
-errors = validator.validate_graph(graph)
+node_errors = validator.validate_node(attn_node)
 
-if not errors:
+if not node_errors:
+    print("Node conforms perfectly to the canonical operator schema!")
+else:
+    for err in node_errors:
+        print(f"[{err.level.value}] {err.node_id}: {err.message}")
+
+# 2. Or validate an entire computational graph with its inputs and edges
+q_node = LogicalNode(id="Q", op_type="Input")
+k_node = LogicalNode(id="K", op_type="Input")
+v_node = LogicalNode(id="V", op_type="Input")
+
+graph = LogicalGraph(
+    nodes={"Q": q_node, "K": k_node, "V": v_node, "attn": attn_node},
+    outputs=["attn_out"],
+)
+
+graph_errors = validator.validate_graph(graph)
+if not graph_errors:
     print("Graph conforms perfectly to the canonical operator schema!")
 else:
-    for err in errors:
+    for err in graph_errors:
         print(f"[{err.level.value}] {err.node_id}: {err.message}")
 ```
 
@@ -343,6 +361,18 @@ Exports all pre-registered ONNX and modern custom operator schemas to GhostRef f
 
 ```bash
 ml-switcheroo-ir dump-snapshot --output schemas_snapshot.json
+```
+
+### 8. Schema & TypeScript Export (`export-schema`)
+
+Exports JSON Schema definitions and TypeScript interfaces for downstream consumers:
+
+```bash
+# Export JSON schemas
+ml-switcheroo-ir export-schema --out-dir schemas/
+
+# Export TypeScript definitions
+ml-switcheroo-ir export-schema --typescript --ts-out types.ts
 ```
 
 ---

@@ -20,13 +20,17 @@ class CustomAttributeSchema:
         default (Any): The default value if not provided.
     """
 
-    name: str
-    type: str
+    name: str = ""
+    type: str = "Any"
     required: bool = False
     default: Any = None
 
     def to_op_attribute(self) -> OpAttribute:
-        """Convert to the internal OpAttribute type."""
+        """Convert to the internal OpAttribute type.
+
+        Returns:
+            OpAttribute: Converted operator attribute schema.
+        """
         return OpAttribute(
             name=self.name, type=self.type, required=self.required, default=self.default
         )
@@ -39,14 +43,16 @@ class CustomOpSchema:
     Attributes:
         name (str): The name of the operator.
         domain (str): The custom domain (e.g., 'ai.custom').
-        attributes (List[CustomAttributeSchema]): The list of attributes.
+        attributes (Union[List[CustomAttributeSchema], Dict[str, CustomAttributeSchema]]): The list or dictionary of attributes.
         inputs (List[str]): List of expected inputs.
         outputs (List[str]): List of expected outputs.
     """
 
     name: str
     domain: str
-    attributes: list[CustomAttributeSchema] = field(default_factory=list)
+    attributes: (
+        list[CustomAttributeSchema] | dict[str, CustomAttributeSchema | OpAttribute]
+    ) = field(default_factory=list)
     inputs: list[str] = field(default_factory=list)
     outputs: list[str] = field(default_factory=list)
 
@@ -55,8 +61,25 @@ class CustomOpSchema:
 
         Note:
             Version is set to 1 by default for custom ops.
+
+        Returns:
+            OpSchema: Converted operator schema.
         """
-        attr_dict = {attr.name: attr.to_op_attribute() for attr in self.attributes}
+        if isinstance(self.attributes, dict):
+            attr_dict: dict[str, OpAttribute] = {}
+            for k, attr in self.attributes.items():
+                if isinstance(attr, CustomAttributeSchema):
+                    attr_name = attr.name if attr.name else k
+                    attr_dict[attr_name] = OpAttribute(
+                        name=attr_name,
+                        type=attr.type,
+                        required=attr.required,
+                        default=attr.default,
+                    )
+                else:
+                    attr_dict[k] = attr
+        else:
+            attr_dict = {attr.name: attr.to_op_attribute() for attr in self.attributes}
         return OpSchema(
             name=self.name,
             domain=self.domain,
@@ -79,6 +102,17 @@ class Registry:
         self.schemas: dict[str, OpSchema] = {}
         if base_registry is not None:
             self.schemas.update(base_registry)
+
+    def register(self, schema: CustomOpSchema | OpSchema) -> None:
+        """Register a custom operator schema or OpSchema.
+
+        Args:
+            schema (Union[CustomOpSchema, OpSchema]): The operator schema to register.
+        """
+        if isinstance(schema, CustomOpSchema):
+            self.register_custom_op(schema)
+        else:
+            self.schemas[schema.name] = schema
 
     def register_custom_op(self, schema: CustomOpSchema) -> None:
         """Register a custom operator schema.

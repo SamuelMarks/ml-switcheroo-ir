@@ -53,6 +53,15 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
         if out_id in graph.nodes and out_id not in live_nodes:
             live_nodes.add(out_id)
             queue.append(out_id)
+        else:
+            producer = graph.get_output_producer(out_id)
+            if (
+                producer is not None
+                and producer.id in graph.nodes
+                and producer.id not in live_nodes
+            ):
+                live_nodes.add(producer.id)
+                queue.append(producer.id)
 
     # Add nodes marked with side-effects or known mutating ops
     for node_id, node in graph.nodes.items():
@@ -75,25 +84,42 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
                 live_nodes.add(inp_id)
                 queue.append(inp_id)
 
-    # 3. Filter surviving nodes
-    new_nodes: dict[str, LogicalNode] = {
-        nid: LogicalNode(
-            id=node.id,
-            op_type=node.op_type,
-            domain=node.domain,
-            inputs=list(node.inputs),
-            attributes=dict(node.attributes),
-            outputs=list(node.outputs) if node.outputs is not None else None,
-            shape_metadata=node.shape_metadata,
-            sharding=node.sharding,
-        )
-        for nid, node in graph.nodes.items()
-        if nid in live_nodes
-    }
+    # 3. Filter surviving nodes and recursively process nested subgraphs
+    new_nodes: dict[str, LogicalNode] = {}
+    for nid, node in graph.nodes.items():
+        if nid in live_nodes:
+            transformed_subgraphs: dict[str, Any] = {}
+            for sub_k, sub_v in node.subgraphs.items():
+                if isinstance(sub_v, LogicalGraph):
+                    transformed_subgraphs[sub_k] = eliminate_dead_nodes(sub_v)
+                else:
+                    transformed_subgraphs[sub_k] = sub_v
+
+            new_nodes[nid] = LogicalNode(
+                id=node.id,
+                op_type=node.op_type,
+                domain=node.domain,
+                inputs=list(node.inputs),
+                attributes=dict(node.attributes),
+                outputs=list(node.outputs) if node.outputs is not None else None,
+                shape_metadata=node.shape_metadata,
+                sharding=node.sharding,
+                dtype=node.dtype,
+                output_specs=list(node.output_specs),
+                subgraphs=transformed_subgraphs,
+                device=node.device,
+                stream=node.stream,
+            )
 
     # 4. Filter surviving edges
     new_edges: list[LogicalEdge] = [
-        LogicalEdge(source=edge.source, target=edge.target)
+        LogicalEdge(
+            source=edge.source,
+            target=edge.target,
+            source_idx=edge.source_idx,
+            target_idx=edge.target_idx,
+            value_name=edge.value_name,
+        )
         for edge in graph.edges
         if edge.source in live_nodes and edge.target in live_nodes
     ]
@@ -103,7 +129,10 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
     return LogicalGraph(
         name=graph.name,
         nodes=new_nodes,
+        inputs=list(graph.inputs),
+        input_specs=dict(graph.input_specs),
         outputs=new_outputs,
+        initializers=dict(graph.initializers),
         mesh=graph.mesh,
         edges=new_edges,
     )
@@ -169,6 +198,9 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
                 tuple(updated_inputs),
                 attr_key,
                 shape_key,
+                node.dtype.value if node.dtype is not None else None,
+                node.device,
+                node.stream,
             )
 
             if sig in sig_map:
@@ -187,6 +219,11 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
             outputs=list(node.outputs) if node.outputs is not None else None,
             shape_metadata=node.shape_metadata,
             sharding=node.sharding,
+            dtype=node.dtype,
+            output_specs=list(node.output_specs),
+            subgraphs=dict(node.subgraphs),
+            device=node.device,
+            stream=node.stream,
         )
         surviving_nodes[node.id] = new_node
 
@@ -196,16 +233,26 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
     new_edges: list[LogicalEdge] = []
     seen_edges: set[tuple[str, str]] = set()
     for node in surviving_nodes.values():
-        for inp in node.inputs:
+        for target_idx, inp in enumerate(node.inputs):
             edge_tuple = (inp, node.id)
             if edge_tuple not in seen_edges:
                 seen_edges.add(edge_tuple)
-                new_edges.append(LogicalEdge(source=inp, target=node.id))
+                new_edges.append(
+                    LogicalEdge(
+                        source=inp,
+                        target=node.id,
+                        target_idx=target_idx,
+                        value_name=inp,
+                    )
+                )
 
     return LogicalGraph(
         name=graph.name,
         nodes=surviving_nodes,
+        inputs=list(graph.inputs),
+        input_specs=dict(graph.input_specs),
         outputs=new_outputs,
+        initializers=dict(graph.initializers),
         mesh=graph.mesh,
         edges=new_edges,
     )
@@ -331,13 +378,21 @@ def propagate_shapes_and_constants(graph: LogicalGraph) -> LogicalGraph:
             outputs=list(node.outputs) if node.outputs is not None else None,
             shape_metadata=inferred_shape,
             sharding=node.sharding,
+            dtype=node.dtype,
+            output_specs=list(node.output_specs),
+            subgraphs=dict(node.subgraphs),
+            device=node.device,
+            stream=node.stream,
         )
         new_nodes[node.id] = new_node
 
     return LogicalGraph(
         name=graph.name,
         nodes=new_nodes,
+        inputs=list(graph.inputs),
+        input_specs=dict(graph.input_specs),
         outputs=list(graph.outputs),
+        initializers=dict(graph.initializers),
         mesh=graph.mesh,
         edges=list(graph.edges),
     )

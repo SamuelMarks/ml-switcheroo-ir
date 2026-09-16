@@ -1,0 +1,235 @@
+{
+  "ops": [
+    {
+      "name": "arith.constant",
+      "domain": "mlir.arith",
+      "inputs": [],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "value",
+          "type": "Any",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "arith.addi",
+      "domain": "mlir.arith",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "arith.subi",
+      "domain": "mlir.arith",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "arith.muli",
+      "domain": "mlir.arith",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "arith.addf",
+      "domain": "mlir.arith",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "arith.subf",
+      "domain": "mlir.arith",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "arith.mulf",
+      "domain": "mlir.arith",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "arith.divf",
+      "domain": "mlir.arith",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "arith.cmpf",
+      "domain": "mlir.arith",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "predicate",
+          "type": "str",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "arith.cmpi",
+      "domain": "mlir.arith",
+      "inputs": ["lhs", "rhs"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "predicate",
+          "type": "str",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "math.exp",
+      "domain": "mlir.math",
+      "inputs": ["operand"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "math.log",
+      "domain": "mlir.math",
+      "inputs": ["operand"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "math.sqrt",
+      "domain": "mlir.math",
+      "inputs": ["operand"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "math.sin",
+      "domain": "mlir.math",
+      "inputs": ["operand"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "math.cos",
+      "domain": "mlir.math",
+      "inputs": ["operand"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "math.tanh",
+      "domain": "mlir.math",
+      "inputs": ["operand"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "tensor.empty",
+      "domain": "mlir.tensor",
+      "inputs": [],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "shape",
+          "type": "List[int]",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "tensor.extract",
+      "domain": "mlir.tensor",
+      "inputs": ["tensor", "indices"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "tensor.insert",
+      "domain": "mlir.tensor",
+      "inputs": ["scalar", "dest", "indices"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "tensor.cast",
+      "domain": "mlir.tensor",
+      "inputs": ["source"],
+      "outputs": ["dest"],
+      "attributes": []
+    },
+    {
+      "name": "tensor.reshape",
+      "domain": "mlir.tensor",
+      "inputs": ["source", "shape"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "linalg.matmul",
+      "domain": "mlir.linalg",
+      "inputs": ["lhs", "rhs", "outs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "linalg.generic",
+      "domain": "mlir.linalg",
+      "inputs": ["inputs", "outputs"],
+      "outputs": ["result"],
+      "attributes": [
+        {
+          "name": "indexing_maps",
+          "type": "List[Any]",
+          "required": true
+        },
+        {
+          "name": "iterator_types",
+          "type": "List[str]",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "linalg.fill",
+      "domain": "mlir.linalg",
+      "inputs": ["value", "outs"],
+      "outputs": ["result"],
+      "attributes": []
+    },
+    {
+      "name": "scf.for",
+      "domain": "mlir.scf",
+      "inputs": ["lower", "upper", "step", "init_args"],
+      "outputs": ["results"],
+      "attributes": []
+    },
+    {
+      "name": "scf.if",
+      "domain": "mlir.scf",
+      "inputs": ["condition"],
+      "outputs": ["results"],
+      "attributes": []
+    },
+    {
+      "name": "scf.yield",
+      "domain": "mlir.scf",
+      "inputs": ["operands"],
+      "outputs": [],
+      "attributes": []
+    },
+    {
+      "name": "scf.while",
+      "domain": "mlir.scf",
+      "inputs": ["inits"],
+      "outputs": ["results"],
+      "attributes": []
+    }
+  ]
+}

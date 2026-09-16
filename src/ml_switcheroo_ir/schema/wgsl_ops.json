@@ -1,0 +1,67 @@
+{
+  "ops": [
+    {
+      "name": "storageStore",
+      "domain": "wgsl",
+      "inputs": ["buffer", "index", "value"],
+      "outputs": [],
+      "attributes": [
+        {
+          "name": "address_space",
+          "type": "str",
+          "required": false,
+          "default": "storage, read_write"
+        }
+      ]
+    },
+    {
+      "name": "storageLoad",
+      "domain": "wgsl",
+      "inputs": ["buffer", "index"],
+      "outputs": ["value"],
+      "attributes": [
+        {
+          "name": "address_space",
+          "type": "str",
+          "required": false,
+          "default": "storage, read"
+        }
+      ]
+    },
+    {
+      "name": "workgroupBarrier",
+      "domain": "wgsl",
+      "inputs": [],
+      "outputs": [],
+      "attributes": []
+    },
+    {
+      "name": "storageBarrier",
+      "domain": "wgsl",
+      "inputs": [],
+      "outputs": [],
+      "attributes": []
+    },
+    {
+      "name": "atomicAdd",
+      "domain": "wgsl",
+      "inputs": ["atomic_ptr", "value"],
+      "outputs": ["old_value"],
+      "attributes": []
+    },
+    {
+      "name": "atomicSub",
+      "domain": "wgsl",
+      "inputs": ["atomic_ptr", "value"],
+      "outputs": ["old_value"],
+      "attributes": []
+    },
+    {
+      "name": "atomicExchange",
+      "domain": "wgsl",
+      "inputs": ["atomic_ptr", "value"],
+      "outputs": ["old_value"],
+      "attributes": []
+    }
+  ]
+}

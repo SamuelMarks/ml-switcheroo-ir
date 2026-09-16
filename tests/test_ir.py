@@ -4,19 +4,23 @@ import json
 import pathlib
 import runpy
 from tempfile import NamedTemporaryFile
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 
 from ml_switcheroo_ir import (
     CompilerBackend,
+    DType,
     GraphFrontend,
     LogicalAxis,
     LogicalGraph,
     LogicalMesh,
     LogicalNode,
     PartitionSpec,
+    TensorSpec,
     __version__,
+    eliminate_dead_nodes,
     topological_sort,
 )
 from ml_switcheroo_ir.cli import _parse_graph_from_json
@@ -653,3 +657,264 @@ def test_to_json_from_json() -> None:
     assert graph2.nodes["x"].sharding is not None
     assert graph2.nodes["x"].sharding.axes == ("data", None)
     assert graph2.nodes["x"].shape_metadata == (1, 2)
+
+
+def test_node_dict_append() -> None:
+    """Test NodeDict.append method with deprecation warning."""
+    g = LogicalGraph(name="NodeDictGraph")
+    node = LogicalNode(id="appended_node", op_type="Relu")
+    with pytest.deprecated_call():
+        g.nodes.append(node)
+    assert "appended_node" in g.nodes
+    assert g.nodes["appended_node"] == node
+    assert isinstance(g.nodes, dict)
+
+
+def test_node_dict_and_edge_list_sequence_ergonomics() -> None:
+    """Test all NodeDict and EdgeList dual-ergonomics methods for full coverage."""
+    from ml_switcheroo_ir import LogicalEdge, NodeDict
+
+    g = LogicalGraph(name="SeqGraph")
+
+    # Test edge appended before target node is added (pending edge)
+    g.edges.append(LogicalEdge("n1", "n2"))
+    assert len(g._pending_edges) == 1
+
+    # Add n1 and n2 via extend
+    n1 = LogicalNode("n1", "Input")
+    n2 = LogicalNode("n2", "Relu")
+    with pytest.deprecated_call():
+        g.nodes.extend([n1, n2])
+
+    # Pending edge wired into n2.inputs automatically
+    assert n2.inputs == ["n1"]
+    assert len(g.edges) == 1
+
+    # EdgeList.extend
+    g.edges.extend([LogicalEdge("n1", "n2")])
+
+    # NodeDict.__getitem__ with int and out of range
+    assert g.nodes[0] == n1
+    assert g.nodes[1] == n2
+    with pytest.raises(IndexError, match="out of range"):
+        _ = g.nodes[999]
+
+    # NodeDict.__contains__ with node object and invalid type
+    assert n1 in g.nodes
+    assert "n1" in g.nodes
+    assert 12345 not in g.nodes
+
+    # NodeDict.index
+    assert g.nodes.index(n1) == 0
+    assert g.nodes.index("n2") == 1
+    with pytest.raises(ValueError, match="not in NodeDict"):
+        g.nodes.index("non_existent")
+
+    # NodeDict.insert
+    n3 = LogicalNode("n3", "Linear")
+    g.nodes.insert(0, n3)
+    assert "n3" in g.nodes
+
+    # NodeDict.pop by int and by str
+    popped = g.nodes.pop(0)
+    assert popped == n1
+
+    popped_str = g.nodes.pop("n3")
+    assert popped_str == n3
+
+    # NodeDict.__delitem__ by int and by str
+    n4 = LogicalNode("n4", "GelU")
+    g.nodes.append(n4)
+    del g.nodes[0]  # deletes n2
+    assert "n2" not in g.nodes
+
+    del g.nodes["n4"]
+    assert "n4" not in g.nodes
+
+    # __setattr__ assignments on graph.nodes
+    g.nodes = NodeDict(g, {"x": LogicalNode("x", "Op")})
+    assert "x" in g.nodes
+
+    g.nodes = [LogicalNode("y", "Op")]  # type: ignore[assignment]
+    assert "y" in g.nodes
+
+    g.nodes = {"z": LogicalNode("z", "Op")}  # type: ignore[assignment]
+    assert "z" in g.nodes
+
+    g.nodes = "invalid_not_dict"  # type: ignore
+    assert len(g.nodes) == 0
+
+    # LogicalNode 3-arg positional with attributes and explicit None op_type
+    n_pos = LogicalNode("p1", "Conv", {"k": 3})
+    assert n_pos.attributes == {"k": 3}
+    assert n_pos.domain == "ai.onnx"
+
+    n_none = LogicalNode("p2", None)
+    assert n_none.op_type == ""
+
+    # Non-dict non-str domain branch
+    n_int_dom = LogicalNode("p3", "Conv", domain=12345)  # type: ignore[call-overload]
+    assert n_int_dom.domain == "12345"
+
+
+def test_nodedict_and_edge_list_edge_branches() -> None:
+    """Test edge branches for NodeDict, EdgeList, and LogicalGraph edges."""
+    from ml_switcheroo_ir import EdgeList, LogicalEdge, NodeDict
+
+    # 1. EdgeList with no linked graph
+    standalone_edges = EdgeList()
+    standalone_edges.append(LogicalEdge("x", "y"))
+    assert len(standalone_edges) == 1
+
+    # 2. Edge append when source is not in target node inputs (line 567) and duplicate edge
+    g = LogicalGraph(name="EdgeBranchGraph")
+    b = LogicalNode("b", "Relu", inputs=["a"])
+    g.nodes["b"] = b
+    g.edges.append(LogicalEdge("a", "b"))  # already in inputs
+    assert b.inputs == ["a"]
+
+    c = LogicalNode("c", "Relu", inputs=[])
+    g.nodes["c"] = c
+    g.edges.append(LogicalEdge("a", "c"))  # not in inputs -> hits line 567
+    assert c.inputs == ["a"]
+
+    # 3. Standalone NodeDict without graph (line 615->exit)
+    standalone_nd = NodeDict()
+    standalone_nd["x"] = LogicalNode("x", "Op")
+    assert "x" in standalone_nd
+
+    nd_kwargs = NodeDict(a=LogicalNode("a", "Op"))
+    assert "a" in nd_kwargs
+
+    # 4. Wire pending edges: one matching target already containing source, one targeting another node
+    g2 = LogicalGraph(name="PendingGraph")
+    g2._pending_edges = [
+        LogicalEdge("src_dup", "target_node"),
+        LogicalEdge("other_src", "other_node"),
+    ]
+    target_node = LogicalNode("target_node", "Op", inputs=["src_dup"])
+    g2.nodes["target_node"] = target_node
+    assert target_node.inputs == ["src_dup"]
+
+    # 5. LogicalGraph.edges with duplicate inputs in node
+    dup_in_node = LogicalNode("dup_in", "Add", inputs=["s1", "s1"])
+    g_dup = LogicalGraph(nodes={"dup_in": dup_in_node})
+    assert len(g_dup.edges) == 2
+
+    # 6. LogicalGraph.edges setter with duplicate edge
+    g_dup.edges = [LogicalEdge("s1", "dup_in"), LogicalEdge("s1", "dup_in")]
+    assert dup_in_node.inputs == ["s1"]
+
+    # 7. __setattr__ exception handling on self.edges access and pending edge preservation
+    g_edges_test = LogicalGraph(
+        nodes={
+            "surviving": LogicalNode("surviving", "Op", inputs=["in_a"]),
+            "to_del": LogicalNode("to_del", "Op", inputs=["in_b"]),
+        },
+    )
+    g_edges_test.nodes = [LogicalNode("surviving", "Op")]  # type: ignore[assignment]
+    assert any(e.target == "to_del" for e in g_edges_test._pending_edges)
+
+    err_prop = property(
+        lambda self: (_ for _ in ()).throw(AttributeError("Mock error accessing edges"))
+    )
+    with patch.object(LogicalGraph, "edges", new=err_prop):
+        g_dup.nodes = [LogicalNode("new_n", "Op")]  # type: ignore[assignment]
+    assert "new_n" in g_dup.nodes
+
+
+def test_output_pseudo_node_outputs_deduction() -> None:
+    """Test that a pseudo Output node populates graph.outputs when outputs is omitted."""
+    n1 = LogicalNode(id="n1", op_type="Relu")
+    n_out = LogicalNode(id="out_node", op_type="Output", inputs=["n1", "n1"])
+    graph = LogicalGraph(nodes={"n1": n1, "out_node": n_out})
+    assert graph.outputs == ["n1"]
+
+
+def test_from_dict_subgraph_edge_branches() -> None:
+    """Test edge branches in from_dict for subgraphs and input_specs."""
+    direct_sub = LogicalGraph(
+        name="DirectSub",
+        nodes={"s": LogicalNode(id="s", op_type="Relu")},
+        outputs=["s"],
+    )
+    raw = {
+        "nodes": {
+            "n": {
+                "id": "n",
+                "op_type": "Op",
+                "subgraphs": {"ignored": 123},
+                "attributes": {
+                    "body_subgraph": direct_sub,
+                    "jvp_graph": "invalid_subgraph_type",
+                },
+            }
+        },
+        "input_specs": {"ignored_spec": 456},
+    }
+    g = LogicalGraph.from_dict(raw)
+    assert "body" in g.nodes["n"].subgraphs
+    assert g.nodes["n"].subgraphs["body"] == direct_sub
+
+
+def test_from_dict_and_from_json_comprehensive() -> None:
+    """Test comprehensive branches of from_dict with string dtypes, output_specs, input_specs, and subgraphs."""
+    sub_graph = LogicalGraph(
+        name="SubModel",
+        nodes={"sub1": LogicalNode(id="sub1", op_type="Relu")},
+        outputs=["sub1"],
+    )
+    spec_obj = TensorSpec(shape=(1, 4), dtype=DType.float32)
+
+    raw_dict: dict[str, Any] = {
+        "name": "FullTestGraph",
+        "nodes": {
+            "n1": {
+                "id": "n1",
+                "op_type": "Conv",
+                "dtype": "float32",
+                "output_specs": [{"shape": (1, 16), "dtype": "float32"}],
+                "subgraphs": {
+                    "sub_direct": sub_graph,
+                    "sub_dict": {
+                        "name": "NestedDict",
+                        "nodes": {
+                            "sub_dict_n": {"id": "sub_dict_n", "op_type": "Identity"}
+                        },
+                        "outputs": ["sub_dict_n"],
+                    },
+                },
+            }
+        },
+        "inputs": ["in_x"],
+        "input_specs": {
+            "in_x": spec_obj,
+            "in_y": {"shape": (2, 8), "dtype": "int32"},
+        },
+        "outputs": ["n1"],
+    }
+
+    g = LogicalGraph.from_dict(raw_dict)
+    assert g.name == "FullTestGraph"
+    assert g.nodes["n1"].dtype == DType.float32
+    assert len(g.nodes["n1"].output_specs) == 1
+    assert g.nodes["n1"].output_specs[0].shape == (1, 16)
+    assert isinstance(g.nodes["n1"].subgraphs["sub_direct"], LogicalGraph)
+    assert isinstance(g.nodes["n1"].subgraphs["sub_dict"], LogicalGraph)
+    assert g.input_specs["in_x"] == spec_obj
+    assert g.input_specs["in_y"].shape == (2, 8)
+    assert g.input_specs["in_y"].dtype == DType.int32
+
+
+def test_transforms_subgraphs_non_graph_branch() -> None:
+    """Test eliminate_dead_nodes when subgraphs contains non-LogicalGraph values."""
+    node = LogicalNode(
+        id="custom_node",
+        op_type="CustomOp",
+        subgraphs={"metadata_str": "not_a_logical_graph"},
+    )
+    g = LogicalGraph(nodes={"custom_node": node}, outputs=["custom_node"])
+    cleaned = eliminate_dead_nodes(g)
+    assert (
+        cleaned.nodes["custom_node"].subgraphs["metadata_str"] == "not_a_logical_graph"
+    )

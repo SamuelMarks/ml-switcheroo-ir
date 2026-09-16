@@ -20,18 +20,20 @@ The `Linear` operation (e.g., `torch.nn.Linear`) is mapped to the `Gemm` (Genera
 ```json
 {
   "id": "linear1",
-  "kind": "Gemm",
+  "op_type": "Gemm",
   "domain": "ai.onnx",
   "version": 11,
-  "metadata": {
+  "attributes": {
     "alpha": 1.0,
     "beta": 1.0,
     "transB": 1
-  }
+  },
+  "inputs": ["X", "W", "B"],
+  "outputs": ["linear1_out"]
 }
 ```
 
-*Note: If no bias is present (`bias=False`), the `C` input should be omitted from the graph edges for this node.*
+*Note: In canonical serialization, `op_type` and `attributes` are used (the legacy aliases `kind` and `metadata` remain supported for backward compatibility). If no bias is present (`bias=False`), the `C` input should be omitted from the node inputs.*
 
 ## 2. Convolutional Layers
 
@@ -52,21 +54,25 @@ For parameterized activations like `LeakyReLU`, use the ONNX `LeakyRelu` operato
 
 ## 4. Custom Operations
 
-If a model uses an operation not present in the standard `ai.onnx` domain (e.g., a highly specialized fused kernel or FlashAttention), use a custom domain.
+If a model uses an operation not present in the standard `ai.onnx` domain (e.g., modern transformer primitives or specialized kernels), use a custom domain.
+
+Modern transformer primitives (`FlashAttention`, `RMSNorm`, `SwiGLU`, `RoPE`, `VisionPatchEmbedding`) are pre-registered in the `ml.switcheroo.custom` domain.
 
 **Example Custom Node:**
 
 ```json
 {
   "id": "flash_attn1",
-  "kind": "FlashAttention",
+  "op_type": "FlashAttention",
   "domain": "ml.switcheroo.custom",
   "version": 1,
-  "metadata": {
+  "attributes": {
     "causal": true,
-    "dropout_p": 0.1
-  }
+    "scale": 0.125
+  },
+  "inputs": ["Q", "K", "V"],
+  "outputs": ["flash_attn1_out"]
 }
 ```
 
-You must provide a custom ops schema JSON file to the CLI `validate` command using the `--custom-ops` flag to validate these nodes.
+For domain-specific or proprietary custom operations outside the built-in registry, provide a custom ops schema JSON file to the CLI `validate` command using the `--custom-ops` flag.

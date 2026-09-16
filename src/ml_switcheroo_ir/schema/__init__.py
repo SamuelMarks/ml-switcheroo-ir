@@ -25,11 +25,13 @@ from ml_switcheroo_ir.schema.ghost import (
     migrate_ghost_ref,
     migrate_ghost_ref_v2,
 )
+from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpAttribute, OpSchema
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 
 __all__ = [
     "CUSTOM_OPS_REGISTRY",
+    "MLIR_REGISTRY",
     "ONNX_REGISTRY",
     "STABLEHLO_REGISTRY",
     "CustomAttributeSchema",

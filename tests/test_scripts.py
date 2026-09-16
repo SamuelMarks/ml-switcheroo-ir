@@ -705,8 +705,8 @@ def test_verify_grounding_main_paths() -> None:
 
 def test_verify_grounding_runpy_main() -> None:
     """Test executing scripts.verify_grounding as __main__ module."""
-    with patch(
-        "scripts.verify_grounding.find_snapshots_directory", return_value=None
+    with TemporaryDirectory() as empty_tmpdir, patch.dict(
+        os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": empty_tmpdir}
     ), patch("sys.argv", ["verify_grounding.py"]), patch("sys.exit") as mock_exit:
         runpy.run_module("scripts.verify_grounding", run_name="__main__")
         mock_exit.assert_called_once_with(0)

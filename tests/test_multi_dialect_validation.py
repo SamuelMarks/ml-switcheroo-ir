@@ -250,3 +250,50 @@ def test_grounding_validator_file_audit(tmp_path: Path) -> None:
     assert report.ungrounded_count == 2
     assert report.hallucination_score > 0.0
     assert len(report.diagnostics) >= 2
+
+
+def test_multi_dialect_validator_mlir_registry_integration() -> None:
+    """Test MultiDialectValidator with MLIR_REGISTRY schemas and domains."""
+    from ml_switcheroo_ir.schema import MLIR_REGISTRY
+    from ml_switcheroo_ir.validator import MultiDialectValidator
+
+    v = MultiDialectValidator(mlir_registry=MLIR_REGISTRY)
+
+    # Valid arith.constant
+    c_node = LogicalNode(
+        id="c0",
+        op_type="arith.constant",
+        domain="mlir.arith",
+        attributes={"value": 42},
+    )
+    assert not v.validate_kind(c_node)
+    assert not v.validate_required_attributes(c_node)
+
+    # Missing required attribute 'value' on arith.constant
+    bad_c = LogicalNode(
+        id="c1",
+        op_type="arith.constant",
+        domain="mlir.arith",
+    )
+    errors = v.validate_required_attributes(bad_c)
+    assert len(errors) == 1
+    assert errors[0].attribute == "value"
+
+    # Valid scf.for in mlir domain
+    for_node = LogicalNode(
+        id="f0",
+        op_type="scf.for",
+        domain="mlir",
+        inputs=["%lb", "%ub", "%step"],
+    )
+    assert not v.validate_kind(for_node)
+
+    # Unrecognized op in mlir domain
+    bad_mlir = LogicalNode(
+        id="m_bad",
+        op_type="nonexistent.op",
+        domain="mlir",
+    )
+    errs = v.validate_kind(bad_mlir)
+    assert len(errs) == 1
+    assert "nonexistent.op" in errs[0].message

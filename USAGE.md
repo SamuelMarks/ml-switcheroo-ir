@@ -28,6 +28,7 @@ This guide details programmatic graph manipulation, multi-dialect schema validat
    - [Topological Sorting (`toposort`)](#5-topological-sorting-toposort)
    - [Backend Interface Verification (`verify-backend`)](#6-backend-interface-verification-verify-backend)
    - [Exporting GhostRef Snapshots (`dump-snapshot`)](#7-exporting-ghostref-snapshots-dump-snapshot)
+   - [Exporting JSON Schemas & TypeScript (`export-schema`)](#8-exporting-json-schemas--typescript-export-schema)
 4. [End-to-End Developer Recipes](#4-end-to-end-developer-recipes)
    - [Recipe A: Tracking `zero-*` Dialect Implementation Progress](#recipe-a-tracking-zero--dialect-implementation-progress)
    - [Recipe B: Pre-Compilation Sanitization in CI/CD](#recipe-b-pre-compilation-sanitization-in-cicd)
@@ -374,11 +375,13 @@ ml-switcheroo-ir list-ops --search "(Conv|Attention)"
 
 **Output:**
 ```text
-Op Name         | Domain                | Required Args | Optional Args
-----------------+-----------------------+---------------+------------------------------------
-Conv            | ai.onnx               | kernel_shape  | auto_pad, dilations, group, pads, strides
-FlashAttention  | ml.switcheroo.custom  | causal        | dropout_p, scale
-RMSNorm         | ml.switcheroo.custom  |               | eps
+Op Name                    Domain                Required Args              Optional Args
+-------------------------  --------------------  -------------------------  ----------------------------------------------------------------------------------------------
+Attention                  ai.onnx                                          is_causal, kv_num_heads, q_num_heads, qk_matmul_output_mode, scale, softcap, softmax_precision
+Conv                       ai.onnx                                          auto_pad, dilations, group, kernel_shape, pads, strides
+FlashAttention             ml.switcheroo.custom                             causal, scale
+LinearAttention            ai.onnx               kv_num_heads, q_num_heads  chunk_size, scale, update_rule
+ScaledDotProductAttention  ml.switcheroo.custom                             scale, dropout_p, is_causal
 ```
 
 ### 5. Topological Sorting (`toposort`)
@@ -425,6 +428,18 @@ Export all built-in operator schemas to GhostRef v2 JSON snapshot format:
 ml-switcheroo-ir dump-snapshot --output schemas_snapshot.json
 ```
 
+### 8. Exporting JSON Schemas & TypeScript (`export-schema`)
+
+Export canonical JSON Schema definitions and TypeScript interfaces:
+
+```bash
+# Export all JSON schemas to a directory
+ml-switcheroo-ir export-schema --out-dir schemas/
+
+# Export TypeScript definitions
+ml-switcheroo-ir export-schema --typescript --ts-out types.ts
+```
+
 ---
 
 ## 4. End-to-End Developer Recipes
@@ -464,6 +479,10 @@ When translating high-level graphs to compiler dialects:
 from ml_switcheroo_ir import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.validator import Validator
 
+# Define input operands
+lhs_node = LogicalNode(id="lhs", op_type="Input", domain="stablehlo")
+rhs_node = LogicalNode(id="rhs", op_type="Input", domain="stablehlo")
+
 # Construct StableHLO dot_general node
 dot_node = LogicalNode(
     id="dot",
@@ -479,7 +498,7 @@ dot_node = LogicalNode(
     outputs=["out"],
 )
 
-graph = LogicalGraph(nodes={"dot": dot_node})
+graph = LogicalGraph(nodes={"lhs": lhs_node, "rhs": rhs_node, "dot": dot_node})
 validator = Validator()
 errors = validator.validate_graph(graph)
 assert not errors, f"StableHLO validation failed: {errors}"

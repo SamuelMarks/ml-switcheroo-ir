@@ -81,12 +81,23 @@ export type DType =
   | "uint32"
   | "uint64"
   | "bool"
+  | "string"
+  | "object"
   | "complex64"
   | "complex128"
+  | "float8_e4m3fn"
+  | "float8_e4m3b11fnuz"
+  | "float8_e5m2"
   | "fp8_e4m3fn"
   | "fp8_e4m3fnuz"
   | "fp8_e5m2"
   | "fp8_e5m2fnuz"
+  | "int4"
+  | "uint4"
+  | "int2"
+  | "qint8"
+  | "quint8"
+  | "qint4"
   | string;
 
 export type AttributeValue =
@@ -108,6 +119,15 @@ export interface LogicalMesh {
 export interface LogicalEdge {
   source: string;
   target: string;
+  source_idx?: number;
+  target_idx?: number;
+  value_name?: string | null;
+}
+
+export interface TensorSpec {
+  shape: (number | string)[];
+  dtype: DType;
+  sparsity?: string | null;
 }
 
 export interface LogicalNode {
@@ -120,6 +140,10 @@ export interface LogicalNode {
   outputs?: string[];
   shape_metadata?: (number | string)[] | null;
   dtype?: DType | null;
+  output_specs?: TensorSpec[];
+  subgraphs?: Record<string, LogicalGraph>;
+  device?: string | null;
+  stream?: string | null;
   sharding?: PartitionSpec | null;
   subgraph?: LogicalGraph | null;
 }
@@ -127,7 +151,10 @@ export interface LogicalNode {
 export interface LogicalGraph {
   name?: string;
   nodes: Record<string, LogicalNode> | LogicalNode[];
+  inputs?: string[];
+  input_specs?: Record<string, TensorSpec>;
   outputs?: string[];
+  initializers?: Record<string, unknown>;
   mesh?: LogicalMesh | null;
   edges?: LogicalEdge[];
 }
@@ -168,22 +195,20 @@ def export_schemas(
     for name in ("LogicalGraph", "LogicalNode", "SnapshotEnvelope"):
         schema = get_json_schema(name)
         if name == "LogicalGraph":
-            filename = "logical_graph.schema.json"
+            out_file = directory / "logical_graph.schema.json"
         elif name == "LogicalNode":
-            filename = "logical_node.schema.json"
+            out_file = directory / "logical_node.schema.json"
         else:
-            filename = "snapshot_envelope.schema.json"
+            out_file = directory / "snapshot_envelope.schema.json"
 
-        file_path = directory / filename
-        with open(file_path, "w", encoding="utf-8") as f:
+        with open(out_file, "w", encoding="utf-8") as f:
             json.dump(schema, f, indent=2, sort_keys=True)
-            f.write("\n")
-        exported[name] = file_path
+        exported[name] = out_file
 
     if include_typescript:
-        ts_path = directory / "logical_graph.d.ts"
-        with open(ts_path, "w", encoding="utf-8") as f:
+        ts_file = directory / "logical_graph.d.ts"
+        with open(ts_file, "w", encoding="utf-8") as f:
             f.write(generate_typescript_definitions())
-        exported["TypeScript"] = ts_path
+        exported["TypeScript"] = ts_file
 
     return exported

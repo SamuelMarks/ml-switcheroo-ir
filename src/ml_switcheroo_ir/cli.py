@@ -334,9 +334,18 @@ def main(args: list[str] | None = None) -> None:
         )
 
     elif parsed_args.command == "list-ops":
+        from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
         from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+        from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 
-        schemas = list(ONNX_REGISTRY.values())
+        seen_ops: set[tuple[str, str]] = set()
+        schemas = []
+        for reg in (ONNX_REGISTRY, CUSTOM_OPS_REGISTRY, STABLEHLO_REGISTRY):
+            for s in reg.values():
+                key = (s.domain, s.name)
+                if key not in seen_ops:
+                    seen_ops.add(key)
+                    schemas.append(s)
 
         if parsed_args.domain:
             schemas = [s for s in schemas if s.domain == parsed_args.domain]

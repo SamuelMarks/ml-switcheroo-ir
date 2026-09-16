@@ -26,6 +26,7 @@ from ml_switcheroo_ir.schema.ghost import (
     WGSL_MUTATING_OPS,
     WGSL_PRIMITIVE_SIGNATURES,
 )
+from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 
@@ -482,6 +483,7 @@ class Validator:
         registry: dict[str, OpSchema] | None = None,
         custom_registry: dict[str, OpSchema] | None = None,
         stablehlo_registry: dict[str, OpSchema] | None = None,
+        mlir_registry: dict[str, OpSchema] | None = None,
         level: ValidationLevel = ValidationLevel.WARNING,
         strict: bool = False,
         grounding_validator: GroundingValidator | None = None,
@@ -495,6 +497,8 @@ class Validator:
                 Defaults to the built-in CUSTOM_OPS_REGISTRY.
             stablehlo_registry (Optional[Dict[str, OpSchema]]): The StableHLO operator registry.
                 Defaults to the built-in STABLEHLO_REGISTRY.
+            mlir_registry (Optional[Dict[str, OpSchema]]): The Core MLIR operator registry.
+                Defaults to the built-in MLIR_REGISTRY.
             level (ValidationLevel): The validation severity threshold (default: ValidationLevel.WARNING).
             strict (bool): Convenience flag; if True, sets level to ValidationLevel.STRICT.
             grounding_validator (Optional[GroundingValidator]): Optional grounding validator for snapshot verification.
@@ -513,6 +517,11 @@ class Validator:
             self.stablehlo_registry = STABLEHLO_REGISTRY
         else:
             self.stablehlo_registry = stablehlo_registry
+
+        if mlir_registry is None:
+            self.mlir_registry = MLIR_REGISTRY
+        else:
+            self.mlir_registry = mlir_registry
 
         self.collective_registry = COLLECTIVE_OPS_REGISTRY
         self.quantization_registry = QUANTIZATION_OPS_REGISTRY
@@ -545,6 +554,17 @@ class Validator:
             return self.registry.get(node.op_type) or self.stablehlo_registry.get(
                 node.op_type
             )
+        if node.domain in (
+            "mlir",
+            "mlir.arith",
+            "mlir.math",
+            "mlir.tensor",
+            "mlir.linalg",
+            "mlir.scf",
+        ):
+            return self.registry.get(node.op_type) or self.mlir_registry.get(
+                node.op_type
+            )
         if node.domain in ("collective", "ml.switcheroo.collective"):
             return self.registry.get(node.op_type) or self.collective_registry.get(
                 node.op_type
@@ -564,6 +584,9 @@ class Validator:
         Returns:
             List[ValidationError]: A list of errors found.
         """
+        if node.op_type in ("Input", "Output"):
+            return []
+
         errors: list[ValidationError] = []
         if node.domain == "ai.onnx":
             if node.op_type not in self.registry:
@@ -596,6 +619,26 @@ class Validator:
         elif node.domain == "stablehlo":
             if (
                 node.op_type not in self.stablehlo_registry
+                and node.op_type not in self.registry
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in (
+            "mlir",
+            "mlir.arith",
+            "mlir.math",
+            "mlir.tensor",
+            "mlir.linalg",
+            "mlir.scf",
+        ):
+            if (
+                node.op_type not in self.mlir_registry
                 and node.op_type not in self.registry
             ):
                 errors.append(
@@ -1910,7 +1953,12 @@ class Validator:
         # Validate inputs
         for node_id, node in graph.nodes.items():
             for inp in node.inputs:
-                if inp not in node_ids and graph.get_output_producer(inp) is None:
+                if (
+                    inp not in node_ids
+                    and graph.get_output_producer(inp) is None
+                    and inp not in graph.inputs
+                    and inp not in graph.initializers
+                ):
                     errors.append(
                         ValidationError(
                             node_id=node_id,
@@ -2276,3 +2324,7 @@ def audit_graph_grounding(
         resolved_path = snapshots_path
     validator = GroundingValidator(snapshot_manifest=resolved_path)
     return validator.audit_graph(graph)
+
+
+# Canonical alias for multi-dialect validation
+MultiDialectValidator = Validator

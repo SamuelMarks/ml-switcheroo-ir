@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ParameterKind(str, Enum):
@@ -177,6 +177,35 @@ class ExtendedGhostParam(GhostParam):
         default=None,
         description="Whether parameter is mandatory (no default value).",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_constraints(cls, data: Any) -> Any:
+        """Normalize legacy dtypes and rank into canonical allowed_dtypes and rank_constraint.
+
+        Args:
+            data (Any): Input model data dictionary or object.
+
+        Returns:
+            Any: Normalized data with canonical constraint fields populated.
+        """
+        if isinstance(data, dict):
+            if "dtypes" in data and (
+                "allowed_dtypes" not in data or data["allowed_dtypes"] is None
+            ):
+                data["allowed_dtypes"] = data["dtypes"]
+            elif "allowed_dtypes" in data and (
+                "dtypes" not in data or data["dtypes"] is None
+            ):
+                data["dtypes"] = data["allowed_dtypes"]
+
+            if "rank" in data and (
+                "rank_constraint" not in data or data["rank_constraint"] is None
+            ):
+                r = data["rank"]
+                if r is not None:
+                    data["rank_constraint"] = f"=={r}" if isinstance(r, int) else str(r)
+        return data
 
 
 class GhostRef(BaseModel):
@@ -682,6 +711,12 @@ class SnapshotEnvelope(BaseModel):
     )
     categories: dict[str, list[Any]] = Field(
         default_factory=dict, description="Categorized symbol dictionaries."
+    )
+    operations: list[Any] | None = Field(
+        default=None, description="Flat list of IR or dialect operations."
+    )
+    instructions: list[Any] | None = Field(
+        default=None, description="Flat list of hardware ISA instructions."
     )
 
 

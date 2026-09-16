@@ -9,7 +9,7 @@ from ml_switcheroo_ir.schema.custom_ops import (
     CustomOpSchema,
     Registry,
 )
-from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpAttribute
 from ml_switcheroo_ir.validator import ValidationLevel, Validator
 
 
@@ -103,3 +103,24 @@ def test_load_custom_ops_from_json() -> None:
     assert op.inputs == ["x"]
     assert op.attributes["size"].type == "int"
     assert op.attributes["size"].required is True
+
+
+def test_custom_op_dict_op_attributes() -> None:
+    """Test CustomOpSchema with OpAttribute instances in dict attributes."""
+    schema = CustomOpSchema(
+        name="OpWithAttrs",
+        domain="ai.custom",
+        attributes={
+            "direct_op_attr": OpAttribute(
+                name="direct_op_attr", type="int", required=True, default=0
+            ),
+            "custom_attr": CustomAttributeSchema(
+                name="named_custom", type="float", required=False, default=1.0
+            ),
+        },
+    )
+    op_schema = schema.to_op_schema()
+    assert "direct_op_attr" in op_schema.attributes
+    assert "named_custom" in op_schema.attributes
+    assert op_schema.attributes["direct_op_attr"].type == "int"
+    assert op_schema.attributes["named_custom"].default == 1.0

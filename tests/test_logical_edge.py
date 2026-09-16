@@ -20,7 +20,16 @@ def test_logical_edge_init() -> None:
     edge = LogicalEdge(source="conv1", target="relu1")
     assert edge.source == "conv1"
     assert edge.target == "relu1"
-    assert asdict(edge) == {"source": "conv1", "target": "relu1"}
+    assert edge.source_idx == 0
+    assert edge.target_idx == 0
+    assert edge.value_name is None
+    assert asdict(edge) == {
+        "source": "conv1",
+        "target": "relu1",
+        "source_idx": 0,
+        "target_idx": 0,
+        "value_name": None,
+    }
 
 
 def test_logical_edge_equality() -> None:
@@ -41,9 +50,9 @@ def test_graph_edges_property_getter() -> None:
 
     edges = graph.edges
     assert len(edges) == 3
-    assert LogicalEdge("n1", "n2") in edges
-    assert LogicalEdge("n2", "n3") in edges
-    assert LogicalEdge("n1", "n3") in edges
+    assert LogicalEdge("n1", "n2", target_idx=0) in edges
+    assert LogicalEdge("n2", "n3", target_idx=0) in edges
+    assert LogicalEdge("n1", "n3", target_idx=1) in edges
 
 
 def test_graph_edges_property_setter() -> None:

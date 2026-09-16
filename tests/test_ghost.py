@@ -172,3 +172,46 @@ def test_migrate_ghost_ref_param_no_kind() -> None:
     with pytest.raises(ValueError):
         # pydantic will raise validation error since kind is missing
         migrate_ghost_ref(v1_data)
+
+
+def test_extended_ghost_param_normalization() -> None:
+    """Test ExtendedGhostParam validator migrating dtypes and rank to canonical fields."""
+    from ml_switcheroo_ir.schema.ghost import ExtendedGhostParam, SnapshotEnvelope
+
+    # dtypes -> allowed_dtypes
+    p1 = ExtendedGhostParam(
+        name="p1",
+        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+        dtypes=["float32", "bfloat16"],
+        rank=2,
+    )
+    assert p1.allowed_dtypes == ["float32", "bfloat16"]
+    assert p1.rank_constraint == "==2"
+
+    # allowed_dtypes -> dtypes
+    p2 = ExtendedGhostParam(
+        name="p2",
+        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+        allowed_dtypes=["int32"],
+        rank=">=1",
+    )
+    assert p2.dtypes == ["int32"]
+    assert p2.rank_constraint == ">=1"
+
+    # rank=None
+    p3 = ExtendedGhostParam(
+        name="p3",
+        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+        rank=None,
+    )
+    assert p3.rank is None
+    assert p3.rank_constraint is None
+
+    # SnapshotEnvelope with operations and instructions
+    env = SnapshotEnvelope(
+        target="mlir",
+        operations=[{"name": "arith.addi"}],
+        instructions=[{"name": "V_ADD_F32"}],
+    )
+    assert env.operations == [{"name": "arith.addi"}]
+    assert env.instructions == [{"name": "V_ADD_F32"}]
