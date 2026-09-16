@@ -59,7 +59,7 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
 
 
 def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify all StableHLO registry schemas against stablehlo_v1.0.0.json snapshot.
+    """Verify all StableHLO registry schemas against stablehlo snapshot.
 
     Args:
         snapshots_dir (Path): Path to framework snapshots directory.
@@ -69,7 +69,11 @@ def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
     """
     stablehlo_file = snapshots_dir / "stablehlo_v1.0.0.json"
     if not stablehlo_file.is_file():
-        return [f"StableHLO snapshot file not found: {stablehlo_file}"]
+        candidates = sorted(snapshots_dir.glob("stablehlo*.json"))
+        if candidates:
+            stablehlo_file = candidates[-1]
+        else:
+            return [f"StableHLO snapshot file not found: {stablehlo_file}"]
 
     gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
     errors: list[str] = []
@@ -80,7 +84,7 @@ def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
             and f"stablehlo.{op_name}" not in gv.grounded_symbols
         ):
             errors.append(
-                f"StableHLO op '{op_name}' is not grounded in stablehlo_v1.0.0.json snapshot."
+                f"StableHLO op '{op_name}' is not grounded in {stablehlo_file.name} snapshot."
             )
 
         # Check attributes against snapshot record
@@ -89,10 +93,10 @@ def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
         )
         if sym_record:
             known_attrs: set[str] = set()
-            for p in sym_record.get("params", []):
+            for p in sym_record.get("params") or []:
                 if isinstance(p, dict) and "name" in p:
                     known_attrs.add(p["name"])
-            for a in sym_record.get("attributes", []):
+            for a in sym_record.get("attributes") or []:
                 if isinstance(a, dict) and "name" in a:
                     known_attrs.add(a["name"])
 
@@ -148,7 +152,7 @@ def verify_onnx_grounding() -> list[str]:
 
 
 def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify MLIR dialect operations against mlir_v0.4.30.json snapshot.
+    """Verify MLIR dialect operations against mlir snapshot.
 
     Args:
         snapshots_dir (Path): Path to framework snapshots directory.
@@ -158,7 +162,11 @@ def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
     """
     mlir_file = snapshots_dir / "mlir_v0.4.30.json"
     if not mlir_file.is_file():
-        return []
+        candidates = sorted(snapshots_dir.glob("mlir*.json"))
+        if candidates:
+            mlir_file = candidates[-1]
+        else:
+            return []
 
     errors: list[str] = []
     with open(mlir_file, "r", encoding="utf-8") as f:
@@ -175,7 +183,7 @@ def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
     for dialect in CORE_MLIR_DIALECTS:
         if known_dialects and dialect not in known_dialects:
             errors.append(
-                f"Core MLIR dialect '{dialect}' is not grounded in mlir_v0.4.30.json."
+                f"Core MLIR dialect '{dialect}' is not grounded in {mlir_file.name}."
             )
 
     return errors
@@ -261,10 +269,17 @@ def main(argv: list[str] | None = None) -> int:
     print("=== Auditing ml-switcheroo-ir Schema Grounding ===")
 
     snapshots_dir = find_snapshots_directory(args.snapshots_dir)
-    if snapshots_dir is None:
-        print(
-            "[WARNING] ml-framework-snapshots directory not found. Skipping live snapshot checks."
-        )
+    if snapshots_dir is None or (
+        args.snapshots_dir is None and not any(snapshots_dir.glob("*.json"))
+    ):
+        if snapshots_dir is None:
+            print(
+                "[WARNING] ml-framework-snapshots directory not found. Skipping live snapshot checks."
+            )
+        else:
+            print(
+                "[WARNING] ml-framework-snapshots directory contains no snapshot files. Skipping live snapshot checks."
+            )
         # Verify custom ops and ONNX registries
         custom_errors = verify_custom_ops_grounding()
         onnx_errors = verify_onnx_grounding()

@@ -535,7 +535,7 @@ def test_verify_grounding_stablehlo() -> None:
         errs = verify_stablehlo_grounding(tmp_path)
         assert any("file not found" in e for e in errs)
 
-        # Snapshot file with missing op and invalid attribute
+        # Snapshot file with missing op, custom_call attribute handling, and invalid attribute
         fake_snapshot = {
             "categories": {
                 "stablehlo_op": [
@@ -544,7 +544,13 @@ def test_verify_grounding_stablehlo() -> None:
                         "api_path": "stablehlo.dot_general",
                         "params": [{"name": "unknown_param"}, "not_dict", {}],
                         "attributes": [{"name": "unknown_attr"}, "not_dict", {}],
-                    }
+                    },
+                    {
+                        "name": "custom_call",
+                        "api_path": "stablehlo.custom_call",
+                        "params": [{"name": "call_target_name"}],
+                        "attributes": [{"name": "call_target_name"}],
+                    },
                 ]
             }
         }
@@ -554,6 +560,15 @@ def test_verify_grounding_stablehlo() -> None:
 
         errs_missing = verify_stablehlo_grounding(tmp_path)
         assert len(errs_missing) > 0
+        snap_file.unlink()
+
+        # Test candidate file fallback when stablehlo_v1.0.0.json is not present
+        candidate_file = tmp_path / "stablehlo_v1.9.0.json"
+        with open(candidate_file, "w", encoding="utf-8") as f:
+            json.dump(fake_snapshot, f)
+        errs_candidate = verify_stablehlo_grounding(tmp_path)
+        assert len(errs_candidate) > 0
+        candidate_file.unlink()
 
 
 def test_verify_grounding_custom_and_onnx() -> None:
@@ -694,6 +709,13 @@ def test_verify_mlir_grounding_paths() -> None:
         tmppath = Path(tmpdir)
         # Missing file returns []
         assert verify_mlir_grounding(tmppath) == []
+
+        # Candidate fallback when mlir_v0.4.30.json is not present
+        candidate_mlir = tmppath / "mlir_v19.1.0.json"
+        with open(candidate_mlir, "w", encoding="utf-8") as f:
+            json.dump({"categories": {"util": [{"api_path": "other_dialect.op"}]}}, f)
+        assert len(verify_mlir_grounding(tmppath)) > 0
+        candidate_mlir.unlink()
 
         # File with missing dialects and edge items (non-list, non-dict, dict without api_path)
         mlir_json = tmppath / "mlir_v0.4.30.json"
