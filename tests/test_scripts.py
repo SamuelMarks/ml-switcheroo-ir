@@ -5,14 +5,28 @@ from __future__ import annotations
 import json
 import os
 import runpy
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 
-from scripts.generate_registry import main as gen_main
-from scripts.generate_registry import parse_onnx_docs
+from scripts.generate_registry import (
+    cross_validate_with_onnx_defs,
+    extract_section,
+    parse_onnx_docs,
+)
+from scripts.generate_registry import (
+    main as gen_main,
+)
+from scripts.generate_stablehlo_registry import (
+    extract_stablehlo_schemas,
+)
+from scripts.generate_stablehlo_registry import (
+    main as gen_stablehlo_main,
+)
 from scripts.update_badges import (
     count_shields,
     enforce_coverage_shields,
@@ -27,6 +41,7 @@ from scripts.update_badges import (
     main as update_badges_main,
 )
 from scripts.verify_grounding import (
+    _extract_known_attributes,
     find_snapshots_directory,
     verify_custom_ops_grounding,
     verify_ir_snapshot_grounding,
@@ -411,6 +426,22 @@ has been available since version 13.
 #### Inputs
 #### Outputs
 
+### <a name="Cast"></a><a name="cast">**Cast**</a>
+has been available since version 1.
+#### Attributes
+<dl>
+<dt><tt>to</tt> : int (required)</dt>
+<dd>Target type</dd>
+</dl>
+#### Inputs
+<dl>
+<dt><tt>input</tt></dt>
+</dl>
+#### Outputs
+<dl>
+<dt><tt>output</tt></dt>
+</dl>
+
 ### <a name="NoMatch"></a>
 Header without bold operator name.
 """
@@ -492,10 +523,222 @@ def test_generate_registry_module_main() -> None:
         tmp_py = os.path.join(tmpdir, "onnx_registry.py")
         with open(tmp_md, "w", encoding="utf-8") as f:
             f.write(SAMPLE_ONNX_DOCS)
+        sys.modules.pop("scripts.generate_registry", None)
         with patch("sys.argv", ["generate_registry.py", tmp_md, tmp_json, tmp_py]):
             runpy.run_module("scripts.generate_registry", run_name="__main__")
         assert os.path.exists(tmp_json)
         assert os.path.exists(tmp_py)
+
+
+def test_generate_registry_cross_validate_branches() -> None:
+    """Test cross_validate_with_onnx_defs edge cases and ai.onnx prefixed operator handling."""
+    # Test extract_section helper
+    block = "#### SectionA\nContent A\n#### SectionB\nContent B"
+    assert extract_section(block, "SectionA") == "Content A"
+    assert extract_section(block, "NonExistent") == ""
+
+    # Test parse_onnx_docs with ai.onnx. prefixed op and cross_validate=True
+    md_content = """# ONNX Operators
+### <a name="ai.onnx.preview.training.Adagrad"></a><a name="adagrad">**ai.onnx.preview.training.Adagrad**</a>
+has been available since version 1.
+#### Inputs
+<dl>
+<dt><tt>R</tt></dt>
+</dl>
+#### Outputs
+<dl>
+<dt><tt>output</tt></dt>
+</dl>
+"""
+    with TemporaryDirectory() as tmpdir:
+        md_file = os.path.join(tmpdir, "Operators.md")
+        with open(md_file, "w", encoding="utf-8") as f:
+            f.write(md_content)
+
+        ops = parse_onnx_docs(md_file, cross_validate=True)
+        assert "ai.onnx.preview.training.Adagrad" in ops
+        assert (
+            ops["ai.onnx.preview.training.Adagrad"]["domain"]
+            == "ai.onnx.preview.training"
+        )
+
+    # Test cross_validate_with_onnx_defs with empty domain schema and non-empty domain
+    class FakeSchema:
+        """Mock ONNX operator schema definition for unit testing."""
+
+        def __init__(self, domain: str = "") -> None:
+            """Initialize mock schema.
+
+            Args:
+                domain: Domain string.
+            """
+            self.name = "FakeOp"
+            self.since_version = 1
+            self.attributes: dict[str, Any] = {}
+            self.inputs: list[Any] = []
+            self.outputs: list[Any] = []
+            self.domain = domain
+
+    with patch("onnx.defs.get_all_schemas", return_value=[FakeSchema("")]):
+        test_ops = {
+            "FakeOp": {
+                "domain": "ai.onnx",
+                "version": 1,
+                "attributes": {"bad": {}},
+                "inputs": ["x"],
+                "outputs": [],
+            }
+        }
+        cleaned = cross_validate_with_onnx_defs(test_ops)
+        assert cleaned["FakeOp"]["attributes"] == {}
+        assert cleaned["FakeOp"]["inputs"] == []
+        assert cleaned["FakeOp"]["domain"] == "ai.onnx"
+
+    # Test schema with explicit domain and version comparison false branch
+    s_v10 = FakeSchema("ai.onnx.custom")
+    s_v10.since_version = 10
+    s_v5 = FakeSchema("ai.onnx.custom")
+    s_v5.since_version = 5
+
+    with patch("onnx.defs.get_all_schemas", return_value=[s_v10, s_v5]):
+        test_ops2 = {
+            "FakeOp": {
+                "domain": "ai.onnx",
+                "version": 1,
+                "attributes": {},
+                "inputs": [],
+                "outputs": [],
+            }
+        }
+        cleaned2 = cross_validate_with_onnx_defs(test_ops2)
+        assert cleaned2["FakeOp"]["domain"] == "ai.onnx.custom"
+
+    # Test ImportError branch in cross_validate_with_onnx_defs
+    with patch.dict("sys.modules", {"onnx.defs": None}):
+        assert cross_validate_with_onnx_defs({"Op": {}}) == {"Op": {}}
+
+
+def test_generate_stablehlo_registry(tmp_path: Path) -> None:
+    """Test extract_stablehlo_schemas and main in scripts.generate_stablehlo_registry.
+
+    Args:
+        tmp_path (Path): Temporary test directory.
+    """
+    manifest_data = {
+        "operations": [
+            {
+                "api_path": "stablehlo.abs",
+                "name": "AbsOp",
+                "operands": [{"name": "operand"}],
+                "returns": [{"name": "result"}],
+                "attributes": {
+                    "bool_attr": {"type": "DefaultValued<BoolAttr>"},
+                    "int_attr": {"type": "IntegerAttr"},
+                    "float_attr": {"type": "FloatAttr"},
+                    "array_attr": {"type": "ArrayAttr"},
+                    "dict_attr": {"type": "DictionaryAttr"},
+                    "plain_attr": "StrAttr",
+                    "": {"type": "invalid"},
+                },
+            },
+            {
+                "name": "ConvolutionOp",
+                "api_path": "stablehlo.convolution",
+                "operands": [{"name": "lhs"}, {"name": "rhs"}],
+                "returns": [{"name": "result"}],
+                "attributes": {
+                    "batch_group_count": {"type": "IntegerAttr"},
+                    "padding": {"type": "Array"},
+                },
+            },
+            {
+                "name": "CustomOp",
+                "operands": [{"name": ""}, "not_dict"],
+                "returns": [],
+                "attributes": [
+                    {
+                        "name": "list_attr",
+                        "type": "str",
+                        "required": True,
+                        "default": "x",
+                    },
+                    {"name": ""},
+                ],
+            },
+        ]
+    }
+    manifest_file = tmp_path / "test_hlo.json"
+    with open(manifest_file, "w", encoding="utf-8") as f:
+        json.dump(manifest_data, f)
+
+    ops = extract_stablehlo_schemas(manifest_file)
+    assert len(ops) == 3
+    assert ops[0]["name"] == "abs"
+    assert ops[1]["name"] == "convolution"
+    assert ops[2]["name"] == "custom"
+
+    # Test with raw list format
+    list_file = tmp_path / "test_list_hlo.json"
+    with open(list_file, "w", encoding="utf-8") as f:
+        json.dump([{"name": "UnaryOp", "operands": [], "returns": []}], f)
+    ops_list = extract_stablehlo_schemas(list_file)
+    assert len(ops_list) == 1
+    assert ops_list[0]["name"] == "unary"
+
+    # Test categories format with util key, duplicates, and edge item structures
+    cat_manifest = {
+        "categories": {
+            "util": [
+                {
+                    "name": "DotOp",
+                    "operands": [{"name": None}, {"name": "valid_in"}, "not_a_dict"],
+                    "returns": [{"name": None}, {"name": "valid_out"}, "not_a_dict"],
+                    "attributes": [{}, {"name": "valid_attr"}, "not_a_dict"],
+                },
+                {"name": "DotOp"},  # duplicate name
+                {"name": ""},  # empty name
+            ],
+            "other": [],
+        }
+    }
+    cat_file = tmp_path / "cat_hlo.json"
+    with open(cat_file, "w", encoding="utf-8") as f:
+        json.dump(cat_manifest, f)
+    ops_cat = extract_stablehlo_schemas(cat_file)
+    assert len(ops_cat) == 1
+    assert ops_cat[0]["name"] == "dot"
+
+    # Test dictionary without categories or operations
+    dict_file = tmp_path / "other_dict.json"
+    with open(dict_file, "w", encoding="utf-8") as f:
+        json.dump({"random_key": 1}, f)
+    assert extract_stablehlo_schemas(dict_file) == []
+
+    # Test categories dict without util
+    no_util_file = tmp_path / "no_util.json"
+    with open(no_util_file, "w", encoding="utf-8") as f:
+        json.dump({"categories": {"other": []}}, f)
+    assert extract_stablehlo_schemas(no_util_file) == []
+
+    # Test non-dict non-list scalar JSON
+    scalar_file = tmp_path / "scalar.json"
+    with open(scalar_file, "w", encoding="utf-8") as f:
+        json.dump("scalar_string", f)
+    assert extract_stablehlo_schemas(scalar_file) == []
+
+    # Test main() execution
+    out_json = tmp_path / "stablehlo_ops.json"
+    gen_stablehlo_main(snapshot_path=str(manifest_file), output_path=str(out_json))
+    assert out_json.exists()
+
+    # Test run_module as __main__
+    sys.modules.pop("scripts.generate_stablehlo_registry", None)
+    with patch(
+        "sys.argv",
+        ["generate_stablehlo_registry.py", str(manifest_file), str(out_json)],
+    ):
+        runpy.run_module("scripts.generate_stablehlo_registry", run_name="__main__")
+    assert out_json.exists()
 
 
 def test_verify_grounding_find_snapshots_directory() -> None:
@@ -543,7 +786,7 @@ def test_verify_grounding_stablehlo() -> None:
                         "name": "dot_general",
                         "api_path": "stablehlo.dot_general",
                         "params": [{"name": "unknown_param"}, "not_dict", {}],
-                        "attributes": [{"name": "unknown_attr"}, "not_dict", {}],
+                        "attributes": [{"name": "unknown_attr"}, "string_attr", {}],
                     },
                     {
                         "name": "custom_call",
@@ -750,7 +993,20 @@ def test_verify_mlir_grounding_paths() -> None:
             json.dump(
                 {
                     "categories": {
-                        "util": [{"api_path": "arith.addf"}, "not_a_dict", {}],
+                        "util": [
+                            {"api_path": "arith.addf", "attributes": ["lhs", "rhs"]},
+                            {
+                                "api_path": "tensor.empty",
+                                "attributes": [
+                                    {"name": "staticSizes"},
+                                    {"name": "other_attr"},
+                                    "string_attr",
+                                    {},
+                                ],
+                            },
+                            "not_a_dict",
+                            {},
+                        ],
                         "non_list": "scalar_val",
                     }
                 },
@@ -797,3 +1053,28 @@ def test_verify_ir_snapshot_grounding_paths() -> None:
             )
         errs = verify_ir_snapshot_grounding(tmppath)
         assert len(errs) >= 5
+
+
+def test_extract_known_attributes() -> None:
+    """Test _extract_known_attributes with various attribute and parameter representations."""
+    # 1. Dict attributes and valid params
+    rec1 = {
+        "params": [{"name": "p1"}, {"name": ""}, "not_dict"],
+        "attributes": {"attr_d1": {}, "attr_d2": {}},
+    }
+    assert _extract_known_attributes(rec1) == {"p1", "attr_d1", "attr_d2"}
+
+    # 2. List attributes with dicts and strings
+    rec2 = {
+        "params": [],
+        "attributes": [
+            {"name": "attr_l1"},
+            {"name": None},
+            "attr_str",
+            "not_dict_or_str",
+        ],
+    }
+    assert _extract_known_attributes(rec2) == {"attr_l1", "attr_str", "not_dict_or_str"}
+
+    # 3. Empty record
+    assert _extract_known_attributes({}) == set()

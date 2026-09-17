@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -364,24 +365,61 @@ def test_grounding_validator_fuzzy_suggestions() -> None:
     assert "Did you mean" not in errors_bad_attr_far[0].message
 
 
-def test_grounding_against_ml_framework_snapshots_golden() -> None:
-    """Verify GroundingValidator against real ml-framework-snapshots datasets if present."""
-    snapshots_repo = (
-        Path(__file__).resolve().parent.parent.parent / "ml-framework-snapshots"
+def test_grounding_validator_accepted_kwargs() -> None:
+    """Test GroundingValidator properly grounds accepted_kwargs and rejects hallucinated kwargs."""
+    manifest = {
+        "categories": {
+            "layers": [
+                {
+                    "name": "CustomLayer",
+                    "api_path": "torch.nn.CustomLayer",
+                    "accepted_kwargs": [
+                        "valid_kw1",
+                        {"name": "valid_kw2"},
+                        {"no_name": 123},
+                        12345,
+                    ],
+                }
+            ]
+        }
+    }
+    gv = GroundingValidator(snapshot_manifest=manifest)
+
+    # Valid kwargs should have 0 errors
+    valid_node = LogicalNode(
+        id="n_valid",
+        op_type="CustomLayer",
+        domain="torch.nn",
+        attributes={"valid_kw1": True, "valid_kw2": 128},
     )
-    snapshots_dir = snapshots_repo / "src" / "ml_framework_snapshots" / "snapshots"
-    if not snapshots_dir.exists():
-        pytest.skip(
-            "ml-framework-snapshots repository not present in sibling directory."
-        )
+    assert gv.validate_grounding(valid_node) == []
 
-    stablehlo_file = snapshots_dir / "stablehlo_v1.0.0.json"
-    if not stablehlo_file.exists():
-        candidates = sorted(snapshots_dir.glob("stablehlo*.json"))
-        if not candidates:
-            pytest.skip("StableHLO snapshot dataset not present.")
-        stablehlo_file = candidates[-1]
+    # Hallucinated kwarg should trigger error
+    bad_node = LogicalNode(
+        id="n_bad",
+        op_type="CustomLayer",
+        domain="torch.nn",
+        attributes={"hallucinated_kwarg": 999},
+    )
+    errs = gv.validate_grounding(bad_node)
+    assert len(errs) == 1
+    assert "Ungrounded attribute 'hallucinated_kwarg'" in errs[0].message
 
+
+def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None:
+    """Verify GroundingValidator against real ml-framework-snapshots datasets if present.
+
+    Args:
+        tmp_path (Path): Temporary path fixture for generating test snapshots.
+    """
+    from ml_switcheroo_ir.validator import DEFAULT_SNAPSHOT_DIR
+
+    snapshots_dir = Path(DEFAULT_SNAPSHOT_DIR)
+    stablehlo_files = sorted(snapshots_dir.glob("stablehlo*.json"))
+    if not snapshots_dir.exists() or not stablehlo_files:
+        pytest.skip("StableHLO snapshot dataset not present.")
+
+    stablehlo_file = stablehlo_files[-1]
     gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
     assert "stablehlo.dot_general" in gv.grounded_symbols
     assert "stablehlo.convolution" in gv.grounded_symbols
@@ -396,30 +434,79 @@ def test_grounding_against_ml_framework_snapshots_golden() -> None:
     )
     assert not gv.validate_grounding(valid_node)
 
-    ir_file = snapshots_dir / "ir_v0.0.3.json"
-    if not ir_file.exists():
-        candidates = sorted(snapshots_dir.glob("ir_v*.json"))
-        if not candidates:
-            pytest.skip("IR snapshot dataset not present.")
-        ir_file = candidates[-1]
-    assert ir_file.exists()
-    gv_ir = GroundingValidator(snapshot_manifest=str(ir_file))
-    assert (
-        "LogicalGraph" in gv_ir.grounded_symbols
-        or "ml_switcheroo_ir.LogicalGraph" in gv_ir.grounded_symbols
-    )
-    assert (
-        "LogicalNode" in gv_ir.grounded_symbols
-        or "ml_switcheroo_ir.LogicalNode" in gv_ir.grounded_symbols
-    )
-    assert (
-        "PartitionSpec" in gv_ir.grounded_symbols
-        or "ml_switcheroo_ir.PartitionSpec" in gv_ir.grounded_symbols
-    )
+    # Validate that loading default snapshot directory loads at least 28 manifests and > 5000 symbols
+    gv_all = GroundingValidator(use_default_if_none=True)
+    assert len(gv_all.grounded_symbols) > 5000
 
-    node_graph = LogicalNode(id="lg", op_type="LogicalGraph", domain="ml_switcheroo_ir")
-    assert not gv_ir.validate_grounding(node_graph)
-    node_node = LogicalNode(id="ln", op_type="LogicalNode", domain="ml_switcheroo_ir")
-    assert not gv_ir.validate_grounding(node_node)
-    node_spec = LogicalNode(id="ps", op_type="PartitionSpec", domain="ml_switcheroo_ir")
-    assert not gv_ir.validate_grounding(node_spec)
+    from ml_switcheroo_ir.cli import main as cli_main
+
+    ir_file = tmp_path / "ir_v0.0.3.json"
+    cli_main(["dump-snapshot", "--output", str(ir_file)])
+    assert ir_file.exists()
+
+    gv_ir = GroundingValidator(snapshot_manifest=str(ir_file))
+    assert "ai.onnx.Relu" in gv_ir.grounded_symbols
+    assert "ml.switcheroo.custom.RMSNorm" in gv_ir.grounded_symbols
+
+    node_good = LogicalNode(
+        id="n_good",
+        op_type="RMSNorm",
+        domain="ml.switcheroo.custom",
+    )
+    assert not gv_ir.validate_grounding(node_good)
+
+
+def test_grounding_against_ml_framework_snapshots_golden_skip(tmp_path: Path) -> None:
+    """Test skip branch when snapshot dataset is not present.
+
+    Args:
+        tmp_path (Path): Temporary path fixture.
+    """
+    with patch("pathlib.Path.glob", return_value=[]), pytest.raises(
+        pytest.skip.Exception
+    ):
+        test_grounding_against_ml_framework_snapshots_golden(tmp_path)
+
+
+def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> None:
+    """Test get_default_snapshots_dir resolution branches and multi-format snapshot ingestion.
+
+    Args:
+        tmp_path (Path): Temporary directory fixture.
+    """
+    from ml_switcheroo_ir.validator import get_default_snapshots_dir
+
+    # 1. Environment variable branch
+    env_dir = tmp_path / "env_snapshots"
+    env_dir.mkdir()
+    with patch.dict(os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": str(env_dir)}):
+        assert get_default_snapshots_dir() == str(env_dir)
+
+    # 2. Package find_spec failure branch falling back to sibling directory
+    with patch("importlib.util.find_spec", return_value=None):
+        sibling_path = get_default_snapshots_dir()
+        assert "ml-framework-snapshots" in sibling_path
+
+    # Spec found but snapshots dir does not exist
+    fake_spec = MagicMock()
+    fake_spec.origin = str(tmp_path / "nonexistent" / "__init__.py")
+    with patch("importlib.util.find_spec", return_value=fake_spec):
+        assert "ml-framework-snapshots" in get_default_snapshots_dir()
+
+    # 3. Exception in find_spec
+    with patch("importlib.util.find_spec", side_effect=ValueError("spec error")):
+        assert "ml-framework-snapshots" in get_default_snapshots_dir()
+
+    # 4. Ingestion of _parameter_translations, operations list, and custom list format
+    manifest_data = {
+        "_parameter_translations": {"matmul": {"roles": {"lhs": {"torch": ["input"]}}}},
+        "operations": [{"name": "hlo_op_1", "params": []}],
+        "custom_category": [{"name": "custom_list_op", "params": []}],
+        "rms_norm": {"torch": ["torch.nn.RMSNorm"]},
+    }
+    gv = GroundingValidator(snapshot_manifest=manifest_data)
+    assert "matmul" in gv.parameter_translations
+    assert "hlo_op_1" in gv.grounded_symbols
+    assert "custom_list_op" in gv.grounded_symbols
+    assert "rms_norm" in gv.concept_map
+    assert "rms_norm" in gv.grounded_symbols

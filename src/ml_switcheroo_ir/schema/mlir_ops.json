@@ -137,9 +137,14 @@
       "outputs": ["result"],
       "attributes": [
         {
-          "name": "shape",
+          "name": "staticSizes",
           "type": "List[int]",
-          "required": true
+          "required": false
+        },
+        {
+          "name": "dynamicSizes",
+          "type": "List[int]",
+          "required": false
         }
       ]
     },
@@ -229,6 +234,31 @@
       "domain": "mlir.scf",
       "inputs": ["inits"],
       "outputs": ["results"],
+      "attributes": []
+    },
+    {
+      "name": "func.func",
+      "domain": "mlir.func",
+      "inputs": [],
+      "outputs": [],
+      "attributes": [
+        {
+          "name": "sym_name",
+          "type": "str",
+          "required": true
+        },
+        {
+          "name": "function_type",
+          "type": "str",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "func.return",
+      "domain": "mlir.func",
+      "inputs": ["operands"],
+      "outputs": [],
       "attributes": []
     }
   ]

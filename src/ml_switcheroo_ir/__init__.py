@@ -637,7 +637,7 @@ class NodeDict(dict[str, "LogicalNode"]):
         elif len(args) == 1:
             super().__init__()
             items = args[0].items() if hasattr(args[0], "items") else args[0]
-            for k, v in (items if hasattr(items, "items") else dict(items).items()):
+            for k, v in items if hasattr(items, "items") else dict(items).items():
                 self[k] = v
         else:
             super().__init__(*args, **kwargs)

@@ -67,6 +67,26 @@ KNOWN_SYNONYMS: dict[tuple[str, str], str] = {
     ("arith", "mul"): "arith.mulf",
     ("arith", "add"): "arith.addf",
     ("math", "exp2"): "math.exp",
+    ("torch", "rms_norm"): "torch.nn.RMSNorm",
+    ("torch", "layer_norm"): "torch.nn.LayerNorm",
+    ("torch", "group_norm"): "torch.nn.GroupNorm",
+    ("torch", "batch_norm"): "torch.nn.BatchNorm2d",
+    ("torch", "gelu"): "torch.nn.GELU",
+    ("torch", "relu"): "torch.nn.ReLU",
+    ("torch", "silu"): "torch.nn.SiLU",
+    ("torch", "all_reduce"): "torch.distributed.all_reduce",
+    ("torch", "all_gather"): "torch.distributed.all_gather",
+    ("torch", "reduce_scatter"): "torch.distributed.reduce_scatter",
+    ("jax", "rms_norm"): "jax.nn.standardize",
+    ("jax", "gelu"): "jax.nn.gelu",
+    ("jax", "relu"): "jax.nn.relu",
+    ("jax", "silu"): "jax.nn.silu",
+    ("jax", "softmax"): "jax.nn.softmax",
+    ("tf", "rms_norm"): "tf.keras.layers.RMSNormalization",
+    ("tf", "layer_norm"): "tf.keras.layers.LayerNormalization",
+    ("tf", "gelu"): "tf.nn.gelu",
+    ("tf", "relu"): "tf.nn.relu",
+    ("tf", "silu"): "tf.nn.silu",
 }
 
 CORE_MLIR_DIALECTS: dict[str, dict[str, int]] = {
@@ -1990,18 +2010,50 @@ class GroundingAuditReport:
     diagnostics: list[ValidationError]
 
 
-DEFAULT_SNAPSHOT_DIR = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR") or os.path.abspath(
-    os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "..",
-        "..",
-        "ml-framework-snapshots",
-        "src",
-        "ml_framework_snapshots",
-        "snapshots",
+def get_default_snapshots_dir() -> str:
+    """Resolve the default directory for ground-truth framework snapshots.
+
+    Checks:
+        1. ML_FRAMEWORK_SNAPSHOTS_DIR environment variable.
+        2. Installed ml_framework_snapshots package directory.
+        3. Local sibling repository checkout.
+
+    Returns:
+        str: Absolute path to snapshot directory.
+    """
+    env_dir = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR")
+    if env_dir and os.path.isdir(env_dir):
+        return os.path.abspath(env_dir)
+
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("ml_framework_snapshots")
+        if spec and spec.origin:
+            pkg_dir = os.path.join(os.path.dirname(spec.origin), "snapshots")
+            if os.path.isdir(pkg_dir) and any(
+                f.endswith((".json", ".json.gz")) for f in os.listdir(pkg_dir)
+            ):
+                return os.path.abspath(pkg_dir)
+    except (ImportError, AttributeError, ValueError):
+        pass
+
+    sibling_dir = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "..",
+            "ml-framework-snapshots",
+            "src",
+            "ml_framework_snapshots",
+            "snapshots",
+        )
     )
-)
+    return sibling_dir
+
+
+DEFAULT_SNAPSHOT_DIR = get_default_snapshots_dir()
 
 
 class GroundingValidator(Validator):
@@ -2023,6 +2075,8 @@ class GroundingValidator(Validator):
         """
         super().__init__(registry=registry)
         self.grounded_symbols: dict[str, dict[str, Any]] = {}
+        self.concept_map: dict[str, Any] = {}
+        self.parameter_translations: dict[str, Any] = {}
 
         if snapshot_manifest is not None:
             self._ingest_manifest_target(snapshot_manifest)
@@ -2117,6 +2171,11 @@ class GroundingValidator(Validator):
                 if isinstance(item, dict):
                     self._register_symbol_record(item)
         elif isinstance(data, dict):
+            if "_parameter_translations" in data and isinstance(
+                data["_parameter_translations"], dict
+            ):
+                self.parameter_translations.update(data["_parameter_translations"])
+
             if "categories" in data and isinstance(data["categories"], dict):
                 for cat_list in data["categories"].values():
                     if isinstance(cat_list, list):
@@ -2129,7 +2188,21 @@ class GroundingValidator(Validator):
                                 self._register_symbol_record(item)
             else:
                 for k, v in data.items():
+                    if k == "_parameter_translations":
+                        continue
                     if isinstance(v, dict):
+                        if any(
+                            fw in v
+                            for fw in (
+                                "torch",
+                                "jax",
+                                "tensorflow",
+                                "tf",
+                                "stablehlo",
+                                "numpy",
+                            )
+                        ):
+                            self.concept_map[k] = v
                         self._register_symbol_record(v, default_key=k)
                     elif isinstance(v, list):
                         for item in v:
@@ -2251,6 +2324,14 @@ class GroundingValidator(Validator):
                         known_params.add(op["name"])
                     elif isinstance(op, str):
                         known_params.add(op)
+
+            accepted_kwargs = match.get("accepted_kwargs") or match.get("kwargs")
+            if isinstance(accepted_kwargs, list):
+                for kw in accepted_kwargs:
+                    if isinstance(kw, str):
+                        known_params.add(kw)
+                    elif isinstance(kw, dict) and "name" in kw:
+                        known_params.add(kw["name"])
 
             if known_params:
                 for attr_key in node.attributes:

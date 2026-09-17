@@ -8,14 +8,7 @@ from typing import Any
 
 @dataclass
 class OpAttribute:
-    """Represents a single operator attribute schema.
-
-    Attributes:
-        name (str): The name of the attribute.
-        type (str): The Python type annotation as a string.
-        required (bool): Whether the attribute is required.
-        default (Any): The default value of the attribute, if any.
-    """
+    """Represents a single operator attribute schema."""
 
     name: str
     type: str
@@ -25,16 +18,7 @@ class OpAttribute:
 
 @dataclass
 class OpSchema:
-    """Represents a single operator schema.
-
-    Attributes:
-        name (str): The name of the operator.
-        domain (str): The domain of the operator.
-        version (int): The opset version.
-        attributes (Dict[str, OpAttribute]): Dictionary mapping attribute name to schema.
-        inputs (List[str]): List of expected input names.
-        outputs (List[str]): List of expected output names.
-    """
+    """Represents a single operator schema."""
 
     name: str
     domain: str
@@ -371,7 +355,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
                 name="activation", type="str", required=False, default="none"
             ),
         },
-        inputs=["input", "weight", "bias", "past_state"],
+        inputs=[],
         outputs=["output", "present_state"],
     ),
     "Ceil": OpSchema(
@@ -495,7 +479,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
                 name="value_strings", type="List[str]", required=False, default=None
             ),
         },
-        inputs=["output"],
+        inputs=[],
         outputs=["output"],
     ),
     "ConstantOfShape": OpSchema(
@@ -1245,7 +1229,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
                 name="update_rule", type="str", required=False, default="gated_delta"
             ),
         },
-        inputs=["query", "key", "value", "past_state", "decay", "beta"],
+        inputs=[],
         outputs=["output", "present_state"],
     ),
     "Log": OpSchema(
@@ -1760,7 +1744,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
                 name="shape", type="List[int]", required=True, default=None
             ),
         },
-        inputs=["output"],
+        inputs=[],
         outputs=["output"],
     ),
     "RandomNormalLike": OpSchema(
@@ -1797,7 +1781,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
                 name="shape", type="List[int]", required=True, default=None
             ),
         },
-        inputs=["output"],
+        inputs=[],
         outputs=["output"],
     ),
     "RandomUniformLike": OpSchema(
@@ -1821,11 +1805,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
         name="Range",
         domain="ai.onnx",
         version=27,
-        attributes={
-            "stash_type": OpAttribute(
-                name="stash_type", type="int", required=False, default=1
-            ),
-        },
+        attributes={},
         inputs=["start", "limit", "delta"],
         outputs=["output"],
     ),
@@ -2241,7 +2221,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
                 name="dtype", type="int", required=False, default=None
             ),
         },
-        inputs=["output"],
+        inputs=[],
         outputs=["output"],
     ),
     "SequenceErase": OpSchema(
@@ -2667,6 +2647,14 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
         name="Xor",
         domain="ai.onnx",
         version=7,
+        attributes={},
+        inputs=["A", "B"],
+        outputs=["C"],
+    ),
+    "ai.onnx.preview.FlexAttention": OpSchema(
+        name="ai.onnx.preview.FlexAttention",
+        domain="ai.onnx.preview",
+        version=1,
         attributes={
             "prob_mod": OpAttribute(
                 name="prob_mod", type="Any", required=False, default=None
@@ -2681,12 +2669,12 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
                 name="softmax_precision", type="int", required=False, default=None
             ),
         },
-        inputs=["A", "B"],
-        outputs=["C"],
+        inputs=["Q", "K", "V"],
+        outputs=["Y"],
     ),
     "ai.onnx.preview.training.Adagrad": OpSchema(
         name="ai.onnx.preview.training.Adagrad",
-        domain="ai.onnx",
+        domain="ai.onnx.preview.training",
         version=1,
         attributes={
             "decay_factor": OpAttribute(
@@ -2704,7 +2692,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
     ),
     "ai.onnx.preview.training.Adam": OpSchema(
         name="ai.onnx.preview.training.Adam",
-        domain="ai.onnx",
+        domain="ai.onnx.preview.training",
         version=1,
         attributes={
             "alpha": OpAttribute(
@@ -2728,7 +2716,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
     ),
     "ai.onnx.preview.training.Gradient": OpSchema(
         name="ai.onnx.preview.training.Gradient",
-        domain="ai.onnx",
+        domain="ai.onnx.preview.training",
         version=1,
         attributes={
             "xs": OpAttribute(name="xs", type="List[str]", required=True, default=None),
@@ -2742,7 +2730,7 @@ ONNX_REGISTRY: dict[str, OpSchema] = {
     ),
     "ai.onnx.preview.training.Momentum": OpSchema(
         name="ai.onnx.preview.training.Momentum",
-        domain="ai.onnx",
+        domain="ai.onnx.preview.training",
         version=1,
         attributes={
             "alpha": OpAttribute(

@@ -494,12 +494,7 @@
         "default": "none"
       }
     },
-    "inputs": [
-      "input",
-      "weight",
-      "bias",
-      "past_state"
-    ],
+    "inputs": [],
     "outputs": [
       "output",
       "present_state"
@@ -695,9 +690,7 @@
         "default": null
       }
     },
-    "inputs": [
-      "output"
-    ],
+    "inputs": [],
     "outputs": [
       "output"
     ]
@@ -1911,14 +1904,7 @@
         "default": "gated_delta"
       }
     },
-    "inputs": [
-      "query",
-      "key",
-      "value",
-      "past_state",
-      "decay",
-      "beta"
-    ],
+    "inputs": [],
     "outputs": [
       "output",
       "present_state"
@@ -2722,9 +2708,7 @@
         "default": null
       }
     },
-    "inputs": [
-      "output"
-    ],
+    "inputs": [],
     "outputs": [
       "output"
     ]
@@ -2791,9 +2775,7 @@
         "default": null
       }
     },
-    "inputs": [
-      "output"
-    ],
+    "inputs": [],
     "outputs": [
       "output"
     ]
@@ -2833,13 +2815,7 @@
   "Range": {
     "domain": "ai.onnx",
     "version": 27,
-    "attributes": {
-      "stash_type": {
-        "type": "int",
-        "required": false,
-        "default": 1
-      }
-    },
+    "attributes": {},
     "inputs": [
       "start",
       "limit",
@@ -3464,9 +3440,7 @@
         "default": null
       }
     },
-    "inputs": [
-      "output"
-    ],
+    "inputs": [],
     "outputs": [
       "output"
     ]
@@ -4145,6 +4119,18 @@
   "Xor": {
     "domain": "ai.onnx",
     "version": 7,
+    "attributes": {},
+    "inputs": [
+      "A",
+      "B"
+    ],
+    "outputs": [
+      "C"
+    ]
+  },
+  "ai.onnx.preview.FlexAttention": {
+    "domain": "ai.onnx.preview",
+    "version": 1,
     "attributes": {
       "prob_mod": {
         "type": "Any",
@@ -4168,15 +4154,16 @@
       }
     },
     "inputs": [
-      "A",
-      "B"
+      "Q",
+      "K",
+      "V"
     ],
     "outputs": [
-      "C"
+      "Y"
     ]
   },
   "ai.onnx.preview.training.Adagrad": {
-    "domain": "ai.onnx",
+    "domain": "ai.onnx.preview.training",
     "version": 1,
     "attributes": {
       "decay_factor": {
@@ -4205,7 +4192,7 @@
     ]
   },
   "ai.onnx.preview.training.Adam": {
-    "domain": "ai.onnx",
+    "domain": "ai.onnx.preview.training",
     "version": 1,
     "attributes": {
       "alpha": {
@@ -4244,7 +4231,7 @@
     ]
   },
   "ai.onnx.preview.training.Gradient": {
-    "domain": "ai.onnx",
+    "domain": "ai.onnx.preview.training",
     "version": 1,
     "attributes": {
       "xs": {
@@ -4271,7 +4258,7 @@
     ]
   },
   "ai.onnx.preview.training.Momentum": {
-    "domain": "ai.onnx",
+    "domain": "ai.onnx.preview.training",
     "version": 1,
     "attributes": {
       "alpha": {

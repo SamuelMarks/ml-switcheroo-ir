@@ -8,8 +8,10 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
+from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 from ml_switcheroo_ir.validator import (
@@ -58,6 +60,31 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     return None
 
 
+def _extract_known_attributes(sym_record: dict[str, Any]) -> set[str]:
+    """Extract known parameter and attribute names from a snapshot symbol record.
+
+    Args:
+        sym_record: Snapshot symbol dictionary.
+
+    Returns:
+        Set of grounded attribute/parameter names.
+    """
+    known: set[str] = set()
+    for p in sym_record.get("params") or []:
+        if isinstance(p, dict) and p.get("name"):
+            known.add(str(p["name"]))
+    attrs_obj = sym_record.get("attributes")
+    if isinstance(attrs_obj, dict):
+        known.update(attrs_obj.keys())
+    elif isinstance(attrs_obj, list):
+        for a in attrs_obj:
+            if isinstance(a, dict) and a.get("name"):
+                known.add(str(a["name"]))
+            elif isinstance(a, str) and a:
+                known.add(a)
+    return known
+
+
 def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
     """Verify all StableHLO registry schemas against stablehlo snapshot.
 
@@ -92,17 +119,8 @@ def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
             f"stablehlo.{op_name}"
         )
         if sym_record:
-            known_attrs: set[str] = set()
-            for p in sym_record.get("params") or []:
-                if isinstance(p, dict) and "name" in p:
-                    known_attrs.add(p["name"])
-            for a in sym_record.get("attributes") or []:
-                if isinstance(a, dict) and "name" in a:
-                    known_attrs.add(a["name"])
-
+            known_attrs = _extract_known_attributes(sym_record)
             for attr_name in schema.attributes:
-                if op_name == "custom_call" and attr_name == "api_version":
-                    continue
                 if known_attrs and attr_name not in known_attrs:
                     errors.append(
                         f"StableHLO op '{op_name}' attribute '{attr_name}' is not grounded in snapshot attributes {list(known_attrs)}."
@@ -144,7 +162,7 @@ def verify_onnx_grounding() -> list[str]:
             errors.append(
                 f"ONNX schema name mismatch: key '{op_name}' != schema.name '{schema.name}'."
             )
-        if schema.domain != "ai.onnx":
+        if not (schema.domain == "ai.onnx" or schema.domain.startswith("ai.onnx.")):
             errors.append(
                 f"ONNX op '{op_name}' has unexpected domain '{schema.domain}'."
             )
@@ -173,18 +191,30 @@ def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
         data = json.load(f)
 
     known_dialects: set[str] = set()
+    known_symbols: dict[str, dict[str, Any]] = {}
     for cat_items in data.get("categories", {}).values():
         if isinstance(cat_items, list):
             for item in cat_items:
                 if isinstance(item, dict) and "api_path" in item:
                     prefix = item["api_path"].split(".")[0]
                     known_dialects.add(prefix)
+                    known_symbols[item["api_path"]] = item
 
     for dialect in CORE_MLIR_DIALECTS:
         if known_dialects and dialect not in known_dialects:
             errors.append(
                 f"Core MLIR dialect '{dialect}' is not grounded in {mlir_file.name}."
             )
+
+    for op_name, schema in MLIR_REGISTRY.items():
+        sym_record = known_symbols.get(op_name)
+        if sym_record:
+            known_attrs = _extract_known_attributes(sym_record)
+            for attr_name in schema.attributes:
+                if known_attrs and attr_name not in known_attrs:
+                    errors.append(
+                        f"MLIR op '{op_name}' attribute '{attr_name}' is not grounded in {mlir_file.name} snapshot attributes {list(known_attrs)}."
+                    )
 
     return errors
 
