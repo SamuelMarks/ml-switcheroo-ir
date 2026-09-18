@@ -2,21 +2,27 @@
 
 `ml-switcheroo-ir` provides both a Python API and an operational CLI utility for the `ml-switcheroo` and `zero-*` compilation ecosystem.
 
-This guide details programmatic graph manipulation, multi-dialect schema validation, anti-hallucination grounding audits with `ml-framework-snapshots`, and static compliance analysis.
+This guide details programmatic graph manipulation, multi-dialect schema validation, anti-hallucination grounding audits with `ml-framework-snapshots`, static compliance analysis, pure-IR transformations, cross-framework parameter translation, and hardware ISA validation.
 
 ---
 
 ## Table of Contents
 
 1. [Programmatic Python API](#1-programmatic-python-api)
-   - [Constructing Graphs & Nodes](#constructing-graphs--nodes)
+   - [Constructing Graphs, Nodes & Nested Subgraphs](#constructing-graphs-nodes--nested-subgraphs)
    - [Multi-Output Nodes & SSA Value Tracking](#multi-output-nodes--ssa-value-tracking)
    - [Distributed Sharding & Device Meshes](#distributed-sharding--device-meshes)
+   - [SPMD Sharding Propagation & Pipeline Validation](#spmd-sharding-propagation--pipeline-validation)
+   - [Analytical Collective Communication Cost Estimation](#analytical-collective-communication-cost-estimation)
    - [Topological Sorting & Cycle Detection](#topological-sorting--cycle-detection)
-   - [Dual JSON Serialization](#dual-json-serialization)
+   - [Dual JSON Serialization & High-Throughput Streaming I/O](#dual-json-serialization--high-throughput-streaming-io)
+   - [Native Graph Optimizations (DCE, CSE, Shape Propagation)](#native-graph-optimizations-dce-cse-shape-propagation)
+   - [Zero-Hallucination Parameter Translation](#zero-hallucination-parameter-translation)
+   - [Hardware ISA & GPU Shader Validation](#hardware-isa--gpu-shader-validation)
    - [Extending Custom Operator Schemas](#extending-custom-operator-schemas)
    - [Validating Graphs](#validating-graphs)
    - [Auditing Graphs with `ml-framework-snapshots`](#auditing-graphs-with-ml-framework-snapshots)
+   - [Programmatic Schema Export & TypeScript Generation](#programmatic-schema-export--typescript-generation)
 2. [Interface Protocols for Compilers & Frontends](#2-interface-protocols-for-compilers--frontends)
    - [Implementing `GraphFrontend`](#implementing-graphfrontend)
    - [Implementing `CompilerBackend`](#implementing-compilerbackend)
@@ -33,14 +39,16 @@ This guide details programmatic graph manipulation, multi-dialect schema validat
    - [Recipe A: Tracking `zero-*` Dialect Implementation Progress](#recipe-a-tracking-zero--dialect-implementation-progress)
    - [Recipe B: Pre-Compilation Sanitization in CI/CD](#recipe-b-pre-compilation-sanitization-in-cicd)
    - [Recipe C: Validating StableHLO & MLIR Lowerings](#recipe-c-validating-stablehlo--mlir-lowerings)
+   - [Recipe D: Hardware-Specific SASS Scoreboarding & RDNA3 VOPD Validation](#recipe-d-hardware-specific-sass-scoreboarding--rdna3-vopd-validation)
+   - [Recipe E: Pre-Lowering Graph Optimization Pipeline](#recipe-e-pre-lowering-graph-optimization-pipeline)
 
 ---
 
 ## 1. Programmatic Python API
 
-### Constructing Graphs & Nodes
+### Constructing Graphs, Nodes & Nested Subgraphs
 
-A computation graph is represented by `LogicalGraph`, containing `LogicalNode` instances connected by input strings or `LogicalEdge` objects.
+A computation graph is represented by `LogicalGraph`, containing `LogicalNode` instances connected by input strings or `LogicalEdge` objects. Nodes can also contain nested subgraphs for control flow (`body`, `then`, `else`) or autodiff (`bwd`, `jvp`):
 
 ```python
 from ml_switcheroo_ir import (
@@ -80,6 +88,31 @@ assert graph["norm"].op_type == "RMSNorm"
 assert len(graph) == 2
 for node in graph:
     print(f"Node: {node.id} ({node.op_type})")
+
+# Nested Subgraph Example: Loop or Conditional Block
+body_node = LogicalNode(
+    id="body_add",
+    op_type="Add",
+    domain="ai.onnx",
+    inputs=["sub_x", "sub_y"],
+    outputs=["sub_out"],
+)
+body_subgraph = LogicalGraph(
+    name="LoopBody",
+    nodes={"body_add": body_node},
+    outputs=["sub_out"],
+)
+
+loop_node = LogicalNode(
+    id="loop1",
+    op_type="Loop",
+    domain="ai.onnx",
+    inputs=["max_trip", "cond", "init_val"],
+    outputs=["final_val"],
+    subgraphs={"body": body_subgraph},
+)
+control_graph = LogicalGraph(nodes={"loop1": loop_node})
+assert "body" in control_graph["loop1"].subgraphs
 ```
 
 ### Multi-Output Nodes & SSA Value Tracking
@@ -131,6 +164,94 @@ sharded_node = LogicalNode(
 graph = LogicalGraph(nodes={"weights": sharded_node}, mesh=mesh)
 ```
 
+### SPMD Sharding Propagation & Pipeline Validation
+
+Verify distributed invariants, cross-stage pipelining boundaries, and activation checkpointing scopes:
+
+```python
+from ml_switcheroo_ir import (
+    LogicalGraph,
+    LogicalMesh,
+    LogicalNode,
+    PartitionSpec,
+)
+from ml_switcheroo_ir.validator import Validator
+
+mesh = LogicalMesh(shape={"data": 4, "model": 2})
+
+# 1. Sharding Propagation Verification (Elementwise, Contraction, Reduction)
+n1 = LogicalNode(
+    id="n1",
+    op_type="Relu",
+    domain="ai.onnx",
+    sharding=PartitionSpec(axes=("data", None)),
+)
+n2 = LogicalNode(
+    id="n2",
+    op_type="Relu",
+    domain="ai.onnx",
+    inputs=["n1"],
+    sharding=PartitionSpec(axes=("data", None)),
+)
+dist_graph = LogicalGraph(nodes={"n1": n1, "n2": n2}, mesh=mesh)
+
+validator = Validator()
+sharding_errors = validator.validate_sharding_propagation(dist_graph)
+assert not sharding_errors
+
+# 2. Pipeline Stage Progression & Checkpoint Scope Validation
+s0 = LogicalNode(
+    id="stage0",
+    op_type="Relu",
+    domain="ai.onnx",
+    attributes={"pipeline_stage": 0},
+)
+s1 = LogicalNode(
+    id="stage1",
+    op_type="Relu",
+    domain="ai.onnx",
+    inputs=["stage0"],
+    attributes={"pipeline_stage": 1, "checkpoint_tag": "recompute"},
+)
+pipe_graph = LogicalGraph(nodes={"stage0": s0, "stage1": s1})
+pipe_errors = validator.validate_pipeline_and_checkpointing(pipe_graph)
+assert not pipe_errors
+```
+
+### Analytical Collective Communication Cost Estimation
+
+Calculate exact closed-form byte-level transfer volumes for distributed operations (`AllReduce`, `AllGather`, `ReduceScatter`, `P2P`):
+
+```python
+from ml_switcheroo_ir import (
+    LogicalGraph,
+    LogicalMesh,
+    LogicalNode,
+    estimate_communication_volume,
+    estimate_graph_communication_volume,
+)
+
+mesh = LogicalMesh(shape={"data": 4, "model": 2})
+
+# 1. Estimate single collective volume
+# 1024x1024 float32 tensor (4 MB) AllReduce along 4 data devices: 2 * (3/4) * 4 MB = 6 MB
+ar_node = LogicalNode(
+    id="all_reduce1",
+    op_type="collective.all_reduce",
+    domain="collective",
+    shape_metadata=(1024, 1024),
+    attributes={"reduction_op": "sum", "mesh_axis": "data", "dtype": "float32"},
+)
+vol_bytes = estimate_communication_volume(ar_node, mesh)
+assert vol_bytes == 6 * 1024 * 1024
+
+# 2. Aggregate whole-graph communication volume
+coll_graph = LogicalGraph(nodes={"all_reduce1": ar_node}, mesh=mesh)
+summary = estimate_graph_communication_volume(coll_graph)
+print(f"Total Transfer: {summary['total_volume_bytes']} bytes")
+print(f"By Mesh Axis: {summary['by_axis']}")
+```
+
 ### Topological Sorting & Cycle Detection
 
 Sort nodes into valid execution order:
@@ -145,17 +266,112 @@ except CyclicGraphError as e:
     print("Graph contains dependency cycles:", e)
 ```
 
-### Dual JSON Serialization
+### Dual JSON Serialization & High-Throughput Streaming I/O
 
-Serialize and deserialize graphs deterministically across frontends and backends:
+Serialize and deserialize graphs deterministically across frontends and backends, including zero-allocation streaming and compressed formats:
 
 ```python
-# Serialize to canonical JSON (with deterministic keys and explicit edges)
+# 1. Deterministic JSON serialization
 json_str = graph.to_json(format="canonical", indent=2)
-
-# Load graph from JSON (supports both dictionary and list node structures)
 restored_graph = LogicalGraph.from_json(json_str)
 assert len(restored_graph) == len(graph)
+
+# 2. Streaming directly to a writable stream (avoids giant string allocations)
+with open("model.json", "w", encoding="utf-8") as f:
+    graph.to_stream(f)
+
+# 3. High-throughput compressed disk I/O (gzip and zstandard)
+graph.to_file("model.json.gz")
+graph_gz = LogicalGraph.from_file("model.json.gz")
+assert len(graph_gz) == len(graph)
+```
+
+### Native Graph Optimizations (DCE, CSE, Shape Propagation)
+
+`ml-switcheroo-ir` includes native, framework-agnostic transformation passes in `ml_switcheroo_ir.transforms`:
+
+```python
+from ml_switcheroo_ir import (
+    LogicalGraph,
+    LogicalNode,
+    eliminate_common_subexpressions,
+    eliminate_dead_nodes,
+    propagate_shapes_and_constants,
+)
+
+# Dead Code Elimination (DCE): preserves explicit outputs and side-effecting ops (e.g. Print, custom_call)
+clean_graph = eliminate_dead_nodes(graph)
+
+# Common Subexpression Elimination (CSE): eliminates identical redundant computations
+deduped_graph = eliminate_common_subexpressions(clean_graph)
+
+# Shape Propagation & Constant Folding: propagates tensor shapes and folds dead constant subgraphs
+optimized_graph = propagate_shapes_and_constants(deduped_graph)
+```
+
+### Zero-Hallucination Parameter Translation
+
+Translate parameter and attribute names across frameworks (`torch`, `jax`, `tf`, `stablehlo`, `numpy`) driven by `concept_map.json`:
+
+```python
+from ml_switcheroo_ir.translation import ParameterTranslationEngine
+
+engine = ParameterTranslationEngine()
+
+# 1. Translate a single parameter name
+# Normalization: PyTorch 'eps' -> TensorFlow 'epsilon'
+tf_param = engine.translate_parameter(
+    operation="normalization",
+    param_name="eps",
+    source_framework="torch",
+    target_framework="tf",
+)
+assert tf_param == "epsilon"
+
+# 2. Translate an entire attributes dictionary (strict zero-hallucination policy)
+torch_attrs = {"eps": 1e-5, "weight": 1.0}
+tf_attrs = engine.translate_attributes(
+    operation="normalization",
+    attributes=torch_attrs,
+    source_framework="torch",
+    target_framework="tf",
+)
+assert tf_attrs == {"epsilon": 1e-5, "gamma": 1.0}
+```
+
+### Hardware ISA & GPU Shader Validation
+
+Validate hardware GPU assembly instructions and WebGPU WGSL shaders against architectural constraints:
+
+```python
+from ml_switcheroo_ir import LogicalNode
+from ml_switcheroo_ir.validator import Validator
+
+validator = Validator()
+
+# 1. AMD RDNA3 / GFX11 Dual-Issue VOPD Pairing Validation
+v_add = LogicalNode(id="op1", op_type="V_DUAL_ADD_F32", domain="amd_rdna")
+v_mul = LogicalNode(id="op2", op_type="V_DUAL_MUL_F32", domain="amd_rdna")
+vopd_errors = validator.validate_vopd_pairing(v_add, v_mul)
+assert not vopd_errors
+
+# 2. NVIDIA SASS Scoreboard Latency Hazard Detection
+sass_write = LogicalNode(
+    id="i1",
+    op_type="FFMA",
+    domain="nvidia_sass",
+    attributes={"dst_reg": "R0", "stall_count": 0},
+    outputs=["R0"],
+)
+sass_read = LogicalNode(
+    id="i2",
+    op_type="FADD",
+    domain="nvidia_sass",
+    attributes={"src_regs": ["R0"], "dst_reg": "R1"},
+    inputs=["R0"],
+)
+hazards = validator.validate_sass_scoreboarding([sass_write, sass_read])
+assert len(hazards) == 1  # Flags hazard: FFMA has latency 4 but stall_count was 0
 ```
 
 ### Extending Custom Operator Schemas
@@ -220,6 +436,29 @@ print(f"Hallucination Score: {report.hallucination_score:.1%}")
 if report.diagnostics:
     for err in report.diagnostics:
         print(f"  [Hallucination] Node {err.node_id}: {err.message}")
+```
+
+### Programmatic Schema Export & TypeScript Generation
+
+Emit Draft 2020-12 conforming JSON Schemas and TypeScript interface definitions for frontend and playground integrations:
+
+```python
+from ml_switcheroo_ir import (
+    export_schemas,
+    generate_typescript_definitions,
+    get_json_schema,
+)
+
+# 1. Fetch Draft 2020-12 JSON Schema dictionary
+schema = get_json_schema("LogicalGraph")
+assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+
+# 2. Generate TypeScript interfaces mirroring LogicalGraph and LogicalNode
+ts_code = generate_typescript_definitions()
+assert "export interface LogicalGraph" in ts_code
+
+# 3. Export all schemas to disk
+export_schemas(out_dir="dist/schemas")
 ```
 
 ---
@@ -333,10 +572,10 @@ Target                  Compliance %    Reqs Met    Status
 ----------------------  --------------  ----------  --------
 my_framework (Dir)      100%            4/4         PASS
 
-DIALECT Compliance (ONNX Superset, 204 total ops):
+DIALECT Compliance (ONNX Superset, 205 total ops):
 Target                  Compliance %    Ops Implemented    Status      Missing Ops
 ----------------------  --------------  -----------------  --------  -------------
-my_framework (Dir)      56.9%           116/204            FAIL                 88
+my_framework (Dir)      56.6%           116/205            FAIL                 89
 ```
 
 #### Generating Missing-Symbol Checklists (`-v` / `-m`)
@@ -502,4 +741,56 @@ graph = LogicalGraph(nodes={"lhs": lhs_node, "rhs": rhs_node, "dot": dot_node})
 validator = Validator()
 errors = validator.validate_graph(graph)
 assert not errors, f"StableHLO validation failed: {errors}"
+```
+
+### Recipe D: Hardware-Specific SASS Scoreboarding & RDNA3 VOPD Validation
+
+When compiling down to GPU assembly instructions:
+
+```python
+from ml_switcheroo_ir import LogicalNode
+from ml_switcheroo_ir.validator import Validator
+
+validator = Validator()
+
+# Audit SASS instructions for latency pipeline hazards
+sass_instructions = [
+    LogicalNode(
+        id="i1",
+        op_type="FFMA",
+        domain="nvidia_sass",
+        attributes={"dst_reg": "R0", "stall_count": 4},
+        outputs=["R0"],
+    ),
+    LogicalNode(
+        id="i2",
+        op_type="FADD",
+        domain="nvidia_sass",
+        attributes={"src_regs": ["R0"], "dst_reg": "R1"},
+        inputs=["R0"],
+    ),
+]
+scoreboard_hazards = validator.validate_sass_scoreboarding(sass_instructions)
+assert not scoreboard_hazards, f"Hazard detected: {scoreboard_hazards}"
+```
+
+### Recipe E: Pre-Lowering Graph Optimization Pipeline
+
+Chain native graph passes before handing the IR to target code synthesis:
+
+```python
+from ml_switcheroo_ir import (
+    LogicalGraph,
+    eliminate_common_subexpressions,
+    eliminate_dead_nodes,
+    propagate_shapes_and_constants,
+)
+
+
+def optimize_for_lowering(raw_graph: LogicalGraph) -> LogicalGraph:
+    """Run canonical dead-code, subexpression, and constant-folding passes."""
+    g = eliminate_dead_nodes(raw_graph)
+    g = eliminate_common_subexpressions(g)
+    g = propagate_shapes_and_constants(g)
+    return g
 ```

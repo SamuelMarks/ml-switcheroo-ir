@@ -134,6 +134,39 @@ def test_readme_quickstart_json_serialization() -> None:
     assert restored_graph["attn"].op_type == "FlashAttention"
 
 
+def test_readme_quickstart_transforms_and_translation(tmp_path: object) -> None:
+    """Test README Quick Starts 4 (compressed I/O), 5 (transforms), and 6 (translation)."""
+    from ml_switcheroo_ir import (
+        eliminate_common_subexpressions,
+        eliminate_dead_nodes,
+        propagate_shapes_and_constants,
+    )
+    from ml_switcheroo_ir.translation import ParameterTranslationEngine
+
+    n_in = LogicalNode(id="x", op_type="Input")
+    n_live = LogicalNode(id="live", op_type="Relu", domain="ai.onnx", inputs=["x"])
+    graph = LogicalGraph(nodes={"x": n_in, "live": n_live}, outputs=["live"])
+
+    clean_graph = eliminate_dead_nodes(graph)
+    deduped_graph = eliminate_common_subexpressions(clean_graph)
+    optimized_graph = propagate_shapes_and_constants(deduped_graph)
+    assert len(optimized_graph) == 2
+
+    engine = ParameterTranslationEngine()
+    tf_attrs = engine.translate_attributes(
+        operation="normalization",
+        attributes={"eps": 1e-5, "weight": 1.0},
+        source_framework="torch",
+        target_framework="tf",
+    )
+    assert tf_attrs == {"epsilon": 1e-5, "gamma": 1.0}
+
+    gz_file = str(tmp_path) + "/model.json.gz"
+    graph.to_file(gz_file)
+    disk_graph = LogicalGraph.from_file(gz_file)
+    assert len(disk_graph) == len(graph)
+
+
 def test_readme_frontend_backend_contracts() -> None:
     """Test README frontend (GraphFrontend) and backend (CompilerBackend) protocol implementations."""
 
@@ -395,3 +428,233 @@ def test_dialect_md_json_examples() -> None:
     v = Validator()
     assert not v.validate_node(linear_node)
     assert not v.validate_node(flash_node)
+
+
+def test_usage_nested_subgraphs() -> None:
+    """Test USAGE.md Section 1.1: Nested subgraphs in LogicalNode."""
+    body_node = LogicalNode(
+        id="body_add",
+        op_type="Add",
+        domain="ai.onnx",
+        inputs=["sub_x", "sub_y"],
+        outputs=["sub_out"],
+    )
+    body_subgraph = LogicalGraph(
+        name="LoopBody",
+        nodes={"body_add": body_node},
+        outputs=["sub_out"],
+    )
+
+    loop_node = LogicalNode(
+        id="loop1",
+        op_type="Loop",
+        domain="ai.onnx",
+        inputs=["max_trip", "cond", "init_val"],
+        outputs=["final_val"],
+        subgraphs={"body": body_subgraph},
+    )
+    control_graph = LogicalGraph(nodes={"loop1": loop_node})
+    assert "body" in control_graph["loop1"].subgraphs
+    assert control_graph["loop1"].subgraphs["body"].name == "LoopBody"
+
+
+def test_usage_sharding_propagation_and_pipeline() -> None:
+    """Test USAGE.md Section 1.4: SPMD Sharding Propagation and Pipeline Validation."""
+    mesh = LogicalMesh(shape={"data": 4, "model": 2})
+
+    n1 = LogicalNode(
+        id="n1",
+        op_type="Relu",
+        domain="ai.onnx",
+        sharding=PartitionSpec(axes=("data", None)),
+    )
+    n2 = LogicalNode(
+        id="n2",
+        op_type="Relu",
+        domain="ai.onnx",
+        inputs=["n1"],
+        sharding=PartitionSpec(axes=("data", None)),
+    )
+    dist_graph = LogicalGraph(nodes={"n1": n1, "n2": n2}, mesh=mesh)
+
+    validator = Validator()
+    sharding_errors = validator.validate_sharding_propagation(dist_graph)
+    assert not sharding_errors
+
+    s0 = LogicalNode(
+        id="stage0",
+        op_type="Relu",
+        domain="ai.onnx",
+        attributes={"pipeline_stage": 0},
+    )
+    s1 = LogicalNode(
+        id="stage1",
+        op_type="Relu",
+        domain="ai.onnx",
+        inputs=["stage0"],
+        attributes={"pipeline_stage": 1, "checkpoint_tag": "recompute"},
+    )
+    pipe_graph = LogicalGraph(nodes={"stage0": s0, "stage1": s1})
+    pipe_errors = validator.validate_pipeline_and_checkpointing(pipe_graph)
+    assert not pipe_errors
+
+
+def test_usage_collective_communication_estimation() -> None:
+    """Test USAGE.md Section 1.5: Analytical Collective Communication Cost Estimation."""
+    from ml_switcheroo_ir import (
+        estimate_communication_volume,
+        estimate_graph_communication_volume,
+    )
+
+    mesh = LogicalMesh(shape={"data": 4, "model": 2})
+    ar_node = LogicalNode(
+        id="all_reduce1",
+        op_type="collective.all_reduce",
+        domain="collective",
+        shape_metadata=(1024, 1024),
+        attributes={"reduction_op": "sum", "mesh_axis": "data", "dtype": "float32"},
+    )
+    vol_bytes = estimate_communication_volume(ar_node, mesh)
+    assert vol_bytes == 6 * 1024 * 1024
+
+    coll_graph = LogicalGraph(nodes={"all_reduce1": ar_node}, mesh=mesh)
+    summary = estimate_graph_communication_volume(coll_graph)
+    assert summary["total_volume_bytes"] == 6 * 1024 * 1024
+    assert summary["by_axis"]["data"] == 6 * 1024 * 1024
+
+
+def test_usage_native_graph_optimizations() -> None:
+    """Test USAGE.md Section 1.8: Native Graph Optimizations (DCE, CSE, Shape Propagation)."""
+    from ml_switcheroo_ir import (
+        eliminate_common_subexpressions,
+        eliminate_dead_nodes,
+        propagate_shapes_and_constants,
+    )
+
+    n_in = LogicalNode(id="x", op_type="Input")
+    n_live = LogicalNode(id="live", op_type="Relu", domain="ai.onnx", inputs=["x"])
+    n_dead = LogicalNode(id="dead", op_type="Relu", domain="ai.onnx", inputs=["x"])
+    graph = LogicalGraph(
+        nodes={"x": n_in, "live": n_live, "dead": n_dead},
+        outputs=["live"],
+    )
+
+    clean_graph = eliminate_dead_nodes(graph)
+    assert "dead" not in clean_graph.nodes
+    assert "live" in clean_graph.nodes
+
+    deduped_graph = eliminate_common_subexpressions(clean_graph)
+    assert len(deduped_graph) == 2
+
+    optimized_graph = propagate_shapes_and_constants(deduped_graph)
+    assert len(optimized_graph) == 2
+
+
+def test_usage_parameter_translation() -> None:
+    """Test USAGE.md Section 1.9: Zero-Hallucination Parameter Translation."""
+    from ml_switcheroo_ir.translation import ParameterTranslationEngine
+
+    engine = ParameterTranslationEngine()
+    tf_param = engine.translate_parameter(
+        operation="normalization",
+        param_name="eps",
+        source_framework="torch",
+        target_framework="tf",
+    )
+    assert tf_param == "epsilon"
+
+    torch_attrs = {"eps": 1e-5, "weight": 1.0}
+    tf_attrs = engine.translate_attributes(
+        operation="normalization",
+        attributes=torch_attrs,
+        source_framework="torch",
+        target_framework="tf",
+    )
+    assert tf_attrs == {"epsilon": 1e-5, "gamma": 1.0}
+
+
+def test_usage_hardware_isa_validation() -> None:
+    """Test USAGE.md Section 1.10: Hardware ISA & GPU Shader Validation."""
+    validator = Validator()
+
+    v_add = LogicalNode(id="op1", op_type="V_DUAL_ADD_F32", domain="amd_rdna")
+    v_mul = LogicalNode(id="op2", op_type="V_DUAL_MUL_F32", domain="amd_rdna")
+    vopd_errors = validator.validate_vopd_pairing(v_add, v_mul)
+    assert not vopd_errors
+
+    sass_write = LogicalNode(
+        id="i1",
+        op_type="FFMA",
+        domain="nvidia_sass",
+        attributes={"dst_reg": "R0", "stall_count": 0},
+        outputs=["R0"],
+    )
+    sass_read = LogicalNode(
+        id="i2",
+        op_type="FADD",
+        domain="nvidia_sass",
+        attributes={"src_regs": ["R0"], "dst_reg": "R1"},
+        inputs=["R0"],
+    )
+    hazards = validator.validate_sass_scoreboarding([sass_write, sass_read])
+    assert len(hazards) == 1
+
+
+def test_usage_schema_export_and_typescript(tmp_path: object) -> None:
+    """Test USAGE.md Section 1.14: Programmatic Schema Export & TypeScript Generation."""
+    from ml_switcheroo_ir import (
+        export_schemas,
+        generate_typescript_definitions,
+        get_json_schema,
+    )
+
+    schema = get_json_schema("LogicalGraph")
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+
+    ts_code = generate_typescript_definitions()
+    assert "export interface LogicalGraph" in ts_code
+
+    out_dir = str(tmp_path)
+    exported = export_schemas(out_dir=out_dir)
+    assert "LogicalGraph" in exported
+
+
+def test_usage_recipes_d_and_e() -> None:
+    """Test USAGE.md Recipes D & E: SASS Scoreboarding and Pre-Lowering Pipeline."""
+    validator = Validator()
+    sass_instructions = [
+        LogicalNode(
+            id="i1",
+            op_type="FFMA",
+            domain="nvidia_sass",
+            attributes={"dst_reg": "R0", "stall_count": 4},
+            outputs=["R0"],
+        ),
+        LogicalNode(
+            id="i2",
+            op_type="FADD",
+            domain="nvidia_sass",
+            attributes={"src_regs": ["R0"], "dst_reg": "R1"},
+            inputs=["R0"],
+        ),
+    ]
+    scoreboard_hazards = validator.validate_sass_scoreboarding(sass_instructions)
+    assert not scoreboard_hazards
+
+    from ml_switcheroo_ir import (
+        eliminate_common_subexpressions,
+        eliminate_dead_nodes,
+        propagate_shapes_and_constants,
+    )
+
+    def optimize_for_lowering(raw_graph: LogicalGraph) -> LogicalGraph:
+        """Run canonical dead-code, subexpression, and constant-folding passes."""
+        g = eliminate_dead_nodes(raw_graph)
+        g = eliminate_common_subexpressions(g)
+        g = propagate_shapes_and_constants(g)
+        return g
+
+    n_in = LogicalNode(id="in", op_type="Input")
+    g = LogicalGraph(nodes={"in": n_in}, outputs=["in"])
+    opt = optimize_for_lowering(g)
+    assert len(opt) == 1

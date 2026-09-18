@@ -6,3 +6,4 @@ interrogate
 build
 hypothesis
 jsonschema
+onnx

@@ -65,7 +65,7 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 
 ### Interoperating Repositories
 
-- **[`SamuelMarks/ml-switcheroo-ir`](https://github.com/SamuelMarks/ml-switcheroo-ir)** (This repo): Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, multi-dialect operator registries (ONNX, StableHLO, MLIR, Modern Custom Ops), and the `GroundingValidator`.
+- **[`SamuelMarks/ml-switcheroo-ir`](https://github.com/SamuelMarks/ml-switcheroo-ir)** (This repo): Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding (`PartitionSpec`), multi-dialect operator registries (ONNX, StableHLO, MLIR, Modern Custom Ops, WebGPU WGSL, AMD RDNA, NVIDIA SASS), native pure-IR transformations (DCE, CSE, shape propagation), `ParameterTranslationEngine`, and the `GroundingValidator`.
 - **[`SamuelMarks/ml-switcheroo-compiler`](https://github.com/SamuelMarks/ml-switcheroo-compiler)**: The execution and tracing engine. Consumes `ml-switcheroo-ir` data structures, provides concurrent `TracerTape`, `ProxyTensor` tracking, reverse-mode automatic differentiation (`compiler.grad`), topological sorting, VJPs, and Dead Code Elimination (DCE).
 - **[`SamuelMarks/ml-switcheroo`](https://github.com/SamuelMarks/ml-switcheroo)**: The high-level Python source-to-source framework transpiler and framework adapters that emit and ingest `ml-switcheroo-ir` graphs.
 - **[`SamuelMarks/ml-framework-snapshots`](https://github.com/SamuelMarks/ml-framework-snapshots)**: The ground-truth reference database and Ghost Protocol generator, capturing exact runtime signatures, parameters, and AST definitions from official framework distributions to eliminate compiler hallucinations.
@@ -83,15 +83,21 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 - **Zero External Dependencies:** Implemented entirely with Python standard library modules. Can be vendored or embedded in minimal, air-gapped, or resource-constrained environments.
 - **Dual-Mode Graph Topology:** Unified graph representation supporting both implicit input wiring (`LogicalNode.inputs`) and first-class directed edges (`LogicalEdge`). Nodes can be accessed via dictionary lookup (`graph["node_id"]`) or ordered sequences (`graph.nodes_list`).
 - **Multi-Output & SSA Value Support:** Accurate modeling of nodes that emit multiple SSA outputs (e.g., `Split`, `BatchNorm`, `custom_call`, or multi-result MLIR operations) via `LogicalNode.outputs` and `graph.get_output_producer()`.
-- **Distributed Sharding & Device Meshes:** First-class distributed tensor parallelism modeling via `LogicalMesh`, `PartitionSpec`, and `LogicalAxis`, enabling multi-dimensional device placement.
-- **Extensive Precision & Quantization Types (`DType`):** Standard floats and ints, sub-byte formats (`int4`, `uint4`, `int2`), modern FP8 types (`float8_e4m3fn`, `float8_e5m2`), and complex numbers (`complex64`, `complex128`).
+- **Nested Subgraphs:** Recursive hierarchical subgraphs in `LogicalNode.subgraphs` supporting control-flow constructs (`Loop`, `If`), custom autodiff (`bwd`, `jvp`), and checkpointed computational regions.
+- **Distributed Sharding & Collective Modeling:** First-class tensor parallelism via `LogicalMesh`, `PartitionSpec`, and `LogicalAxis`. Includes SPMD sharding propagation validation, pipeline progression checks, and closed-form analytical communication cost estimation (`AllReduce`, `AllGather`, `ReduceScatter`, `P2P`).
+- **Extensive Precision & Quantization Types (`DType`):** Standard floats and ints, sub-byte formats (`int4`, `uint4`, `int2`), modern FP8 types (`float8_e4m3fn`, `float8_e5m2`), complex numbers (`complex64`, `complex128`), and quantization invariant auditing.
 - **Multi-Dialect Schema Registries:**
-  - **ONNX Canonical Dialect (`ai.onnx`):** 200+ canonical operators derived from the official specification, validating required/optional attributes, type constraints, and operands without needing `pip install onnx`.
-  - **Modern Custom Neural Primitives (`ml.switcheroo.custom`):** Pre-registered schemas for modern transformer architectures including `RMSNorm`, `SwiGLU`, `RoPE`, `FlashAttention`, and `VisionPatchEmbedding`.
-  - **StableHLO Dialect (`stablehlo`):** Strict schema checking for compiler primitives (`dot_general`, `convolution`, `reduce`, `while`, `gather`, `scatter`, `custom_call`).
-  - **Core MLIR Dialects:** Schema awareness for `arith`, `math`, `tensor`, `linalg`, `scf`, and `func`.
+  - **ONNX Canonical Dialect (`ai.onnx`):** 205 canonical operators derived and grounded against the official specification with zero hallucinated attributes or parameters.
+  - **Modern Custom Neural Primitives (`ml.switcheroo.custom`):** Pre-registered schemas for modern transformer architectures including `RMSNorm`, `SwiGLU`, `RoPE`, `FlashAttention`, `VisionPatchEmbedding`, `LayerNorm`, `GroupNorm`, and `ScaledDotProductAttention`.
+  - **StableHLO Dialect (`stablehlo`):** 118 grounded compiler operations with structured attribute schemas (`DotDimensionNumbersAttr`, `ConvDimensionNumbersAttr`, `GatherDimensionNumbersAttr`, `ScatterDimensionNumbersAttr`, `ComparisonDirectionAttr`, `PrecisionAttr`).
+  - **Core MLIR Dialects:** Schema awareness and operand/attribute checking for `arith`, `math`, `tensor`, `linalg`, `scf`, and `func`.
+  - **GPU Accelerator ISAs & Shader Dialects:** WebGPU WGSL (qualifiers, workgroup limits, 16-byte alignment/stride), AMD RDNA3 (GFX11 VOPD dual-issue pairing matrix), and NVIDIA SASS (scoreboard latency hazard detection).
+- **Native Pure-IR Graph Transformations:** Pure Python, framework-agnostic passes in `ml_switcheroo_ir.transforms`: Dead Code Elimination (DCE) preserving side-effects/mutating ops, Common Subexpression Elimination (CSE) via value-numbering attribute hashing, and Shape Propagation/Constant Folding.
+- **Zero-Hallucination Parameter Translation:** `ParameterTranslationEngine` maps parameters and attribute dictionaries across frameworks (`torch`, `jax`, `tf`, `stablehlo`, `numpy`) driven by `concept_map.json`.
+- **High-Throughput Streaming & Compressed I/O:** Stream graphs directly to writable streams (`graph.to_stream(fp)`) and transparently read/write compressed files (`.gz` and `.zst`) without memory spikes.
 - **Ghost Protocol v2 Integration:** Data models (`GhostRef`, `ExtendedGhostRef`, `GhostIsaRef`, `GhostMlirRef`) bridging hardware instructions, MLIR traits, and framework snapshots.
-- **Anti-Hallucination Grounding Validator:** `GroundingValidator` audits IR graphs against formal manifests from `ml-framework-snapshots`, computing hallucination scores and surfacing illegal parameters.
+- **Anti-Hallucination Grounding Validator:** `GroundingValidator` audits IR graphs against formal manifests from `ml-framework-snapshots` (over 17,000 empirical symbols), computing hallucination scores and surfacing typo suggestions.
+- **JSON Schema & TypeScript Code Generation:** Emits Draft 2020-12 conforming JSON Schemas and TypeScript interfaces for playground and frontend integrations.
 - **Static Compliance & Coverage Analysis:** Built-in CLI command to AST-scan downstream codebases and score compliance against IR interfaces and canonical dialects.
 
 ---
@@ -234,7 +240,7 @@ for diagnostic in report.diagnostics:
     print(f"Diagnostic: {diagnostic.message}")
 ```
 
-### 4. Deterministic JSON Serialization
+### 4. Deterministic JSON Serialization & Compressed Storage
 
 ```python
 # Export to canonical JSON with sorted keys and explicit edge mappings
@@ -243,6 +249,47 @@ json_payload = graph.to_json(format="canonical", indent=2)
 # Seamlessly deserialize from canonical or legacy list-based formats
 restored_graph = LogicalGraph.from_json(json_payload)
 assert len(restored_graph) == len(graph)
+
+# High-throughput compressed disk I/O (gzip or zstandard)
+graph.to_file("model.json.gz")
+disk_graph = LogicalGraph.from_file("model.json.gz")
+assert len(disk_graph) == len(graph)
+```
+
+### 5. Native Pure-IR Graph Transformations
+
+```python
+from ml_switcheroo_ir import (
+    eliminate_common_subexpressions,
+    eliminate_dead_nodes,
+    propagate_shapes_and_constants,
+)
+
+# Eliminate dead nodes (preserving side-effecting operations like Print or custom_call)
+clean_graph = eliminate_dead_nodes(graph)
+
+# Eliminate identical redundant computations
+deduped_graph = eliminate_common_subexpressions(clean_graph)
+
+# Propagate static shapes and fold constant subgraphs
+optimized_graph = propagate_shapes_and_constants(deduped_graph)
+```
+
+### 6. Zero-Hallucination Parameter Translation
+
+```python
+from ml_switcheroo_ir.translation import ParameterTranslationEngine
+
+engine = ParameterTranslationEngine()
+
+# Translate PyTorch normalization parameters to TensorFlow
+tf_attrs = engine.translate_attributes(
+    operation="normalization",
+    attributes={"eps": 1e-5, "weight": 1.0},
+    source_framework="torch",
+    target_framework="tf",
+)
+assert tf_attrs == {"epsilon": 1e-5, "gamma": 1.0}
 ```
 
 ---
@@ -403,7 +450,7 @@ uv run pytest
 For deeper details regarding graph design, AST traceback linking, and dialect mappings, consult:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): Full ecosystem architecture and data flow sequences.
-- [USAGE.md](USAGE.md): Detailed compliance analysis guide.
+- [USAGE.md](USAGE.md): Comprehensive usage, API reference, distributed modeling, and developer recipes.
 - [docs/DIALECT.md](docs/DIALECT.md): ONNX dialect mapping rules for frontends.
 
 ---

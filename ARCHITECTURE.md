@@ -105,7 +105,7 @@ graph TD
 1. **`ml-framework-snapshots` (Tier 0)**:
    The empirical ground-truth database. Introspects and captures exact runtime function signatures, parameter kinds, default values, docstrings, and AST snapshots from official upstream framework releases (PyTorch, JAX, TensorFlow). It provides the reference manifests that eliminate LLM and compiler hallucinations.
 2. **`ml-switcheroo-ir` (Tier 1)**:
-   The foundational intermediate representation contract. Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding (`PartitionSpec`), multi-dialect schema registries (ONNX, StableHLO, MLIR, Modern Custom Ops), Ghost Protocol v2 specifications, and the anti-hallucination `GroundingValidator`.
+   The foundational intermediate representation contract. Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding (`PartitionSpec`), multi-dialect schema registries (ONNX, StableHLO, MLIR, Modern Custom Ops, WebGPU WGSL, AMD RDNA, NVIDIA SASS), native IR graph transformations (DCE, CSE, shape propagation), Ghost Protocol v2 specifications, cross-framework `ParameterTranslationEngine`, and the anti-hallucination `GroundingValidator`.
 3. **`ml-switcheroo-compiler` (Tier 2)**:
    The computational execution engine. Features:
    - **`TracerTape`**: Thread-safe AOT tracing leveraging `threading.local`.
@@ -130,55 +130,74 @@ graph TD
 `ml-switcheroo-ir` acts as the strict contract between ingestion frontends and synthesis backends. It is designed around modularity, mathematical rigor, and anti-hallucination validation.
 
 ```
-                                +---------------------------+
-                                |        LogicalMesh        |
-                                | shape: dict[str, int]     |
-                                +-------------+-------------+
-                                              |
-                                              v
-+-----------------------+       +-------------+-------------+       +-----------------------+
-|      LogicalNode      | ----> |       LogicalGraph        | <---- |      LogicalEdge      |
-| id: str               |       | name: str                 |       | source: str           |
-| op_type / kind: str   |       | nodes: dict[str, Node]    |       | target: str           |
-| domain: str           |       | nodes_list: list[Node]    |       +-----------------------+
-| version: int          |       | edges: list[LogicalEdge]  |
-| attributes: dict      |       | outputs: list[str]        |
-| inputs: list[str]     |       | mesh: LogicalMesh | None  |
-| outputs: list[str]    |       +---------------------------+
-| sharding: Partition   |
-| source_ast_ref: str   |
-+-----------------------+
+                                +-------------------------------+
+                                |          LogicalMesh          |
+                                | shape: dict[str, int]         |
+                                +---------------+---------------+
+                                                |
+                                                v
++-----------------------------+ +---------------+---------------+ +-----------------------------+
+|         LogicalNode         | |         LogicalGraph          | |         LogicalEdge         |
+| id: str                     | | name: str                     | | source: str                 |
+| op_type / kind: str         | | nodes: NodeDict               | | target: str                 |
+| domain: str                 | | inputs: list[str]             | | source_idx: int = 0         |
+| version: int                | | input_specs: dict[str, Spec]  | | target_idx: int = 0         |
+| attributes: dict[str, Any]  | | outputs: list[str]            | | value_name: str | None      |
+| inputs: list[str]           | | initializers: dict[str, Any]  | +-----------------------------+
+| outputs: list[str]          | | mesh: LogicalMesh | None      |
+| shape_metadata: tuple | None| | edges: EdgeList               |
+| dtype: DType | None         | | nodes_list: list[LogicalNode] |
+| output_specs: list[Spec]    | +-------------------------------+
+| sharding: PartitionSpec     |
+| subgraphs: dict[str, Graph] |
+| device: str | None          |
+| stream: str | None          |
+| source_ast_ref: str | None  |
++-----------------------------+
 ```
 
-### 3.1. Dual-Mode Topology & Sequence Semantics
+### 3.1. Dual-Mode Topology, Sequence Semantics & High-Throughput Streaming
 
-`LogicalGraph` offers a dual-access pattern ensuring full backward compatibility and ergonomic manipulation:
-- **Dictionary Storage & Sequence Protocol**: Nodes are stored canonically as a `dict[str, LogicalNode]` for $O(1)$ key lookups, while also implementing `__iter__`, `__len__`, `__getitem__`, and `.nodes_list` to allow iteration in deterministic insertion or topological order.
-- **Derived and Synchronized Edges**: Directed edges are derived dynamically via the `.edges` property as `list[LogicalEdge]`. Setting `.edges` synchronizes connections back into target node inputs.
-- **Multi-Output & SSA Resolution**: Operations producing multiple output values (such as ONNX `Split`, `BatchNorm`, or MLIR multi-results) declare explicit SSA output names in `LogicalNode.outputs`. Downstream nodes reference outputs by name, and `LogicalGraph.get_output_producer(output_name)` resolves the producing node.
+`LogicalGraph` offers a dual-access pattern ensuring backward compatibility and high-performance graph manipulation:
+- **`NodeDict` Storage & Sequence Protocol**: Nodes are stored canonically as a `NodeDict` providing $O(1)$ key lookups by ID, while implementing standard sequence ergonomics (`__iter__`, `__len__`, `__getitem__`, integer indexing, and `.nodes_list`) in deterministic insertion order.
+- **Derived and Synchronized Edges**: Directed edges are derived dynamically via the `.edges` property as an `EdgeList`. Setting or modifying edges synchronizes connections directly into target node inputs.
+- **Multi-Output & SSA Resolution**: Operations producing multiple output values (such as ONNX `Split`, `BatchNorm`, or MLIR multi-results) declare explicit SSA output names in `LogicalNode.outputs`. Downstream nodes reference outputs by SSA name, and `LogicalGraph.get_output_producer(output_name)` resolves the producing node.
+- **Nested Subgraphs**: First-class support for hierarchical control flow (`body`, `then`, `else`), custom autodiff (`bwd`, `jvp`), and activation checkpointing via `LogicalNode.subgraphs: dict[str, LogicalGraph]`, supporting full recursive serialization and traversal.
+- **High-Throughput Streaming & Compression**: Graphs support zero-copy streaming deserialization (`to_stream`, `from_json`) and compressed disk I/O (`to_file`, `from_file`) supporting uncompressed JSON, gzip (`.gz`), and zstandard (`.zst`) without allocating monolithic in-memory JSON strings.
 
-### 3.2. Distributed Sharding & Device Meshes
+### 3.2. Distributed Sharding, Collective Semantics & Cost Modeling
 
-Distributed deep learning architectures require explicit tensor partitioning. `ml-switcheroo-ir` models distributed layout without framework baggage:
-- **`LogicalMesh`**: Defines a multi-dimensional device cluster with named dimensions (e.g., `{"data": 4, "model": 2}`).
-- **`PartitionSpec`**: Maps tensor dimensions to mesh axes or multi-axis tuples (e.g., `("data", None)` or `(("data", "model"),)`), matching SPMD parallel paradigms.
-- **`LogicalAxis`**: Captures symbolic or fixed named dimensions.
-- **Mesh Validation**: The `Validator` verifies that any sharded node resides on a graph with an active `LogicalMesh`, and that all partitioned axes exist in the mesh shape.
+Distributed deep learning architectures require explicit tensor partitioning and verifiable collective communication:
+- **`LogicalMesh` & `PartitionSpec`**: Defines multi-dimensional device clusters (e.g., `{"data": 4, "model": 2}`) and maps tensor dimensions to named mesh axes or multi-axis tuples (e.g., `("data", None)` or `(("data", "model"),)`).
+- **SPMD Sharding Propagation Invariants (`validate_sharding_propagation`)**:
+  - *Elementwise Operations*: Verifies that binary and unary elementwise operators strictly preserve sharding specifications across operands and results.
+  - *Contraction & Matrix Multiplication*: Preserves non-contracting spatial axes and ensures contracting dimensions conform to parallel reduction rules.
+  - *Reductions*: Verifies that reduced tensor axes transition from partitioned to replicated (`None`).
+- **Pipeline Parallelism & Activation Checkpointing (`validate_pipeline_and_checkpointing`)**:
+  - Validates sequential forward stage progression, reverse stage ordering in backward passes, and explicit Point-to-Point (P2P) communication boundary crossings.
+  - Verifies activation checkpoint scopes (`recompute`, `no_save`, `checkpoint_boundary`).
+- **Analytical Collective Communication Cost Modeling (`estimate_communication_volume`, `estimate_graph_communication_volume`)**:
+  - Analytically calculates byte-level data transfer volumes for distributed collectives:
+    - $\text{AllReduce}$: $2 \cdot \frac{N-1}{N} \cdot S$
+    - $\text{AllGather}$: $\frac{N-1}{N} \cdot S$
+    - $\text{ReduceScatter}$: $\frac{N-1}{N} \cdot S$
+    - $\text{P2P} / \text{Send} / \text{Recv}$: $S$
 
 ### 3.3. Quantization & Precision Model (`DType`)
 
 The `DType` enumeration provides complete coverage for modern deep learning compute formats:
 - **Standard Floating Point**: `float32`, `float16`, `bfloat16`, `float64`.
-- **Modern FP8**: `float8_e4m3fn`, `float8_e5m2`.
+- **Modern FP8**: `float8_e4m3fn`, `float8_e4m3b11fnuz`, `float8_e5m2`, `fp8_e4m3fn`, `fp8_e4m3fnuz`, `fp8_e5m2`, `fp8_e5m2fnuz`.
 - **Integer Precisions**: `int64`, `int32`, `int16`, `int8`, `uint64`, `uint32`, `uint16`, `uint8`.
-- **Sub-Byte Formats**: `int4`, `uint4`, `int2`.
-- **Complex & Logical**: `complex64`, `complex128`, `bool`.
+- **Sub-Byte Formats**: `int4`, `uint4`, `int2`, `qint8`, `quint8`, `qint4`.
+- **Complex & Logical**: `complex64`, `complex128`, `bool`, `string`, `object`.
+- **Quantization Validation Invariants (`validate_quantization`)**: Audits `QuantizeLinear` and `DequantizeLinear` primitives, verifying scale/zero-point tensor type compatibility, axis alignment, symmetric/asymmetric bounds, and sub-byte packing invariants.
 
 ### 3.4. Multi-Dialect Schema Registries
 
-The IR incorporates built-in, zero-dependency schema registries:
+The IR incorporates built-in, zero-dependency schema registries across deep learning, compiler, and hardware ISA levels:
 1. **Canonical ONNX (`ai.onnx`)**:
-   Contains 200+ canonical operators parsed directly from the official ONNX specification. Validates required/optional attributes, type constraints, and operand arities without requiring `onnx` at runtime.
+   Contains 205 canonical operators derived and verified against the official ONNX specification, with zero hallucinated parameters or attributes. Validates required/optional attributes, type constraints, and operand arities without requiring `onnx` at runtime.
 2. **Modern Custom Neural Primitives (`ml.switcheroo.custom`)**:
    Pre-registers state-of-the-art transformer primitives:
    - `RMSNorm`: Inputs `["X", "weight"]`, Output `["Y"]`, Attribute `eps`.
@@ -186,24 +205,55 @@ The IR incorporates built-in, zero-dependency schema registries:
    - `RoPE`: Inputs `["X", "cos", "sin"]`, Output `["Y"]`, Attribute `dim`.
    - `FlashAttention`: Inputs `["Q", "K", "V"]`, Output `["Y"]`, Attributes `causal`, `scale`.
    - `VisionPatchEmbedding`: Inputs `["X", "weight"]`, Output `["Y"]`, Attributes `patch_size`, `embed_dim`.
+   - `LayerNorm`, `GroupNorm`, `ScaledDotProductAttention`.
 3. **Compiler Dialects**:
-   - **`stablehlo`**: Canonical compiler operations (`dot_general`, `convolution`, `reduce`, `while`, `gather`, `scatter`, `custom_call`) with specialized attribute validation (e.g., `dot_dimension_numbers`, `window_strides`, `dimension_numbers`).
-   - **Core MLIR**: Dialect validation for `arith`, `math`, `tensor`, `linalg`, `scf`, and `func`, verifying operand arities and structural separation between SSA operands and buildable attributes.
+   - **`stablehlo`**: 118 canonical compiler operations (`dot_general`, `convolution`, `reduce`, `while`, `gather`, `scatter`, `custom_call`) with structured attribute schemas (`DotDimensionNumbersAttr`, `ConvDimensionNumbersAttr`, `GatherDimensionNumbersAttr`, `ScatterDimensionNumbersAttr`, `ComparisonDirectionAttr`, `PrecisionAttr`).
+   - **Core MLIR**: Dialect validation for `arith`, `math`, `tensor`, `linalg`, `scf`, and `func`, verifying operand arities and structural separation between SSA operands and buildable attributes (e.g. `staticSizes` and `dynamicSizes` on `tensor.empty`).
+4. **GPU Accelerator ISAs & Shader Dialects**:
+   - **WebGPU WGSL (`webgpu_wgsl`)**: Validates `@workgroup_size` dimension limits (1–3 positive integers), address space qualifiers (`storage, read`, `storage, read_write`, `uniform`, `workgroup`), uniform buffer 16-byte struct alignment and array stride constraints, compute builtins, and mutation tracking.
+   - **AMD RDNA3 / GFX11 (`amd_rdna`)**: Validates wavefront size (32 vs 64), register classes (`VGPR`, `SGPR`, `AGPR`), instruction primitives, and **VOPD Dual-Issue instruction pairing rules (`validate_vopd_pairing`)** enforcing slot X and slot Y co-issuing constraints.
+   - **NVIDIA SASS (`nvidia_sass`)**: Validates register classes (`GPR`, `PRED`, `ACCUM`), memory spaces (`global`, `shared`, `constant`, `local`), instruction stall count ($0..15$), yield flags (`Y`, `-`), barrier predicates/masks, and **SASS scoreboard latency hazard detection (`validate_sass_scoreboarding`)** to identify pipeline read-after-write and write-after-read hazards.
 
-### 3.5. Anti-Hallucination Grounding & Ghost Protocol v2
+### 3.5. Anti-Hallucination Grounding, Ghost Protocol v2 & Parameter Translation
 
 To ensure LLMs and automated compilers cannot generate phantom operators or illegal attributes, `ml-switcheroo-ir` integrates Ghost Protocol v2:
 - **Data Models**: `GhostRef`, `ExtendedGhostRef`, `GhostIsaRef`, `GhostMlirRef`, `GhostParam`, `GhostResult`, `SnapshotEnvelope`.
 - **Hardware & Compiler Semantics**: Models operand direction (`READ`, `WRITE`, `PREDICATE`), parameter roles (`OPERAND`, `ATTRIBUTE`, `RESULT`), MLIR traits, and ISA register classes.
-- **`GroundingValidator` & `audit_graph_grounding`**: Ingests ground-truth snapshot manifests from `ml-framework-snapshots`. Validates that every operation kind and attribute exists in the snapshot, computing a precise hallucination score ($0.0$ to $1.0$) and diagnosing typos or invalid parameter usage.
+- **`GroundingValidator` & `audit_graph`**: Ingests ground-truth snapshot manifests from `ml-framework-snapshots` (over 17,000 empirical symbols). Validates that every operation kind and attribute exists in the snapshot, computing a precise hallucination score ($0.0$ to $1.0$) and surfacing Levenshtein distance typo suggestions.
+- **`ParameterTranslationEngine`**: Translates parameter names and keyword arguments across frameworks (`torch`, `jax`, `tf`, `stablehlo`, `numpy`) based on empirical concept maps (`concept_map.json`). Enforces a strict zero-hallucinated-parameters policy: unmapped parameters raise exceptions unless explicit passthrough is enabled.
 
-### 3.6. Static Compliance & AST Auditing
+### 3.6. Pure-IR Graph Transformations & Optimizations
+
+`ml-switcheroo-ir` contains native, framework-independent graph optimization passes in `ml_switcheroo_ir.transforms`:
+- **Dead Code Elimination (`eliminate_dead_nodes`)**: Backward breadth-first search from explicit graph outputs, preserving operations with side-effects or mutating contracts (`Print`, `custom_call`, `storageStore`, `atomic*`). Recursively optimizes nested subgraphs.
+- **Common Subexpression Elimination (`eliminate_common_subexpressions`)**: Value-numbering CSE identifying redundant computations through deterministic attribute serialization and structural input matching.
+- **Shape Propagation & Constant Folding (`propagate_shapes_and_constants`)**: Propagates known dimensions, evaluates static reshape/transpose operations, and simplifies dead constant subgraphs.
+
+### 3.7. Static Compliance & AST Auditing
 
 The built-in `compliance` engine scans Python repositories using `ast` without importing or executing external code:
 - Evaluates compliance against `GraphFrontend` and `CompilerBackend` interface protocols.
 - Scores framework adapter implementations against required registration and conversion methods.
 - Measures dialect coverage against canonical operator registries.
 - Supports generating structured markdown checklists mapping missing operations directly to API definitions (e.g., `torch.json` or `jax.json`).
+
+### 3.8. Canonical Schema Export & TypeScript Definitions
+
+`ml_switcheroo_ir.export` provides schema export tools for compiler and web playground integrations:
+- **Draft 2020-12 JSON Schema**: `get_json_schema()` and `export_schemas()` emit formal Draft 2020-12 conforming schemas for `LogicalGraph`, `LogicalNode`, and `SnapshotEnvelope`.
+- **TypeScript Interface Generation**: `generate_typescript_definitions()` produces type-safe TypeScript interfaces mirroring `LogicalGraph`, `LogicalNode`, `LogicalMesh`, `TensorSpec`, and `DType`.
+
+### 3.9. CLI Tooling & Operational Workflows
+
+The repository exposes a complete CLI (`ml-switcheroo-ir` / `python -m ml_switcheroo_ir`):
+- `validate`: Validate graphs against operator schema registries and custom extensions.
+- `ground`: Audit graphs against `ml-framework-snapshots` manifests for hallucination scoring.
+- `compliance`: Static AST compliance and dialect coverage scan of downstream codebases.
+- `toposort`: Deterministic topological sorting and cycle detection of JSON graphs.
+- `verify-backend`: Validate external classes against `CompilerBackend` interface requirements.
+- `list-ops`: Discover and search registered operators across domains.
+- `dump-snapshot`: Dump package symbols and methods to GhostRef JSON format.
+- `export-schema`: Export Draft 2020-12 JSON schemas and TypeScript definitions.
 
 ---
 
