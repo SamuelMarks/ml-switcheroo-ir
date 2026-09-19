@@ -126,3 +126,23 @@ def test_parameter_translation_engine_error_branches(tmp_path: Path) -> None:
         json.dump({"other_key": 123}, f)
     engine_no_trans = ParameterTranslationEngine(concept_map_path=str(no_trans_file))
     assert engine_no_trans.translations == {}
+
+
+def test_parameter_translation_engine_bundled_fallback() -> None:
+    """Test ParameterTranslationEngine fallback to bundled concept_map when snapshot directory is missing."""
+    from unittest.mock import patch
+
+    with patch(
+        "ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR",
+        "/nonexistent_snapshots_dir",
+    ), patch(
+        "ml_switcheroo_ir.translation.DEFAULT_SNAPSHOT_DIR",
+        "/nonexistent_snapshots_dir",
+    ):
+        engine = ParameterTranslationEngine()
+        assert "matmul" in engine.translations
+        assert "normalization" in engine.translations
+        assert (
+            engine.translate_parameter("normalization", "eps", "torch", "tf")
+            == "epsilon"
+        )

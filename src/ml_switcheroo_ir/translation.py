@@ -43,6 +43,8 @@ class ParameterTranslationEngine:
             candidates = [
                 os.path.join(DEFAULT_SNAPSHOT_DIR, "concept_map.json"),
                 os.path.join(os.path.dirname(DEFAULT_SNAPSHOT_DIR), "concept_map.json"),
+                os.path.join(os.path.dirname(__file__), "schema", "concept_map.json"),
+                os.path.join(os.path.dirname(__file__), "concept_map.json"),
             ]
         for cand in candidates:
             if cand and os.path.isfile(cand):

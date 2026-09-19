@@ -10,15 +10,29 @@
 
 The Abstract ML Machine compiler ecosystem is designed to solve the classical $N \times M$ translation bottleneck in machine learning. In the absence of a canonical representation, supporting $N$ machine learning frameworks (Flax, Keras, PyTorch, MLX, JAX, TensorFlow) across $M$ execution targets (WASM, WebGPU, StableHLO, MLIR, AMD RDNA, NVIDIA SASS) requires $N \times M$ bespoke, point-to-point translators.
 
-```
-Frontends (N)                    Canonical IR                      Backends (M)
-+------------------+                                            +------------------+
-| Flax / Keras     | \                                        / | WASM / WebGPU    |
-+------------------+  \                                      /  +------------------+
-| PyTorch / MLX    | --- [ ml-switcheroo-ir (LogicalGraph) ] --- | StableHLO / MLIR |
-+------------------+  /                                      \  +------------------+
-| JAX / TensorFlow | /                                        \ | RDNA / SASS      |
-+------------------+                                            +------------------+
+```mermaid
+flowchart LR
+    subgraph Frontends["Frontends (N)"]
+        F1["Flax / Keras"]
+        F2["PyTorch / MLX"]
+        F3["JAX / TensorFlow"]
+    end
+
+    IR["ml-switcheroo-ir<br/>(LogicalGraph)"]
+
+    subgraph Backends["Backends (M)"]
+        B1["WASM / WebGPU"]
+        B2["StableHLO / MLIR"]
+        B3["RDNA / SASS"]
+    end
+
+    F1 --> IR
+    F2 --> IR
+    F3 --> IR
+
+    IR --> B1
+    IR --> B2
+    IR --> B3
 ```
 
 By decoupling ingestion from code generation through a strictly validated, language-agnostic Intermediate Representation (`ml-switcheroo-ir`), the complexity collapses to $N + M$.
@@ -129,31 +143,55 @@ graph TD
 
 `ml-switcheroo-ir` acts as the strict contract between ingestion frontends and synthesis backends. It is designed around modularity, mathematical rigor, and anti-hallucination validation.
 
-```
-                                +-------------------------------+
-                                |          LogicalMesh          |
-                                | shape: dict[str, int]         |
-                                +---------------+---------------+
-                                                |
-                                                v
-+-----------------------------+ +---------------+---------------+ +-----------------------------+
-|         LogicalNode         | |         LogicalGraph          | |         LogicalEdge         |
-| id: str                     | | name: str                     | | source: str                 |
-| op_type / kind: str         | | nodes: NodeDict               | | target: str                 |
-| domain: str                 | | inputs: list[str]             | | source_idx: int = 0         |
-| version: int                | | input_specs: dict[str, Spec]  | | target_idx: int = 0         |
-| attributes: dict[str, Any]  | | outputs: list[str]            | | value_name: str | None      |
-| inputs: list[str]           | | initializers: dict[str, Any]  | +-----------------------------+
-| outputs: list[str]          | | mesh: LogicalMesh | None      |
-| shape_metadata: tuple | None| | edges: EdgeList               |
-| dtype: DType | None         | | nodes_list: list[LogicalNode] |
-| output_specs: list[Spec]    | +-------------------------------+
-| sharding: PartitionSpec     |
-| subgraphs: dict[str, Graph] |
-| device: str | None          |
-| stream: str | None          |
-| source_ast_ref: str | None  |
-+-----------------------------+
+```mermaid
+classDiagram
+    direction TB
+
+    class LogicalMesh {
+        +shape: dict[str, int]
+    }
+
+    class LogicalGraph {
+        +name: str
+        +nodes: NodeDict
+        +inputs: list[str]
+        +input_specs: dict[str, Spec]
+        +outputs: list[str]
+        +initializers: dict[str, Any]
+        +mesh: LogicalMesh | None
+        +edges: EdgeList
+        +nodes_list: list[LogicalNode]
+    }
+
+    class LogicalNode {
+        +id: str
+        +op_type / kind: str
+        +domain: str
+        +version: int
+        +attributes: dict[str, Any]
+        +inputs: list[str]
+        +outputs: list[str]
+        +shape_metadata: tuple | None
+        +dtype: DType | None
+        +output_specs: list[Spec]
+        +sharding: PartitionSpec
+        +subgraphs: dict[str, Graph]
+        +device: str | None
+        +stream: str | None
+        +source_ast_ref: str | None
+    }
+
+    class LogicalEdge {
+        +source: str
+        +target: str
+        +source_idx: int = 0
+        +target_idx: int = 0
+        +value_name: str | None
+    }
+
+    LogicalGraph o-- LogicalMesh : mesh
+    LogicalGraph *-- LogicalNode : nodes
+    LogicalGraph *-- LogicalEdge : edges
 ```
 
 ### 3.1. Dual-Mode Topology, Sequence Semantics & High-Throughput Streaming
