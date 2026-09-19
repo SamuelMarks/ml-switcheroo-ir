@@ -104,7 +104,7 @@ def test_dataclasses_coverage() -> None:
     assert mesh.shape["data"] == 4
 
     node = LogicalNode(id="x", op_type="Linear", sharding=spec)
-    assert node.metadata == {}
+    assert node.attributes == {}
     assert node.sharding == spec
 
 
@@ -226,6 +226,7 @@ def test_cli_main_sys_argv(
 def test_runpy_main_module() -> None:
     """Execute __main__.py to get coverage."""
     import importlib
+    import sys
 
     import ml_switcheroo_ir.__main__
 
@@ -234,15 +235,19 @@ def test_runpy_main_module() -> None:
     with NamedTemporaryFile(mode="w", delete=False) as f:
         f.write("{}")
         f_name = f.name
+    sys.modules.pop("ml_switcheroo_ir.__main__", None)
     with patch("sys.argv", ["ml-switcheroo-ir", "toposort", f_name]):
         runpy.run_module("ml_switcheroo_ir.__main__", run_name="__main__")
 
 
 def test_runpy_cli_module() -> None:
     """Execute cli.py to get coverage on its __main__ block."""
+    import sys
+
     with NamedTemporaryFile(mode="w", delete=False) as f:
         f.write("{}")
         f_name = f.name
+    sys.modules.pop("ml_switcheroo_ir.cli", None)
     with patch("sys.argv", ["ml-switcheroo-ir", "toposort", f_name]):
         runpy.run_module("ml_switcheroo_ir.cli", run_name="__main__")
 
@@ -700,9 +705,9 @@ def test_node_dict_and_edge_list_sequence_ergonomics() -> None:
         _ = g.nodes[999]
 
     # NodeDict.__contains__ with node object and invalid type
-    assert n1 in g.nodes
+    assert g.nodes.__contains__(n1)
     assert "n1" in g.nodes
-    assert 12345 not in g.nodes
+    assert not g.nodes.__contains__(12345)
 
     # NodeDict.index
     assert g.nodes.index(n1) == 0
@@ -724,7 +729,8 @@ def test_node_dict_and_edge_list_sequence_ergonomics() -> None:
 
     # NodeDict.__delitem__ by int and by str
     n4 = LogicalNode("n4", "GelU")
-    g.nodes.append(n4)
+    with pytest.deprecated_call():
+        g.nodes.append(n4)
     del g.nodes[0]  # deletes n2
     assert "n2" not in g.nodes
 
@@ -802,7 +808,8 @@ def test_nodedict_and_edge_list_edge_branches() -> None:
     assert len(g_dup.edges) == 2
 
     # 6. LogicalGraph.edges setter with duplicate edge
-    g_dup.edges = [LogicalEdge("s1", "dup_in"), LogicalEdge("s1", "dup_in")]
+    with pytest.deprecated_call():
+        g_dup.edges = [LogicalEdge("s1", "dup_in"), LogicalEdge("s1", "dup_in")]
     assert dup_in_node.inputs == ["s1"]
 
     # 7. __setattr__ exception handling on self.edges access and pending edge preservation

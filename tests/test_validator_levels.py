@@ -128,7 +128,7 @@ def test_validator_lenient_mode_filters_warnings() -> None:
     assert errors[0].level == ValidationLevel.ERROR
 
     # Test validate_graph in lenient mode
-    graph = LogicalGraph(name="LenientGraph", nodes=[node])
+    graph = LogicalGraph(name="LenientGraph", nodes={node.id: node})
     graph_errors = v_lenient.validate_graph(graph)
     assert len(graph_errors) == 1
     assert graph_errors[0].attribute == "alpha"
@@ -202,10 +202,10 @@ def test_validator_validate_dispatch_and_raise_on_error() -> None:
     assert excinfo.value.node_id == "bad"
 
     # validate graph with raise_on_error=True
-    graph = LogicalGraph(name="G", nodes=[invalid_node])
+    graph = LogicalGraph(name="G", nodes={invalid_node.id: invalid_node})
     with pytest.raises(ValidationError):
         v.validate(graph, raise_on_error=True)
 
     # validate valid graph
-    valid_graph = LogicalGraph(name="ValidG", nodes=[valid_node])
+    valid_graph = LogicalGraph(name="ValidG", nodes={valid_node.id: valid_node})
     assert v.validate(valid_graph, raise_on_error=True) == []

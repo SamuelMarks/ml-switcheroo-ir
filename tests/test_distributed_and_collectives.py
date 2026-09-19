@@ -80,7 +80,7 @@ def test_sharding_propagation_elementwise_invariants() -> None:
         sharding=PartitionSpec(axes=(None, "data")),  # Disagrees with n_in!
     )
     graph_mismatch = LogicalGraph(
-        nodes=[n_in, n_add_mismatch],
+        nodes={n.id: n for n in [n_in, n_add_mismatch]},
         mesh=mesh,
     )
     errs = v.validate_sharding_propagation(graph_mismatch)
@@ -97,7 +97,7 @@ def test_sharding_propagation_elementwise_invariants() -> None:
         sharding=PartitionSpec(axes=("data", None)),
     )
     graph_match = LogicalGraph(
-        nodes=[n_in, n_add_match],
+        nodes={n.id: n for n in [n_in, n_add_match]},
         mesh=mesh,
     )
     assert v.validate_sharding_propagation(graph_match) == []
@@ -129,7 +129,9 @@ def test_sharding_propagation_contraction_and_reduction() -> None:
         inputs=["node_a", "node_b"],
         shape_metadata=(16, 64),
     )
-    graph_matmul = LogicalGraph(nodes=[node_a, node_b, node_matmul], mesh=mesh)
+    graph_matmul = LogicalGraph(
+        nodes={n.id: n for n in [node_a, node_b, node_matmul]}, mesh=mesh
+    )
     errs = v.validate_sharding_propagation(graph_matmul)
     assert any(
         "has mismatched contracted dimension sharding" in e.message for e in errs
@@ -150,7 +152,9 @@ def test_sharding_propagation_contraction_and_reduction() -> None:
         shape_metadata=(16,),
         sharding=PartitionSpec(axes=("data", "model")),  # Both reduced axes retained!
     )
-    graph_reduce = LogicalGraph(nodes=[node_red_in, node_reduce], mesh=mesh)
+    graph_reduce = LogicalGraph(
+        nodes={n.id: n for n in [node_red_in, node_reduce]}, mesh=mesh
+    )
     errs_red = v.validate_sharding_propagation(graph_reduce)
     assert len(errs_red) == 2
     assert any("reduces sharded axis 'data'" in e.message for e in errs_red)
@@ -280,7 +284,7 @@ def test_analytical_communication_cost_estimation() -> None:
     regular_node = LogicalNode(id="reg_relu", op_type="Relu", domain="ai.onnx")
     graph = LogicalGraph(
         name="CollectiveGraph",
-        nodes=[ar_node, ag_node, regular_node],
+        nodes={n.id: n for n in [ar_node, ag_node, regular_node]},
         mesh=mesh,
     )
     summary = estimate_graph_communication_volume(graph)
@@ -356,7 +360,10 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         shape_metadata=(8, 8),
         sharding=PartitionSpec(axes=(None, "data")),
     )
-    g_warn = LogicalGraph(nodes=[n_in, n_add_warn], mesh=LogicalMesh(shape={"data": 2}))
+    g_warn = LogicalGraph(
+        nodes={n.id: n for n in [n_in, n_add_warn]},
+        mesh=LogicalMesh(shape={"data": 2}),
+    )
     errs_warn = v_warn.validate_sharding_propagation(g_warn)
     assert len(errs_warn) == 1
     assert errs_warn[0].level == ValidationLevel.WARNING
@@ -381,7 +388,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         shape_metadata=(8, 32),
     )
     g_mm_ok = LogicalGraph(
-        nodes=[node_a_ok, node_b_ok, node_mm_ok],
+        nodes={n.id: n for n in [node_a_ok, node_b_ok, node_mm_ok]},
         mesh=LogicalMesh(shape={"data": 2, "model": 2}),
     )
     assert v_warn.validate_sharding_propagation(g_mm_ok) == []
@@ -394,7 +401,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         attributes={"activation_checkpoint": 12345},
     )
     errs_chk_type = v_warn.validate_pipeline_and_checkpointing(
-        LogicalGraph(nodes=[node_bad_chk_type])
+        LogicalGraph(nodes={node_bad_chk_type.id: node_bad_chk_type})
     )
     assert any(
         "Invalid activation checkpoint tag type" in e.message for e in errs_chk_type
@@ -411,7 +418,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         inputs=["s0"],
         attributes={"pipeline_stage": 2, "pipeline_boundary": True},
     )
-    g_skip_b = LogicalGraph(nodes=[s0, s2_boundary])
+    g_skip_b = LogicalGraph(nodes={n.id: n for n in [s0, s2_boundary]})
     assert v_warn.validate_pipeline_and_checkpointing(g_skip_b) == []
 
     # Pipeline stage skip with P2P op
@@ -422,7 +429,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         inputs=["s0"],
         attributes={"pipeline_stage": 2},
     )
-    g_skip_p2p = LogicalGraph(nodes=[s0, s2_p2p])
+    g_skip_p2p = LogicalGraph(nodes={n.id: n for n in [s0, s2_p2p]})
     assert v_warn.validate_pipeline_and_checkpointing(g_skip_p2p) == []
 
     # Same-stage connection and stage_id alias
@@ -439,7 +446,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         inputs=["s1_a"],
         attributes={"stage_id": 1},
     )
-    g_same_stage = LogicalGraph(nodes=[s1_a, s1_b])
+    g_same_stage = LogicalGraph(nodes={n.id: n for n in [s1_a, s1_b]})
     assert v_warn.validate_pipeline_and_checkpointing(g_same_stage) == []
 
     # Valid reduction without sharding leak
@@ -458,7 +465,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         sharding=PartitionSpec(axes=("batch",)),  # Does not retain 'model' or 'data'!
     )
     g_red_ok = LogicalGraph(
-        nodes=[node_red_ok_in, node_red_ok],
+        nodes={n.id: n for n in [node_red_ok_in, node_red_ok]},
         mesh=LogicalMesh(shape={"batch": 2, "data": 2, "model": 2}),
     )
     assert v_warn.validate_sharding_propagation(g_red_ok) == []
@@ -467,7 +474,9 @@ def test_sharding_and_pipeline_edge_branches() -> None:
     node_a_none = LogicalNode(id="na_n", op_type="Relu", shape_metadata=(8, 16))
     node_b_none = LogicalNode(id="nb_n", op_type="Relu", shape_metadata=(16, 32))
     node_mm_none = LogicalNode(id="nmm_n", op_type="MatMul", inputs=["na_n", "nb_n"])
-    g_mm_none = LogicalGraph(nodes=[node_a_none, node_b_none, node_mm_none])
+    g_mm_none = LogicalGraph(
+        nodes={n.id: n for n in [node_a_none, node_b_none, node_mm_none]}
+    )
     assert v_warn.validate_sharding_propagation(g_mm_none) == []
 
     # Reduction where input has no sharding, and reduction where sharded axis is None
@@ -481,7 +490,9 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         attributes={"axes": [0]},
         sharding=PartitionSpec(axes=("data",)),
     )
-    g_red_none = LogicalGraph(nodes=[node_red_none_in, node_red_none])
+    g_red_none = LogicalGraph(
+        nodes={n.id: n for n in [node_red_none_in, node_red_none]}
+    )
     assert v_warn.validate_sharding_propagation(g_red_none) == []
 
     node_red_none_axis_in = LogicalNode(
@@ -497,7 +508,9 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         attributes={"axes": [0]},
         sharding=PartitionSpec(axes=("data",)),
     )
-    g_red_na = LogicalGraph(nodes=[node_red_none_axis_in, node_red_none_axis])
+    g_red_na = LogicalGraph(
+        nodes={n.id: n for n in [node_red_none_axis_in, node_red_none_axis]}
+    )
     assert v_warn.validate_sharding_propagation(g_red_na) == []
 
     # Pipeline node connected to input with no pipeline stage and boolean pipeline stage
@@ -511,7 +524,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         inputs=["s_no", "s_bool"],
         attributes={"pipeline_stage": 1},
     )
-    g_no_stage = LogicalGraph(nodes=[s_nostage, s_bool, s_stage1])
+    g_no_stage = LogicalGraph(nodes={n.id: n for n in [s_nostage, s_bool, s_stage1]})
     errs_stage = v_warn.validate_pipeline_and_checkpointing(g_no_stage)
     assert any(
         "Pipeline stage ID must be a non-negative integer, got True" in e.message
@@ -523,7 +536,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
     s_norm1 = LogicalNode(
         id="sn1", op_type="Relu", inputs=["sn0"], attributes={"pipeline_stage": 1}
     )
-    g_norm = LogicalGraph(nodes=[s_norm0, s_norm1])
+    g_norm = LogicalGraph(nodes={n.id: n for n in [s_norm0, s_norm1]})
     assert v_warn.validate_pipeline_and_checkpointing(g_norm) == []
 
     # Out-of-bounds reduction axis
@@ -534,7 +547,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         attributes={"axes": [99]},
         sharding=PartitionSpec(axes=("batch",)),
     )
-    g_red_oob = LogicalGraph(nodes=[node_red_ok_in, node_red_oob])
+    g_red_oob = LogicalGraph(nodes={n.id: n for n in [node_red_ok_in, node_red_oob]})
     assert v_warn.validate_sharding_propagation(g_red_oob) == []
 
     # Pipeline node with external input not in graph.nodes
@@ -544,7 +557,7 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         inputs=["unresolved_graph_input"],
         attributes={"pipeline_stage": 1},
     )
-    g_ext = LogicalGraph(nodes=[s_ext])
+    g_ext = LogicalGraph(nodes={s_ext.id: s_ext})
     assert v_warn.validate_pipeline_and_checkpointing(g_ext) == []
 
 
@@ -561,7 +574,10 @@ def test_pipeline_and_checkpointing_validation() -> None:
             shape_metadata=(1,),
             attributes={"activation_checkpoint": tag},
         )
-        assert v.validate_pipeline_and_checkpointing(LogicalGraph(nodes=[node])) == []
+        assert (
+            v.validate_pipeline_and_checkpointing(LogicalGraph(nodes={node.id: node}))
+            == []
+        )
 
     # 2. Invalid activation checkpointing tag
     bad_tag_node = LogicalNode(
@@ -571,7 +587,9 @@ def test_pipeline_and_checkpointing_validation() -> None:
         shape_metadata=(1,),
         attributes={"activation_checkpoint": "invalid_policy"},
     )
-    errs = v.validate_pipeline_and_checkpointing(LogicalGraph(nodes=[bad_tag_node]))
+    errs = v.validate_pipeline_and_checkpointing(
+        LogicalGraph(nodes={bad_tag_node.id: bad_tag_node})
+    )
     assert any(
         "Invalid activation checkpoint tag 'invalid_policy'" in e.message for e in errs
     )
@@ -584,7 +602,9 @@ def test_pipeline_and_checkpointing_validation() -> None:
         shape_metadata=(1,),
         attributes={"pipeline_stage": -1},
     )
-    errs = v.validate_pipeline_and_checkpointing(LogicalGraph(nodes=[neg_stage_node]))
+    errs = v.validate_pipeline_and_checkpointing(
+        LogicalGraph(nodes={neg_stage_node.id: neg_stage_node})
+    )
     assert any(
         "Pipeline stage ID must be a non-negative integer" in e.message for e in errs
     )
@@ -603,7 +623,7 @@ def test_pipeline_and_checkpointing_validation() -> None:
         inputs=["stage2_op"],  # Backward edge!
         attributes={"pipeline_stage": 0},
     )
-    graph_backward = LogicalGraph(nodes=[node_stage2, node_stage0])
+    graph_backward = LogicalGraph(nodes={n.id: n for n in [node_stage2, node_stage0]})
     errs_back = v.validate_pipeline_and_checkpointing(graph_backward)
     assert any(
         "Pipeline stage dependency hazard: backward edge from stage 2" in e.message
@@ -624,7 +644,7 @@ def test_pipeline_and_checkpointing_validation() -> None:
         inputs=["s0_op"],
         attributes={"pipeline_stage": 2},  # Skipped stage 1 without boundary
     )
-    graph_skip = LogicalGraph(nodes=[node_s0, node_s2])
+    graph_skip = LogicalGraph(nodes={n.id: n for n in [node_s0, node_s2]})
     errs_skip = v.validate_pipeline_and_checkpointing(graph_skip)
     assert any(
         "Cross-stage dataflow skipping stages (0 -> 2)" in e.message for e in errs_skip

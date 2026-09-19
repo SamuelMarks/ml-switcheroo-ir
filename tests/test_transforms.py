@@ -27,7 +27,7 @@ def test_eliminate_dead_nodes_basic() -> None:
 
     graph = LogicalGraph(
         name="DeadCodeGraph",
-        nodes=[n_in, n_live, n_dead1, n_dead2],
+        nodes={n.id: n for n in [n_in, n_live, n_dead1, n_dead2]},
         outputs=["live1"],
         edges=[
             LogicalEdge(source="in1", target="live1"),
@@ -58,7 +58,7 @@ def test_eliminate_dead_nodes_preserves_side_effects() -> None:
     n_dead = LogicalNode(id="pure_dead", op_type="Tanh", inputs=["in1"])
 
     graph = LogicalGraph(
-        nodes=[n_in, n_out, n_print, n_custom, n_dead],
+        nodes={n.id: n for n in [n_in, n_out, n_print, n_custom, n_dead]},
         outputs=["out1"],
     )
 
@@ -77,7 +77,7 @@ def test_eliminate_dead_nodes_idempotence() -> None:
     n_dead = LogicalNode(id="dead1", op_type="GELU", inputs=["in1"])
 
     graph = LogicalGraph(
-        nodes=[n_in, n_mid, n_out, n_dead],
+        nodes={n.id: n for n in [n_in, n_mid, n_out, n_dead]},
         outputs=["out1"],
     )
 
@@ -120,7 +120,7 @@ def test_eliminate_dead_nodes_property_idempotence(
         nodes.append(LogicalNode(id=did, op_type="Tanh", inputs=["in_0"]))
         edges.append(LogicalEdge(source="in_0", target=did))
 
-    graph = LogicalGraph(nodes=nodes, outputs=[prev_id], edges=edges)
+    graph = LogicalGraph(nodes={n.id: n for n in nodes}, outputs=[prev_id], edges=edges)
 
     pass1 = eliminate_dead_nodes(graph)
     pass2 = eliminate_dead_nodes(pass1)
@@ -146,7 +146,7 @@ def test_eliminate_common_subexpressions_basic() -> None:
     )
 
     graph = LogicalGraph(
-        nodes=[n_in, n_relu1, n_relu2, n_add],
+        nodes={n.id: n for n in [n_in, n_relu1, n_relu2, n_add]},
         outputs=["add1"],
     )
 
@@ -164,7 +164,7 @@ def test_eliminate_common_subexpressions_preserves_side_effects() -> None:
     n_in = LogicalNode(id="in1", op_type="Input")
     p1 = LogicalNode(id="p1", op_type="Print", inputs=["in1"])
     p2 = LogicalNode(id="p2", op_type="Print", inputs=["in1"])
-    graph = LogicalGraph(nodes=[n_in, p1, p2], outputs=["p1", "p2"])
+    graph = LogicalGraph(nodes={n.id: n for n in [n_in, p1, p2]}, outputs=["p1", "p2"])
 
     cse_graph = eliminate_common_subexpressions(graph)
     assert len(cse_graph.nodes) == 3
@@ -196,7 +196,7 @@ def test_propagate_shapes_and_constants() -> None:
     )
 
     graph = LogicalGraph(
-        nodes=[n_in, n_shape, n_transpose, n_reshape, n_bcast],
+        nodes={n.id: n for n in [n_in, n_shape, n_transpose, n_reshape, n_bcast]},
         outputs=["r1"],
     )
 
@@ -218,7 +218,9 @@ def test_propagate_shapes_error_detection() -> None:
         attributes={"shape": [-1, -1]},
     )
     with pytest.raises(ValueError, match="multiple -1 dimensions"):
-        propagate_shapes_and_constants(LogicalGraph(nodes=[n_in, n_bad_reshape1]))
+        propagate_shapes_and_constants(
+            LogicalGraph(nodes={n.id: n for n in [n_in, n_bad_reshape1]})
+        )
 
     # 2. Indivisible dimension in Reshape with -1
     n_bad_reshape2 = LogicalNode(
@@ -228,7 +230,9 @@ def test_propagate_shapes_error_detection() -> None:
         attributes={"shape": [3, -1]},  # 16 is not divisible by 3!
     )
     with pytest.raises(ValueError, match="not divisible"):
-        propagate_shapes_and_constants(LogicalGraph(nodes=[n_in, n_bad_reshape2]))
+        propagate_shapes_and_constants(
+            LogicalGraph(nodes={n.id: n for n in [n_in, n_bad_reshape2]})
+        )
 
     # 3. Explicit element count mismatch in Reshape without -1
     n_bad_reshape3 = LogicalNode(
@@ -238,7 +242,9 @@ def test_propagate_shapes_error_detection() -> None:
         attributes={"shape": [4, 5]},  # 20 != 16
     )
     with pytest.raises(ValueError, match="mismatches target elements"):
-        propagate_shapes_and_constants(LogicalGraph(nodes=[n_in, n_bad_reshape3]))
+        propagate_shapes_and_constants(
+            LogicalGraph(nodes={n.id: n for n in [n_in, n_bad_reshape3]})
+        )
 
 
 def test_transforms_edge_cases() -> None:
@@ -247,7 +253,7 @@ def test_transforms_edge_cases() -> None:
     n_node = LogicalNode(id="n1", op_type="Relu", inputs=["external_input"])
     n_dup = LogicalNode(id="n2", op_type="Add", inputs=["n1", "n1", "n1"])
     g_dce_edge = LogicalGraph(
-        nodes=[n_node, n_dup],
+        nodes={n.id: n for n in [n_node, n_dup]},
         outputs=["n2", "n2", "missing_node"],
     )
     res_dce = eliminate_dead_nodes(g_dce_edge)
@@ -280,7 +286,8 @@ def test_transforms_edge_cases() -> None:
         inputs=["in1"],
     )
     g_cse_edge = LogicalGraph(
-        nodes=[n_in, c1, c2, mut_node, rng_node], outputs=["c1", "c2"]
+        nodes={n.id: n for n in [n_in, c1, c2, mut_node, rng_node]},
+        outputs=["c1", "c2"],
     )
     res_cse = eliminate_common_subexpressions(g_cse_edge)
     assert len(res_cse.nodes) == 4
@@ -345,23 +352,26 @@ def test_transforms_edge_cases() -> None:
     )
 
     g_shape_edge = LogicalGraph(
-        nodes=[
-            n_sym_in,
-            n_reshape_exact,
-            n_concrete_in,
-            n_reshape_concrete,
-            n_bcast_shape,
-            n_trans_bad_len,
-            n_shape_empty,
-            n_reshape_empty,
-            n_trans_empty,
-            n_bcast_empty,
-            n_unshaped_in,
-            n_shape_unshaped,
-            n_reshape_unshaped,
-            n_trans_unshaped,
-            n_bcast_unshaped,
-        ],
+        nodes={
+            n.id: n
+            for n in [
+                n_sym_in,
+                n_reshape_exact,
+                n_concrete_in,
+                n_reshape_concrete,
+                n_bcast_shape,
+                n_trans_bad_len,
+                n_shape_empty,
+                n_reshape_empty,
+                n_trans_empty,
+                n_bcast_empty,
+                n_unshaped_in,
+                n_shape_unshaped,
+                n_reshape_unshaped,
+                n_trans_unshaped,
+                n_bcast_unshaped,
+            ]
+        },
     )
     res_shape = propagate_shapes_and_constants(g_shape_edge)
     assert res_shape.nodes["r_exact"].shape_metadata == ("B", 4, 4)

@@ -66,13 +66,16 @@ def test_graph_edges_property_setter() -> None:
     assert graph.nodes["n2"].inputs == []
 
     # Assign new edges
-    graph.edges = [
-        LogicalEdge("n1", "n2"),
-        LogicalEdge("n2", "n3"),
-        LogicalEdge("unknown", "n2"),  # Valid source unknown in nodes, still targets n2
-        LogicalEdge("n1", "unknown_target"),  # Target not in nodes, safely ignored
-        LogicalEdge("n1", "n2"),  # Duplicate edge should be deduplicated in inputs
-    ]
+    with pytest.deprecated_call():
+        graph.edges = [
+            LogicalEdge("n1", "n2"),
+            LogicalEdge("n2", "n3"),
+            LogicalEdge(
+                "unknown", "n2"
+            ),  # Valid source unknown in nodes, still targets n2
+            LogicalEdge("n1", "unknown_target"),  # Target not in nodes, safely ignored
+            LogicalEdge("n1", "n2"),  # Duplicate edge should be deduplicated in inputs
+        ]
 
     assert graph.nodes["n2"].inputs == ["n1", "unknown"]
     assert graph.nodes["n3"].inputs == ["n2"]

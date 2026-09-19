@@ -277,7 +277,7 @@ def main(args: list[str] | None = None) -> None:
         sorted_nodes = topological_sort(graph)
         print("Topological Order:")
         for node in sorted_nodes:
-            print(f" - {node.id} ({node.kind})")
+            print(f" - {node.id} ({node.op_type})")
 
     elif parsed_args.command == "verify-backend":
         _verify_backend(parsed_args.file_path, parsed_args.class_name)

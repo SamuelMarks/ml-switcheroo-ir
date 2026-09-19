@@ -15,7 +15,7 @@ def test_topological_sort_direct_2_node_cycle() -> None:
     # A -> B -> A
     node_a = LogicalNode(id="a", op_type="Relu", inputs=["b"])
     node_b = LogicalNode(id="b", op_type="Relu", inputs=["a"])
-    graph = LogicalGraph(name="DirectCycle", nodes=[node_a, node_b])
+    graph = LogicalGraph(name="DirectCycle", nodes={n.id: n for n in [node_a, node_b]})
 
     with pytest.raises(CyclicGraphError, match="Cycle detected"):
         topological_sort(graph, strict=True)
@@ -33,7 +33,9 @@ def test_topological_sort_5_node_indirect_cycle() -> None:
     c3 = LogicalNode(id="c3", op_type="Relu", inputs=["c2"])
     c4 = LogicalNode(id="c4", op_type="Relu", inputs=["c3"])
     c5 = LogicalNode(id="c5", op_type="Relu", inputs=["c4"])
-    graph = LogicalGraph(name="IndirectCycle5", nodes=[c1, c2, c3, c4, c5])
+    graph = LogicalGraph(
+        name="IndirectCycle5", nodes={n.id: n for n in [c1, c2, c3, c4, c5]}
+    )
 
     with pytest.raises(CyclicGraphError, match="Cycle detected"):
         topological_sort(graph, strict=True)
@@ -46,7 +48,7 @@ def test_topological_sort_5_node_indirect_cycle() -> None:
 def test_topological_sort_self_referential_cycle() -> None:
     """Test self-referential cycle where a node consumes its own output."""
     self_node = LogicalNode(id="self_op", op_type="Relu", inputs=["self_op"])
-    graph = LogicalGraph(name="SelfCycle", nodes=[self_node])
+    graph = LogicalGraph(name="SelfCycle", nodes={self_node.id: self_node})
 
     with pytest.raises(CyclicGraphError, match="Cycle detected"):
         topological_sort(graph, strict=True)
@@ -71,7 +73,7 @@ def test_disconnected_subgraphs_and_isolated_nodes() -> None:
 
     graph = LogicalGraph(
         name="DisconnectedGraph",
-        nodes=[in1, relu1, in2, relu2, isolated],
+        nodes={n.id: n for n in [in1, relu1, in2, relu2, isolated]},
     )
 
     sorted_nodes = topological_sort(graph, strict=True)
@@ -96,7 +98,7 @@ def test_dead_code_subgraphs() -> None:
 
     graph = LogicalGraph(
         name="DeadCodeGraph",
-        nodes=[x, y, dead_in, dead_out],
+        nodes={n.id: n for n in [x, y, dead_in, dead_out]},
         outputs=["y"],  # dead_out is not in outputs
     )
 
@@ -127,7 +129,7 @@ def test_multi_output_multiple_consumers_different_indices() -> None:
 
     graph = LogicalGraph(
         name="MultiOutputMultiConsumer",
-        nodes=[split, consumer0, consumer1, consumer_joint],
+        nodes={n.id: n for n in [split, consumer0, consumer1, consumer_joint]},
     )
 
     assert graph.get_output_producer("s_out0") == split

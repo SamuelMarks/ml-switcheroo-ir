@@ -60,7 +60,7 @@ def test_validate_instances_against_emitted_json_schemas() -> None:
     )
     graph = LogicalGraph(
         name="SimpleConv",
-        nodes=[node],
+        nodes={node.id: node},
         outputs=["conv1"],
     )
 

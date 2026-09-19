@@ -90,10 +90,10 @@ def test_validator_default_population(validator: Validator) -> None:
     node = LogicalNode(id="conv1", op_type="Conv", attributes={"kernel_shape": [3, 3]})
     validator.populate_defaults(node)
 
-    assert "strides" in node.metadata
-    assert node.metadata["strides"] == [1, 1]
-    assert "group" in node.metadata
-    assert node.metadata["group"] == 1
+    assert "strides" in node.attributes
+    assert node.attributes["strides"] == [1, 1]
+    assert "group" in node.attributes
+    assert node.attributes["group"] == 1
 
 
 def test_validator_invalid_edge(validator: Validator) -> None:
@@ -145,7 +145,7 @@ def test_validator_graph_integration(validator: Validator) -> None:
     assert "inputs" in error_attrs
 
     # Check default was populated on Gemm
-    assert node1.metadata.get("transA") == 0
+    assert node1.attributes.get("transA") == 0
 
 
 def test_validator_default_registry() -> None:
@@ -256,4 +256,4 @@ def test_validator_missing_kind_methods() -> None:
 
     # populate defaults returns quickly
     v.populate_defaults(node)
-    assert not node.metadata
+    assert not node.attributes

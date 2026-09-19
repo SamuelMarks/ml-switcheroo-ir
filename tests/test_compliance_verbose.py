@@ -50,10 +50,42 @@ def test_cli_compliance_verbose(
 
 
 def test_cli_compliance_verbose_mapping(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test compliance subcommand verbose output with mapping."""
+    """Test compliance subcommand verbose output with mapping.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr fixture.
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
+    import importlib
     import json
+    import types
+    from typing import Any
+
+    orig_import = importlib.import_module
+
+    def mock_import_module(name: str, package: str | None = None) -> Any:
+        """Mock import_module to avoid importing heavy third-party packages.
+
+        Args:
+            name (str): Module name to import.
+            package (Optional[str]): Package anchor.
+
+        Returns:
+            Any: Mocked or actual imported module.
+        """
+        if name in ("tensorflow", "jax.numpy"):
+            return types.SimpleNamespace(
+                add=lambda x, y: x + y,
+                exp=lambda x: x,
+            )
+        return orig_import(name, package)
+
+    monkeypatch.setattr("importlib.import_module", mock_import_module)
 
     dialect_file = tmp_path / "my_dialect.py"
     dialect_file.write_text("def Abs(x):\n    pass\n")

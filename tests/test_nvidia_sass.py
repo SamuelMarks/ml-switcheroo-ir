@@ -282,7 +282,7 @@ def test_sass_scoreboarding_latency_hazard_detection() -> None:
     # 6. Scoreboarding check integrated into LogicalGraph validation
     graph = LogicalGraph(
         name="SassHazardGraph",
-        nodes=[producer, consumer],
+        nodes={n.id: n for n in [producer, consumer]},
         outputs=["inst_cons"],
     )
     graph_errors = v.validate_graph(graph)

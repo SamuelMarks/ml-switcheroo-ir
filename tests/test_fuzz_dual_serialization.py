@@ -93,7 +93,7 @@ def arbitrary_dag(draw: st.DrawFn) -> LogicalGraph:
 
     return LogicalGraph(
         name=graph_name,
-        nodes=nodes,
+        nodes={n.id: n for n in nodes},
         mesh=mesh,
     )
 
@@ -136,19 +136,19 @@ def test_fuzz_pythonic_cst_eval(graph: LogicalGraph) -> None:
         graph (LogicalGraph): Randomly generated DAG.
     """
     # Programmatic reconstruction via LogicalGraph and LogicalNode
-    reconstructed_nodes = [
-        LogicalNode(
+    reconstructed_nodes = {
+        n.id: LogicalNode(
             id=n.id,
-            kind=n.kind,
+            op_type=n.op_type,
             domain=n.domain,
             version=n.version,
-            metadata=n.metadata,
+            attributes=n.attributes,
             inputs=list(n.inputs),
             shape_metadata=n.shape_metadata,
             sharding=n.sharding,
         )
         for n in graph.nodes.values()
-    ]
+    }
 
     reconstructed_graph = LogicalGraph(
         name=graph.name,

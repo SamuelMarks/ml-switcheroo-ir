@@ -351,30 +351,36 @@ def test_update_badges_main() -> None:
 
 def test_update_badges_runpy_main() -> None:
     """Test executing scripts.update_badges as __main__ module."""
-    with TemporaryDirectory() as tmpdir:
-        readme_file = os.path.join(tmpdir, "README.md")
-        cov_file = os.path.join(tmpdir, "coverage.json")
-        with open(readme_file, "w", encoding="utf-8") as f:
-            f.write(
-                "# Test\n"
-                "[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
-                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
-            )
-        with open(cov_file, "w", encoding="utf-8") as f:
-            json.dump({"totals": {"percent_covered": 100.0}}, f)
+    orig_badges_mod = sys.modules["scripts.update_badges"]
+    try:
+        with TemporaryDirectory() as tmpdir:
+            readme_file = os.path.join(tmpdir, "README.md")
+            cov_file = os.path.join(tmpdir, "coverage.json")
+            with open(readme_file, "w", encoding="utf-8") as f:
+                f.write(
+                    "# Test\n"
+                    "[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
+                    "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
+                )
+            with open(cov_file, "w", encoding="utf-8") as f:
+                json.dump({"totals": {"percent_covered": 100.0}}, f)
 
-        # Success case (exit_code == 0)
-        with patch("sys.argv", ["update_badges.py", readme_file]), patch(
-            "subprocess.run"
-        ):
-            runpy.run_module("scripts.update_badges", run_name="__main__")
+            # Success case (exit_code == 0)
+            sys.modules.pop("scripts.update_badges", None)
+            with patch("sys.argv", ["update_badges.py", readme_file]), patch(
+                "subprocess.run"
+            ):
+                runpy.run_module("scripts.update_badges", run_name="__main__")
 
-        # Failure case (exit_code != 0) invokes sys.exit
-        with patch(
-            "sys.argv", ["update_badges.py", "--enforce", "/nonexistent.md"]
-        ), patch("sys.exit") as mock_exit:
-            runpy.run_module("scripts.update_badges", run_name="__main__")
-            mock_exit.assert_called_once_with(1)
+            # Failure case (exit_code != 0) invokes sys.exit
+            sys.modules.pop("scripts.update_badges", None)
+            with patch(
+                "sys.argv", ["update_badges.py", "--enforce", "/nonexistent.md"]
+            ), patch("sys.exit") as mock_exit:
+                runpy.run_module("scripts.update_badges", run_name="__main__")
+                mock_exit.assert_called_once_with(1)
+    finally:
+        sys.modules["scripts.update_badges"] = orig_badges_mod
 
 
 SAMPLE_ONNX_DOCS = """
@@ -517,17 +523,21 @@ def test_generate_registry_main() -> None:
 
 def test_generate_registry_module_main() -> None:
     """Test executing scripts.generate_registry as __main__ module."""
-    with TemporaryDirectory() as tmpdir:
-        tmp_md = os.path.join(tmpdir, "Operators.md")
-        tmp_json = os.path.join(tmpdir, "onnx_ops.json")
-        tmp_py = os.path.join(tmpdir, "onnx_registry.py")
-        with open(tmp_md, "w", encoding="utf-8") as f:
-            f.write(SAMPLE_ONNX_DOCS)
-        sys.modules.pop("scripts.generate_registry", None)
-        with patch("sys.argv", ["generate_registry.py", tmp_md, tmp_json, tmp_py]):
-            runpy.run_module("scripts.generate_registry", run_name="__main__")
-        assert os.path.exists(tmp_json)
-        assert os.path.exists(tmp_py)
+    orig_registry_mod = sys.modules["scripts.generate_registry"]
+    try:
+        with TemporaryDirectory() as tmpdir:
+            tmp_md = os.path.join(tmpdir, "Operators.md")
+            tmp_json = os.path.join(tmpdir, "onnx_ops.json")
+            tmp_py = os.path.join(tmpdir, "onnx_registry.py")
+            with open(tmp_md, "w", encoding="utf-8") as f:
+                f.write(SAMPLE_ONNX_DOCS)
+            sys.modules.pop("scripts.generate_registry", None)
+            with patch("sys.argv", ["generate_registry.py", tmp_md, tmp_json, tmp_py]):
+                runpy.run_module("scripts.generate_registry", run_name="__main__")
+            assert os.path.exists(tmp_json)
+            assert os.path.exists(tmp_py)
+    finally:
+        sys.modules["scripts.generate_registry"] = orig_registry_mod
 
 
 def test_generate_registry_cross_validate_branches() -> None:
@@ -948,11 +958,16 @@ def test_verify_grounding_main_paths() -> None:
 
 def test_verify_grounding_runpy_main() -> None:
     """Test executing scripts.verify_grounding as __main__ module."""
-    with TemporaryDirectory() as empty_tmpdir, patch.dict(
-        os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": empty_tmpdir}
-    ), patch("sys.argv", ["verify_grounding.py"]), patch("sys.exit") as mock_exit:
-        runpy.run_module("scripts.verify_grounding", run_name="__main__")
-        mock_exit.assert_called_once_with(0)
+    orig_mod = sys.modules["scripts.verify_grounding"]
+    sys.modules.pop("scripts.verify_grounding", None)
+    try:
+        with TemporaryDirectory() as empty_tmpdir, patch.dict(
+            os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": empty_tmpdir}
+        ), patch("sys.argv", ["verify_grounding.py"]), patch("sys.exit") as mock_exit:
+            runpy.run_module("scripts.verify_grounding", run_name="__main__")
+            mock_exit.assert_called_once_with(0)
+    finally:
+        sys.modules["scripts.verify_grounding"] = orig_mod
 
 
 def test_find_snapshots_directory_env_and_override() -> None:

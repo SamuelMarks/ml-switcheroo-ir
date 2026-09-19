@@ -209,7 +209,7 @@ def test_streaming_and_compressed_file_io(tmp_path: Path) -> None:
     )
     graph = LogicalGraph(
         name="TestStreaming",
-        nodes=[node1, node2],
+        nodes={n.id: n for n in [node1, node2]},
         outputs=["n2"],
         mesh=LogicalMesh(shape={"data": 4}),
     )
@@ -288,7 +288,9 @@ def test_file_io_error_handling(tmp_path: Path, monkeypatch: Any) -> None:
         tmp_path (Path): Pytest temporary directory fixture.
         monkeypatch (Any): Pytest monkeypatch fixture.
     """
-    graph = LogicalGraph(name="ErrGraph", nodes=[LogicalNode(id="x", op_type="Input")])
+    graph = LogicalGraph(
+        name="ErrGraph", nodes={"x": LogicalNode(id="x", op_type="Input")}
+    )
 
     # Unsupported compression format
     with pytest.raises(ValueError, match="Unsupported compression format"):
