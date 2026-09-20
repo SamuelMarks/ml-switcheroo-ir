@@ -438,6 +438,13 @@ def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None
     gv_all = GroundingValidator(use_default_if_none=True)
     assert len(gv_all.grounded_symbols) > 5000
 
+
+def test_grounding_against_dumped_ir_snapshot(tmp_path: Path) -> None:
+    """Verify GroundingValidator against locally dumped snapshot manifest.
+
+    Args:
+        tmp_path (Path): Temporary path fixture for generating test snapshot.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     ir_file = tmp_path / "ir_v0.0.3.json"
@@ -487,11 +494,47 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
         sibling_path = get_default_snapshots_dir()
         assert "ml-framework-snapshots" in sibling_path
 
+    # Spec found with origin=None falling back to sibling directory
+    spec_no_origin = MagicMock()
+    spec_no_origin.origin = None
+    with patch("importlib.util.find_spec", return_value=spec_no_origin):
+        assert "ml-framework-snapshots" in get_default_snapshots_dir()
+
     # Spec found but snapshots dir does not exist
     fake_spec = MagicMock()
     fake_spec.origin = str(tmp_path / "nonexistent" / "__init__.py")
     with patch("importlib.util.find_spec", return_value=fake_spec):
         assert "ml-framework-snapshots" in get_default_snapshots_dir()
+
+    # Spec found with empty snapshots dir (no .json/.json.gz) falling back to sibling
+    pkg_empty = tmp_path / "fake_pkg_empty"
+    pkg_empty_snaps = pkg_empty / "snapshots"
+    pkg_empty_snaps.mkdir(parents=True)
+    (pkg_empty_snaps / "readme.txt").write_text("not json", encoding="utf-8")
+    spec_empty = MagicMock()
+    spec_empty.origin = str(pkg_empty / "__init__.py")
+    with patch("importlib.util.find_spec", return_value=spec_empty):
+        assert "ml-framework-snapshots" in get_default_snapshots_dir()
+
+    # Spec found with valid snapshots dir containing .json file
+    pkg_valid_json = tmp_path / "fake_pkg_json"
+    pkg_json_snaps = pkg_valid_json / "snapshots"
+    pkg_json_snaps.mkdir(parents=True)
+    (pkg_json_snaps / "manifest.json").write_text("{}", encoding="utf-8")
+    spec_json = MagicMock()
+    spec_json.origin = str(pkg_valid_json / "__init__.py")
+    with patch("importlib.util.find_spec", return_value=spec_json):
+        assert get_default_snapshots_dir() == os.path.abspath(str(pkg_json_snaps))
+
+    # Spec found with valid snapshots dir containing .json.gz file
+    pkg_valid_gz = tmp_path / "fake_pkg_gz"
+    pkg_gz_snaps = pkg_valid_gz / "snapshots"
+    pkg_gz_snaps.mkdir(parents=True)
+    (pkg_gz_snaps / "manifest.json.gz").write_bytes(b"")
+    spec_gz = MagicMock()
+    spec_gz.origin = str(pkg_valid_gz / "__init__.py")
+    with patch("importlib.util.find_spec", return_value=spec_gz):
+        assert get_default_snapshots_dir() == os.path.abspath(str(pkg_gz_snaps))
 
     # 3. Exception in find_spec
     with patch("importlib.util.find_spec", side_effect=ValueError("spec error")):
