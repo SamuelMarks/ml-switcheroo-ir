@@ -4,30 +4,55 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 from enum import Enum
 from typing import Any, Sequence
+
+from pydantic import BaseModel, Field
 
 from ml_switcheroo_ir import LogicalGraph, LogicalMesh, LogicalNode
 from ml_switcheroo_ir.schema.custom_ops import (
     COLLECTIVE_OPS_REGISTRY,
     CUSTOM_OPS_REGISTRY,
     QUANTIZATION_OPS_REGISTRY,
+    STATE_OPS_REGISTRY,
+)
+from ml_switcheroo_ir.schema.framework_registries import (
+    ARRAY_API_REGISTRY,
+    ATEN_REGISTRY,
+    ODL_CATALOG,
 )
 from ml_switcheroo_ir.schema.ghost import (
-    RDNA3_VOPD_OPERATORS,
     RDNA_INSTRUCTION_PRIMITIVES,
-    RDNA_TO_VOPD_MAP,
     SASS_INSTRUCTION_PRIMITIVES,
-    SASS_PIPELINE_LATENCIES,
     WGSL_COMPUTE_BUILTINS,
     WGSL_MUTATING_OPS,
     WGSL_PRIMITIVE_SIGNATURES,
+    ExtendedGhostRef,
+)
+from ml_switcheroo_ir.schema.low_level_registries import (
+    METAL_REGISTRY,
+    PTX_REGISTRY,
+    WASM_REGISTRY,
+    WEBGL_REGISTRY,
+    WGSL_REGISTRY,
 )
 from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
+from ml_switcheroo_ir.schema.rdna_registry import (
+    RDNA_REGISTRY,
+    RDNA_TO_VOPD_MAP,
+    RDNA_VOPD_SLOTS,
+)
+from ml_switcheroo_ir.schema.sass_registry import (
+    SASS_PIPELINE_LATENCIES,
+    SASS_REGISTRY,
+)
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 
 
@@ -164,12 +189,14 @@ class ValidationError(Exception):
         attribute (str): The name of the attribute involved, or a general descriptor.
         message (str): The detailed error message.
         level (ValidationLevel): The severity of the error.
+        suggested_fix (Optional[str]): Suggested correction or candidate symbol.
     """
 
     node_id: str
     attribute: str
     message: str
     level: ValidationLevel = ValidationLevel.ERROR
+    suggested_fix: str | None = None
 
     def __str__(self) -> str:
         """Return formatted string description of the validation error.
@@ -318,7 +345,8 @@ def validate_vopd_pairing(
     canon_y = RDNA_TO_VOPD_MAP.get(opY.op_type, opY.op_type)
 
     # 3. Check VOPD opcode support and slot assignments
-    if canon_x not in RDNA3_VOPD_OPERATORS:
+    slot_x = RDNA_VOPD_SLOTS.get(canon_x, "")
+    if canon_x not in RDNA_REGISTRY or not slot_x:
         errors.append(
             ValidationError(
                 node_id=opX.id,
@@ -327,7 +355,7 @@ def validate_vopd_pairing(
                 level=ValidationLevel.ERROR,
             )
         )
-    elif "X" not in RDNA3_VOPD_OPERATORS[canon_x]["slots"]:
+    elif "X" not in slot_x and slot_x != "BOTH":
         errors.append(
             ValidationError(
                 node_id=opX.id,
@@ -337,7 +365,8 @@ def validate_vopd_pairing(
             )
         )
 
-    if canon_y not in RDNA3_VOPD_OPERATORS:
+    slot_y = RDNA_VOPD_SLOTS.get(canon_y, "")
+    if canon_y not in RDNA_REGISTRY or not slot_y:
         errors.append(
             ValidationError(
                 node_id=opY.id,
@@ -346,7 +375,7 @@ def validate_vopd_pairing(
                 level=ValidationLevel.ERROR,
             )
         )
-    elif "Y" not in RDNA3_VOPD_OPERATORS[canon_y]["slots"]:
+    elif "Y" not in slot_y and slot_y != "BOTH":
         errors.append(
             ValidationError(
                 node_id=opY.id,
@@ -504,6 +533,7 @@ class Validator:
         custom_registry: dict[str, OpSchema] | None = None,
         stablehlo_registry: dict[str, OpSchema] | None = None,
         mlir_registry: dict[str, OpSchema] | None = None,
+        state_registry: dict[str, OpSchema] | None = None,
         level: ValidationLevel = ValidationLevel.WARNING,
         strict: bool = False,
         grounding_validator: GroundingValidator | None = None,
@@ -519,6 +549,8 @@ class Validator:
                 Defaults to the built-in STABLEHLO_REGISTRY.
             mlir_registry (Optional[Dict[str, OpSchema]]): The Core MLIR operator registry.
                 Defaults to the built-in MLIR_REGISTRY.
+            state_registry (Optional[Dict[str, OpSchema]]): The State mutation operator registry.
+                Defaults to the built-in STATE_OPS_REGISTRY.
             level (ValidationLevel): The validation severity threshold (default: ValidationLevel.WARNING).
             strict (bool): Convenience flag; if True, sets level to ValidationLevel.STRICT.
             grounding_validator (Optional[GroundingValidator]): Optional grounding validator for snapshot verification.
@@ -542,6 +574,11 @@ class Validator:
             self.mlir_registry = MLIR_REGISTRY
         else:
             self.mlir_registry = mlir_registry
+
+        if state_registry is None:
+            self.state_registry = STATE_OPS_REGISTRY
+        else:
+            self.state_registry = state_registry
 
         self.collective_registry = COLLECTIVE_OPS_REGISTRY
         self.quantization_registry = QUANTIZATION_OPS_REGISTRY
@@ -592,6 +629,44 @@ class Validator:
         if node.domain in ("quantization", "ml.switcheroo.quantization"):
             return self.registry.get(node.op_type) or self.quantization_registry.get(
                 node.op_type
+            )
+        if node.domain in ("state", "ml.switcheroo.state"):
+            return self.registry.get(node.op_type) or self.state_registry.get(
+                node.op_type
+            )
+        if node.domain in ("amd_rdna", "rdna"):
+            return self.registry.get(node.op_type) or RDNA_REGISTRY.get(node.op_type)
+        if node.domain in ("nvidia_sass", "sass"):
+            return self.registry.get(node.op_type) or SASS_REGISTRY.get(node.op_type)
+        if node.domain in ("nvidia_ptx", "ptx"):
+            return self.registry.get(node.op_type) or PTX_REGISTRY.get(node.op_type)
+        if node.domain in ("metal_msl", "metal"):
+            return self.registry.get(node.op_type) or METAL_REGISTRY.get(node.op_type)
+        if node.domain in ("wasm_simd", "wasm"):
+            return self.registry.get(node.op_type) or WASM_REGISTRY.get(node.op_type)
+        if node.domain in ("webgl",):
+            return self.registry.get(node.op_type) or WEBGL_REGISTRY.get(node.op_type)
+        if node.domain in ("wgsl",):
+            return self.registry.get(node.op_type) or WGSL_REGISTRY.get(node.op_type)
+        if node.domain in ("aten",):
+            return self.registry.get(node.op_type) or ATEN_REGISTRY.get(node.op_type)
+        if node.domain in ("array_api",):
+            return self.registry.get(node.op_type) or ARRAY_API_REGISTRY.get(
+                node.op_type
+            )
+        if node.domain in ("odl", "abstract"):
+            return self.registry.get(node.op_type) or ODL_CATALOG.get(node.op_type)
+        if node.domain in ("ad", "ml.switcheroo.ad") and node.op_type in (
+            "ZeroTangent",
+            "NoTangent",
+        ):
+            return OpSchema(
+                name=node.op_type,
+                domain=node.domain,
+                version=1,
+                attributes={},
+                inputs=[],
+                outputs=["tangent"],
             )
         return self.registry.get(node.op_type)
 
@@ -717,9 +792,10 @@ class Validator:
                             level=ValidationLevel.ERROR,
                         )
                     )
-        elif node.domain == "amd_rdna":
+        elif node.domain in ("amd_rdna", "rdna"):
             if (
-                node.op_type not in RDNA_INSTRUCTION_PRIMITIVES
+                node.op_type not in RDNA_REGISTRY
+                and node.op_type not in RDNA_INSTRUCTION_PRIMITIVES
                 and node.op_type not in self.registry
             ):
                 errors.append(
@@ -730,9 +806,10 @@ class Validator:
                         level=ValidationLevel.ERROR,
                     )
                 )
-        elif node.domain == "nvidia_sass":
+        elif node.domain in ("nvidia_sass", "sass"):
             if (
-                node.op_type not in SASS_INSTRUCTION_PRIMITIVES
+                node.op_type not in SASS_REGISTRY
+                and node.op_type not in SASS_INSTRUCTION_PRIMITIVES
                 and node.op_type not in self.registry
             ):
                 errors.append(
@@ -743,11 +820,108 @@ class Validator:
                         level=ValidationLevel.ERROR,
                     )
                 )
-        elif node.domain == "webgpu_wgsl":
+        elif node.domain in ("webgpu_wgsl", "wgsl"):
             if (
-                node.op_type not in WGSL_PRIMITIVE_SIGNATURES
+                node.op_type not in WGSL_REGISTRY
+                and node.op_type not in WGSL_PRIMITIVE_SIGNATURES
                 and node.op_type not in self.registry
             ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("nvidia_ptx", "ptx"):
+            if node.op_type not in PTX_REGISTRY and node.op_type not in self.registry:
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("metal_msl", "metal"):
+            if node.op_type not in METAL_REGISTRY and node.op_type not in self.registry:
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("wasm_simd", "wasm"):
+            if node.op_type not in WASM_REGISTRY and node.op_type not in self.registry:
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("webgl",):
+            if node.op_type not in WEBGL_REGISTRY and node.op_type not in self.registry:
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("state", "ml.switcheroo.state"):
+            if (
+                node.op_type not in self.state_registry
+                and node.op_type not in self.registry
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in state registry.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("ad", "ml.switcheroo.ad"):
+            if node.op_type not in ("ZeroTangent", "NoTangent"):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in autodiff sentinel registry.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("aten",):
+            if node.op_type not in ATEN_REGISTRY and node.op_type not in self.registry:
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("array_api",):
+            if (
+                node.op_type not in ARRAY_API_REGISTRY
+                and node.op_type not in self.registry
+            ):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="kind",
+                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif node.domain in ("odl", "abstract"):
+            if node.op_type not in ODL_CATALOG and node.op_type not in self.registry:
                 errors.append(
                     ValidationError(
                         node_id=node.id,
@@ -1474,7 +1648,11 @@ class Validator:
             errors.extend(self.validate_quantization(node))
 
         # Check shape metadata in STRICT mode
-        if self.level == ValidationLevel.STRICT and node.shape_metadata is None:
+        if (
+            self.level == ValidationLevel.STRICT
+            and node.shape_metadata is None
+            and node.op_type != "NoTangent"
+        ):
             errors.append(
                 ValidationError(
                     node_id=node.id,
@@ -1801,6 +1979,146 @@ class Validator:
                                     )
                                 )
 
+            # 4. Collective communication operations verification
+            elif node.op_type in ("AllReduce", "all_reduce"):
+                red_op = str(
+                    node.attributes.get("reduction") or node.attributes.get("op", "sum")
+                ).lower()
+                if red_op not in ("sum", "min", "max", "prod"):
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="reduction",
+                            message=f"AllReduce operation '{node.id}' has invalid reduction operator '{red_op}'.",
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+                mesh_axis = node.attributes.get("axis") or node.attributes.get(
+                    "mesh_axis"
+                )
+                if (
+                    mesh_axis is not None
+                    and graph.mesh is not None
+                    and str(mesh_axis) not in graph.mesh.shape
+                ):
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute="axis",
+                            message=f"AllReduce operation '{node.id}' specifies unknown mesh axis '{mesh_axis}'.",
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+
+            elif node.op_type in ("AllGather", "all_gather"):
+                gather_dim = node.attributes.get("axis")
+                if gather_dim is None:
+                    gather_dim = node.attributes.get("gather_dim")
+                mesh_axis = node.attributes.get("mesh_axis")
+                if (
+                    gather_dim is not None
+                    and graph.mesh is not None
+                    and mesh_axis is not None
+                    and str(mesh_axis) in graph.mesh.shape
+                    and node.inputs
+                ):
+                    inp_node = graph.nodes.get(node.inputs[0])
+                    partition_factor = graph.mesh.shape[str(mesh_axis)]
+                    if (
+                        inp_node is not None
+                        and isinstance(inp_node.shape_metadata, (list, tuple))
+                        and isinstance(node.shape_metadata, (list, tuple))
+                        and isinstance(gather_dim, int)
+                        and 0 <= gather_dim < len(inp_node.shape_metadata)
+                        and gather_dim < len(node.shape_metadata)
+                    ):
+                        in_d = inp_node.shape_metadata[gather_dim]
+                        out_d = node.shape_metadata[gather_dim]
+                        if (
+                            isinstance(in_d, int)
+                            and isinstance(out_d, int)
+                            and out_d != in_d * partition_factor
+                        ):
+                            errors.append(
+                                ValidationError(
+                                    node_id=node.id,
+                                    attribute="gather_dim",
+                                    message=(
+                                        f"AllGather operation '{node.id}' gathered dimension size {out_d} "
+                                        f"does not match input size {in_d} * partition factor {partition_factor}."
+                                    ),
+                                    level=ValidationLevel.ERROR,
+                                )
+                            )
+
+            elif node.op_type in ("ReduceScatter", "reduce_scatter"):
+                scatter_dim = node.attributes.get("axis")
+                if scatter_dim is None:
+                    scatter_dim = node.attributes.get("scatter_dim")
+                mesh_axis = node.attributes.get("mesh_axis")
+                if (
+                    scatter_dim is not None
+                    and graph.mesh is not None
+                    and mesh_axis is not None
+                    and str(mesh_axis) in graph.mesh.shape
+                    and node.inputs
+                ):
+                    inp_node = graph.nodes.get(node.inputs[0])
+                    partition_factor = graph.mesh.shape[str(mesh_axis)]
+                    if (
+                        inp_node is not None
+                        and isinstance(inp_node.shape_metadata, (list, tuple))
+                        and isinstance(node.shape_metadata, (list, tuple))
+                        and isinstance(scatter_dim, int)
+                        and 0 <= scatter_dim < len(inp_node.shape_metadata)
+                        and scatter_dim < len(node.shape_metadata)
+                    ):
+                        in_d = inp_node.shape_metadata[scatter_dim]
+                        out_d = node.shape_metadata[scatter_dim]
+                        if (
+                            isinstance(in_d, int)
+                            and isinstance(out_d, int)
+                            and in_d != out_d * partition_factor
+                        ):
+                            errors.append(
+                                ValidationError(
+                                    node_id=node.id,
+                                    attribute="scatter_dim",
+                                    message=(
+                                        f"ReduceScatter operation '{node.id}' scattered dimension size {out_d} "
+                                        f"does not match input size {in_d} // partition factor {partition_factor}."
+                                    ),
+                                    level=ValidationLevel.ERROR,
+                                )
+                            )
+
+            elif node.op_type in ("AllToAll", "all_to_all"):
+                split_axis = node.attributes.get("split_axis") or node.attributes.get(
+                    "split_dim", 0
+                )
+                concat_axis = node.attributes.get("concat_axis") or node.attributes.get(
+                    "concat_dim", 1
+                )
+                if (
+                    isinstance(split_axis, int)
+                    and isinstance(concat_axis, int)
+                    and node.shape_metadata is not None
+                    and isinstance(node.shape_metadata, (list, tuple))
+                ):
+                    rank = len(node.shape_metadata)
+                    if not (0 <= split_axis < rank and 0 <= concat_axis < rank):
+                        errors.append(
+                            ValidationError(
+                                node_id=node.id,
+                                attribute="all_to_all_axes",
+                                message=(
+                                    f"AllToAll operation '{node.id}' axes ({split_axis}, {concat_axis}) "
+                                    f"are out of bounds for tensor of rank {rank}."
+                                ),
+                                level=ValidationLevel.ERROR,
+                            )
+                        )
+
         return errors
 
     def validate_pipeline_and_checkpointing(
@@ -1988,6 +2306,35 @@ class Validator:
                         )
                     )
 
+        # Validate multi-output source_idx bounds on edges
+        for edge in graph.edges:
+            producer = graph.nodes.get(edge.source)
+            if producer is None:
+                prod_tuple = graph.get_producing_output_index(edge.source)
+                if prod_tuple is not None:
+                    producer = prod_tuple[0]
+
+            if producer is not None and producer.has_multiple_outputs:
+                num_outputs = (
+                    len(producer.outputs)
+                    if len(producer.outputs) > 1
+                    else len(producer.output_specs)
+                )
+                if edge.source_idx is not None and (
+                    edge.source_idx < 0 or edge.source_idx >= num_outputs
+                ):
+                    errors.append(
+                        ValidationError(
+                            node_id=edge.target,
+                            attribute="edges",
+                            message=(
+                                f"Edge references invalid source_idx {edge.source_idx} "
+                                f"(out of bounds) for multi-output node '{producer.id}' (has {num_outputs} outputs)."
+                            ),
+                            level=ValidationLevel.ERROR,
+                        )
+                    )
+
         return errors
 
 
@@ -2010,50 +2357,112 @@ class GroundingAuditReport:
     diagnostics: list[ValidationError]
 
 
-def get_default_snapshots_dir() -> str:
-    """Resolve the default directory for ground-truth framework snapshots.
+class DiagnosticSeverity(str, Enum):
+    """Severity classification for grounding diagnostics."""
 
-    Checks:
-        1. ML_FRAMEWORK_SNAPSHOTS_DIR environment variable.
-        2. Installed ml_framework_snapshots package directory.
-        3. Local sibling repository checkout.
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
 
-    Returns:
-        str: Absolute path to snapshot directory.
+
+class GroundingDiagnostic(BaseModel):
+    """Specific diagnostic message emitted during symbol or operation verification.
+
+    Attributes:
+        field (str): The component, attribute, or operand evaluated.
+        message (str): Human-readable diagnostic explanation.
+        severity (DiagnosticSeverity): Severity level of the diagnostic.
+        suggested_fix (Optional[str]): Suggested replacement or typo correction.
     """
-    env_dir = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR")
-    if env_dir and os.path.isdir(env_dir):
-        return os.path.abspath(env_dir)
 
-    try:
-        import importlib.util
-
-        spec = importlib.util.find_spec("ml_framework_snapshots")
-        if spec and spec.origin:
-            pkg_dir = os.path.join(os.path.dirname(spec.origin), "snapshots")
-            if os.path.isdir(pkg_dir) and any(
-                f.endswith((".json", ".json.gz")) for f in os.listdir(pkg_dir)
-            ):
-                return os.path.abspath(pkg_dir)
-    except (ImportError, AttributeError, ValueError):
-        pass
-
-    sibling_dir = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "..",
-            "ml-framework-snapshots",
-            "src",
-            "ml_framework_snapshots",
-            "snapshots",
-        )
+    field: str = Field(description="The component, attribute, or operand evaluated.")
+    message: str = Field(description="Human-readable diagnostic explanation.")
+    severity: DiagnosticSeverity = Field(
+        default=DiagnosticSeverity.ERROR,
+        description="Severity level of the diagnostic.",
     )
-    return sibling_dir
+    suggested_fix: str | None = Field(
+        default=None,
+        description="Suggested replacement or typo correction.",
+    )
 
 
-DEFAULT_SNAPSHOT_DIR = get_default_snapshots_dir()
+class GroundingReport(BaseModel):
+    """Comprehensive validation report for a verified operation or symbol.
+
+    Attributes:
+        is_grounded (bool): True if the symbol is grounded and valid without fatal errors.
+        target (str): Target framework, dialect, or ISA.
+        symbol (str): Queried symbol, mnemonic, or operation identifier.
+        diagnostics (list[GroundingDiagnostic]): Collection of diagnostics produced.
+        matched_ref (Optional[ExtendedGhostRef]): Resolved ground-truth reference object if discovered.
+    """
+
+    is_grounded: bool = Field(
+        description="True if the symbol is grounded and valid without fatal errors."
+    )
+    target: str = Field(description="Target framework, dialect, or ISA.")
+    symbol: str = Field(
+        description="Queried symbol, mnemonic, or operation identifier."
+    )
+    diagnostics: list[GroundingDiagnostic] = Field(
+        default_factory=list,
+        description="Collection of diagnostics produced during verification.",
+    )
+    matched_ref: ExtendedGhostRef | None = Field(
+        default=None,
+        description="Resolved ground-truth reference object if discovered.",
+    )
+
+    @property
+    def has_errors(self) -> bool:
+        """Check if any diagnostics have ERROR severity.
+
+        Returns:
+            bool: True if any diagnostic is an ERROR, False otherwise.
+        """
+        return any(d.severity == DiagnosticSeverity.ERROR for d in self.diagnostics)
+
+    def add_diagnostic(
+        self,
+        field: str,
+        message: str,
+        severity: DiagnosticSeverity = DiagnosticSeverity.ERROR,
+        suggested_fix: str | None = None,
+    ) -> None:
+        """Append a new diagnostic message and update is_grounded status.
+
+        Args:
+            field (str): Component or attribute path.
+            message (str): Human-readable error message.
+            severity (DiagnosticSeverity): Severity level of the diagnostic.
+            suggested_fix (Optional[str]): Suggested correction or candidate symbol.
+        """
+        if severity == DiagnosticSeverity.ERROR:
+            self.is_grounded = False
+        self.diagnostics.append(
+            GroundingDiagnostic(
+                field=field,
+                message=message,
+                severity=severity,
+                suggested_fix=suggested_fix,
+            )
+        )
+
+
+from ml_switcheroo_ir.snapshots import (
+    DEFAULT_SNAPSHOT_DIR,
+    get_default_snapshots_dir,
+)
+
+__all__ = [
+    "DEFAULT_SNAPSHOT_DIR",
+    "GroundingValidator",
+    "ValidationError",
+    "ValidationLevel",
+    "Validator",
+    "get_default_snapshots_dir",
+]
 
 
 class GroundingValidator(Validator):
@@ -2062,6 +2471,7 @@ class GroundingValidator(Validator):
     def __init__(
         self,
         snapshot_manifest: dict[str, Any] | list[Any] | str | None = None,
+        snapshots_dir: str | None = None,
         registry: dict[str, OpSchema] | None = None,
         use_default_if_none: bool = False,
     ) -> None:
@@ -2070,6 +2480,7 @@ class GroundingValidator(Validator):
         Args:
             snapshot_manifest (Union[Dict[str, Any], List[Any], str, None]): Snapshot dictionary,
                 list of records, file path, directory path, or collection.
+            snapshots_dir (Optional[str]): Explicit path to snapshots directory.
             registry (Optional[Dict[str, OpSchema]]): Base operator registry.
             use_default_if_none (bool): If True and snapshot_manifest is None, load from DEFAULT_SNAPSHOT_DIR.
         """
@@ -2077,9 +2488,39 @@ class GroundingValidator(Validator):
         self.grounded_symbols: dict[str, dict[str, Any]] = {}
         self.concept_map: dict[str, Any] = {}
         self.parameter_translations: dict[str, Any] = {}
+        self._engine: Any = None
 
-        if snapshot_manifest is not None:
-            self._ingest_manifest_target(snapshot_manifest)
+        target = snapshot_manifest if snapshot_manifest is not None else snapshots_dir
+
+        try:
+            try:
+                from ml_ecosystem_snapshots.grounding.engine import GroundingEngine
+            except ImportError:
+                from ml_framework_snapshots.grounding.engine import GroundingEngine
+
+            search_dirs: list[str] = []
+            if isinstance(target, str) and os.path.isdir(target):
+                search_dirs.append(target)
+            if (
+                snapshots_dir
+                and os.path.isdir(snapshots_dir)
+                and snapshots_dir not in search_dirs
+            ):
+                search_dirs.append(snapshots_dir)
+            if (
+                os.path.isdir(DEFAULT_SNAPSHOT_DIR)
+                and DEFAULT_SNAPSHOT_DIR not in search_dirs
+            ):
+                search_dirs.append(DEFAULT_SNAPSHOT_DIR)
+            self._engine = GroundingEngine(
+                base_dirs=search_dirs if search_dirs else None
+            )
+        except (ImportError, AttributeError, ValueError, OSError, RuntimeError) as exc:
+            logger.debug("Failed initializing GroundingEngine: %s", exc)
+            self._engine = None
+
+        if target is not None:
+            self._ingest_manifest_target(target)
         elif use_default_if_none and os.path.isdir(DEFAULT_SNAPSHOT_DIR):
             self._load_directory(DEFAULT_SNAPSHOT_DIR)
 
@@ -2252,6 +2693,30 @@ class GroundingValidator(Validator):
                 best_dist = d
                 best_match = sym
 
+        if (
+            best_match is None
+            and self._engine is not None
+            and domain
+            and (
+                not hasattr(self._engine, "_discover_target_files")
+                or bool(self._engine._discover_target_files(domain))
+            )
+        ):
+            try:
+                engine_cand = self._engine.suggest_closest_symbol(
+                    domain, op_type, max_distance=3
+                )
+                if engine_cand:
+                    best_match = engine_cand
+            except (
+                AttributeError,
+                KeyError,
+                ValueError,
+                RuntimeError,
+                TypeError,
+            ) as exc:
+                logger.debug("Failed symbol suggestion from engine: %s", exc)
+
         return best_match
 
     def _find_best_attr_match(self, attr_key: str, candidates: set[str]) -> str | None:
@@ -2288,6 +2753,30 @@ class GroundingValidator(Validator):
         match = self.grounded_symbols.get(full_path) or self.grounded_symbols.get(
             node.op_type
         )
+        if (
+            match is None
+            and self._engine is not None
+            and node.domain
+            and (
+                not hasattr(self._engine, "_discover_target_files")
+                or bool(self._engine._discover_target_files(node.domain))
+            )
+        ):
+            try:
+                ref = self._engine.get_symbol(node.domain, node.op_type)
+                if ref is not None:
+                    match = (
+                        ref.model_dump() if hasattr(ref, "model_dump") else ref.__dict__
+                    )
+            except (
+                AttributeError,
+                KeyError,
+                ValueError,
+                RuntimeError,
+                TypeError,
+            ) as exc:
+                logger.debug("Failed symbol lookup from engine: %s", exc)
+
         if match is None:
             suggestion = self._find_best_symbol_match(node.op_type, node.domain)
             msg = f"Ungrounded symbol '{node.op_type}' in domain '{node.domain}'. Symbol not found in framework snapshot."
@@ -2299,6 +2788,7 @@ class GroundingValidator(Validator):
                     attribute="kind",
                     message=msg,
                     level=ValidationLevel.ERROR,
+                    suggested_fix=suggestion,
                 )
             )
         else:
@@ -2348,6 +2838,7 @@ class GroundingValidator(Validator):
                                 attribute=attr_key,
                                 message=msg,
                                 level=ValidationLevel.ERROR,
+                                suggested_fix=attr_suggestion,
                             )
                         )
         return errors

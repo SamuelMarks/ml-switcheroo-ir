@@ -9,10 +9,11 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR
 from scripts.generate_registry import (
     cross_validate_with_onnx_defs,
     extract_section,
@@ -43,11 +44,20 @@ from scripts.update_badges import (
 from scripts.verify_grounding import (
     _extract_known_attributes,
     find_snapshots_directory,
+    verify_array_api_grounding,
+    verify_aten_grounding,
+    verify_collectives_grounding,
     verify_custom_ops_grounding,
     verify_ir_snapshot_grounding,
+    verify_metal_grounding,
     verify_mlir_grounding,
     verify_onnx_grounding,
+    verify_ptx_grounding,
+    verify_rdna_grounding,
+    verify_sass_grounding,
     verify_stablehlo_grounding,
+    verify_wasm_grounding,
+    verify_wgsl_grounding,
 )
 from scripts.verify_grounding import (
     main as verify_grounding_main,
@@ -518,7 +528,34 @@ def test_generate_registry_main() -> None:
         with open(py_path, "r", encoding="utf-8") as f:
             loaded_py = f.read()
             assert "ONNX_REGISTRY" in loaded_py
-            assert '"Abs": OpSchema(' in loaded_py
+            assert "load_onnx_schemas" in loaded_py
+
+        # Test onnx_dir resolution
+        onnx_dir = os.path.join(tmpdir, "fake_onnx")
+        docs_dir = os.path.join(onnx_dir, "docs")
+        os.makedirs(docs_dir, exist_ok=True)
+        with open(os.path.join(docs_dir, "Operators.md"), "w", encoding="utf-8") as f:
+            f.write(SAMPLE_ONNX_DOCS)
+        gen_main(onnx_dir=onnx_dir, json_path=json_path, registry_path=py_path)
+        assert os.path.exists(json_path)
+
+        # Test onnx_dir with Operators.md at root
+        onnx_root_dir = os.path.join(tmpdir, "fake_onnx_root")
+        os.makedirs(onnx_root_dir, exist_ok=True)
+        with open(
+            os.path.join(onnx_root_dir, "Operators.md"), "w", encoding="utf-8"
+        ) as f:
+            f.write(SAMPLE_ONNX_DOCS)
+        with patch("sys.argv", ["generate_registry.py", "--onnx-dir", onnx_root_dir]):
+            gen_main(json_path=json_path, registry_path=py_path)
+        assert os.path.exists(json_path)
+
+        # Test default md path fallback when no args provided
+        with patch("sys.argv", ["generate_registry.py"]), patch(
+            "scripts.generate_registry.parse_onnx_docs", return_value={}
+        ):
+            gen_main(json_path=json_path, registry_path=py_path)
+        assert os.path.exists(json_path)
 
 
 def test_generate_registry_module_main() -> None:
@@ -761,21 +798,67 @@ def test_verify_grounding_find_snapshots_directory() -> None:
         non_existent = os.path.join(tmpdir, "does_not_exist")
         assert find_snapshots_directory(non_existent) is None
 
-        # Without override, should find existing DEFAULT_SNAPSHOT_DIR or fallback
-        with patch("scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir):
+        # ML_ECOSYSTEM_SNAPSHOTS_DIR env branch
+        with patch.dict(os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": tmpdir}):
             assert find_snapshots_directory() == Path(tmpdir).resolve()
 
-    # Test fallback to script_relative when default_path does not exist
-    with patch(
-        "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"
-    ), patch("pathlib.Path.is_dir", side_effect=[False, True]):
-        assert find_snapshots_directory() is not None
+        # ML_ECOSYSTEM_SNAPSHOTS_DIR non-existent branch
+        with patch.dict(
+            os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": "/nonexistent/path"}
+        ):
+            assert find_snapshots_directory() is not None
 
-    # Test when default path does not exist and script relative does not exist
-    with patch(
+        # ML_FRAMEWORK_SNAPSHOTS_DIR env branch
+        with patch.dict(
+            os.environ,
+            {"ML_FRAMEWORK_SNAPSHOTS_DIR": tmpdir, "ML_ECOSYSTEM_SNAPSHOTS_DIR": ""},
+        ):
+            assert find_snapshots_directory() == Path(tmpdir).resolve()
+
+        # Without override, should find existing DEFAULT_SNAPSHOT_DIR or fallback
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir
+        ):
+            assert find_snapshots_directory() == Path(tmpdir).resolve()
+
+    # Test cache and fallback branches
+    with patch.dict(os.environ, {}, clear=True), patch(
         "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"
-    ), patch("pathlib.Path.is_dir", return_value=False):
-        assert find_snapshots_directory() is None
+    ):
+        with patch("pathlib.Path.is_dir", side_effect=[False, True]):
+            assert find_snapshots_directory() is not None
+
+        with patch("pathlib.Path.is_dir", side_effect=[False, False, True]):
+            assert find_snapshots_directory() is not None
+
+        with patch("pathlib.Path.is_dir", side_effect=[False, False, False, True]):
+            assert find_snapshots_directory() is not None
+
+        with patch(
+            "pathlib.Path.is_dir", side_effect=[False, False, False, False, True]
+        ):
+            assert find_snapshots_directory() is not None
+
+        with patch(
+            "pathlib.Path.is_dir", side_effect=[False, False, False, False, False, True]
+        ):
+            assert find_snapshots_directory() is not None
+
+        with patch(
+            "pathlib.Path.is_dir",
+            side_effect=[False, False, False, False, False, False, True],
+        ):
+            assert find_snapshots_directory() is not None
+
+        with patch(
+            "pathlib.Path.is_dir",
+            side_effect=[False, False, False, False, False, False, False, True],
+        ):
+            assert find_snapshots_directory() is not None
+
+        # All is_dir return False
+        with patch("pathlib.Path.is_dir", return_value=False):
+            assert find_snapshots_directory() is None
 
 
 def test_verify_grounding_stablehlo() -> None:
@@ -1093,3 +1176,561 @@ def test_extract_known_attributes() -> None:
 
     # 3. Empty record
     assert _extract_known_attributes({}) == set()
+
+
+def test_verify_grounding_rdna() -> None:
+    """Test verify_rdna_grounding with missing file, invalid entries, and valid instructions."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # 1. Missing file returns empty list
+        assert verify_rdna_grounding(tmppath) == []
+
+        # 2. Defective snapshot
+        rdna_file = tmppath / "amd_rdna_snapshot.json"
+        with open(rdna_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "instructions": [
+                            "not_a_dict",
+                            {"name": ""},
+                            {"name": "V_BAD_SLOT", "vopd_slot": "INVALID"},
+                            {"name": "V_GOOD_OP", "vopd_slot": "X"},
+                        ]
+                    }
+                },
+                f,
+            )
+        errs = verify_rdna_grounding(tmppath)
+        assert len(errs) == 2
+        assert "missing name/mnemonic" in errs[0]
+        assert "invalid vopd_slot" in errs[1]
+
+
+def test_verify_grounding_sass() -> None:
+    """Test verify_sass_grounding with missing file, invalid entries, and valid instructions."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # 1. Missing file returns empty list
+        assert verify_sass_grounding(tmppath) == []
+
+        # 2. Defective snapshot
+        sass_file = tmppath / "nvidia_sass_snapshot.json"
+        with open(sass_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "instructions": [
+                            "not_a_dict",
+                            {"name": ""},
+                            {"name": "FFMA_BAD", "execution_latency": "bad_latency"},
+                            {"name": "FFMA_GOOD", "execution_latency": 4},
+                        ]
+                    }
+                },
+                f,
+            )
+        errs = verify_sass_grounding(tmppath)
+        assert len(errs) == 2
+        assert "missing name/mnemonic" in errs[0]
+        assert "invalid execution_latency" in errs[1]
+
+
+def test_verify_grounding_wgsl() -> None:
+    """Test verify_wgsl_grounding with missing file, defective ops, and valid schema."""
+    from unittest.mock import mock_open
+
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # 1. Valid real schema
+        real_errs = verify_wgsl_grounding(tmppath)
+        assert real_errs == []
+
+        # 2. Missing file branch
+        with patch("pathlib.Path.is_file", return_value=False):
+            assert verify_wgsl_grounding(tmppath) == []
+
+        # 3. Defective content
+        fake_data = {
+            "ops": [
+                {"name": ""},
+                {"name": "bad_dom_op", "domain": "invalid_domain"},
+                {"name": "good_op", "domain": "wgsl"},
+            ]
+        }
+        with patch("builtins.open", mock_open(read_data=json.dumps(fake_data))):
+            errs = verify_wgsl_grounding(tmppath)
+            assert len(errs) == 2
+            assert "missing name" in errs[0]
+            assert "invalid domain" in errs[1]
+
+
+def test_verify_grounding_ptx() -> None:
+    """Test verify_ptx_grounding with missing file, invalid items, and valid items."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # 1. Missing file
+        assert verify_ptx_grounding(tmppath) == []
+
+        # 2. Defective snapshot
+        ptx_file = tmppath / "nvidia_ptx_snapshot.json"
+        with open(ptx_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "metadata": "non_list",
+                        "instructions": [
+                            "not_a_dict",
+                            {"name": ""},
+                            {"api_path": "ptx.add"},
+                            {"mnemonic": "sub.s32"},
+                            {"name": "add.s32"},
+                        ],
+                    }
+                },
+                f,
+            )
+        errs = verify_ptx_grounding(tmppath)
+        assert len(errs) == 1
+        assert "missing identifier" in errs[0]
+
+
+def test_verify_grounding_metal() -> None:
+    """Test verify_metal_grounding with missing file, invalid items, and valid items."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # 1. Missing file
+        assert verify_metal_grounding(tmppath) == []
+
+        # 2. Defective snapshot
+        metal_file = tmppath / "metal_snapshot.json"
+        with open(metal_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "metadata": "non_list",
+                        "functions": [
+                            "not_a_dict",
+                            {"name": ""},
+                            {"api_path": "metal.threadgroup_barrier"},
+                            {"name": "threadgroup_barrier"},
+                        ],
+                    }
+                },
+                f,
+            )
+        errs = verify_metal_grounding(tmppath)
+        assert len(errs) == 1
+        assert "missing identifier" in errs[0]
+
+
+def test_verify_grounding_wasm() -> None:
+    """Test verify_wasm_grounding with missing file, invalid items, and valid items."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # 1. Missing file
+        assert verify_wasm_grounding(tmppath) == []
+
+        # 2. Defective snapshot
+        wasm_file = tmppath / "wasm_snapshot.json"
+        with open(wasm_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "metadata": "non_list",
+                        "instructions": [
+                            "not_a_dict",
+                            {"name": ""},
+                            {"api_path": "wasm.i32x4_add"},
+                            {"name": "i32x4.add"},
+                        ],
+                    }
+                },
+                f,
+            )
+        errs = verify_wasm_grounding(tmppath)
+        assert len(errs) == 1
+        assert "missing identifier" in errs[0]
+
+
+def test_verify_grounding_array_api() -> None:
+    """Test verify_array_api_grounding with missing file, defective ops, and valid snapshots."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # 1. Missing file returns empty list
+        assert verify_array_api_grounding(tmppath) == []
+
+        # 2. Defective snapshot with missing op, wrong input, and unrecognized attribute
+        array_api_file = tmppath / "array_api_v2024.12.json"
+        with open(array_api_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "array": [
+                            {
+                                "name": "abs",
+                                "api_path": "array_api.abs",
+                                "params": [
+                                    {"name": "wrong_input", "kind": "POSITIONAL_ONLY"}
+                                ],
+                                "kwargs": [],
+                            },
+                            {
+                                "name": "sum",
+                                "api_path": "array_api.sum",
+                                "params": [
+                                    {"name": "x", "kind": "POSITIONAL_ONLY"},
+                                    {"name": "axis", "kind": "KEYWORD_ONLY"},
+                                ],
+                                "kwargs": ["axis"],
+                            },
+                        ]
+                    }
+                },
+                f,
+            )
+        errs = verify_array_api_grounding(tmppath)
+        assert len(errs) > 0
+        assert any("is not grounded" in e for e in errs)
+        assert any("does not match snapshot parameter" in e for e in errs)
+        assert any("attribute" in e and "is not recognized" in e for e in errs)
+
+        # 3. Valid snapshot with fixture
+        fixtures_dir = Path(DEFAULT_SNAPSHOT_DIR)
+        if (fixtures_dir / "array_api_v2024.12.json").is_file():
+            assert verify_array_api_grounding(fixtures_dir) == []
+
+        # 4. Schema with empty inputs, empty kw_params, only name, only api_path, empty dict
+        empty_schema = MagicMock()
+        empty_schema.inputs = []
+        empty_schema.attributes = ["axis"]
+        empty_both = MagicMock()
+        empty_both.inputs = []
+        empty_both.attributes = []
+        with open(array_api_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "array": "not_a_list",
+                        "util": [
+                            "not_a_dict",
+                            {},
+                            {"name": "abs", "params": []},
+                            {"api_path": "array_api.sum"},
+                        ],
+                    }
+                },
+                f,
+            )
+        with patch.dict(
+            "scripts.verify_grounding.ARRAY_API_REGISTRY",
+            {"abs": empty_schema, "sum": empty_both},
+            clear=True,
+        ):
+            assert verify_array_api_grounding(tmppath) == []
+
+
+def test_verify_grounding_aten() -> None:
+    """Test verify_aten_grounding with missing file, defective ops, and valid snapshots."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # 1. Missing file returns empty list
+        assert verify_aten_grounding(tmppath) == []
+
+        # 2. Defective snapshot with missing op and missing attribute
+        aten_file = tmppath / "aten_v2.8.0.json"
+        with open(aten_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "array": [
+                            {
+                                "name": "add",
+                                "api_path": "aten.add",
+                                "params": [
+                                    {"name": "self", "kind": "POSITIONAL_ONLY"},
+                                    {"name": "other", "kind": "POSITIONAL_ONLY"},
+                                ],
+                            }
+                        ]
+                    }
+                },
+                f,
+            )
+        errs = verify_aten_grounding(tmppath)
+        assert len(errs) > 0
+        assert any("is not grounded" in e for e in errs)
+        assert any("attribute 'alpha' is not recognized" in e for e in errs)
+
+        # 3. Snapshot with non-list category, non-dict item, only api_path, only name
+        with open(aten_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "array": "not_a_list",
+                        "util": [
+                            "not_a_dict",
+                            {"name": "add"},
+                            {"api_path": "aten.matmul"},
+                        ],
+                    }
+                },
+                f,
+            )
+        errs_cat = verify_aten_grounding(tmppath)
+        assert len(errs_cat) > 0
+
+        # 4. Valid snapshot with fixture
+        fixtures_dir = Path(DEFAULT_SNAPSHOT_DIR)
+        if (fixtures_dir / "aten_v2.8.0.json").is_file():
+            assert verify_aten_grounding(fixtures_dir) == []
+
+        # 5. ATen schema with empty known_params and empty dict
+        empty_aten_schema = MagicMock()
+        empty_aten_schema.attributes = ["alpha"]
+        with open(aten_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "array": [
+                            {},
+                            {"name": "add", "params": []},
+                            {"api_path": "aten.matmul"},
+                        ],
+                    }
+                },
+                f,
+            )
+        with patch.dict(
+            "scripts.verify_grounding.ATEN_REGISTRY",
+            {"add": empty_aten_schema, "matmul": empty_aten_schema},
+            clear=True,
+        ):
+            assert verify_aten_grounding(tmppath) == []
+
+
+def test_verify_grounding_collectives() -> None:
+    """Test verify_collectives_grounding with missing file, defective ops, and valid snapshots."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        # 1. Missing file returns empty list
+        assert verify_collectives_grounding(tmppath) == []
+
+        # 2. Defective snapshot missing collective ops
+        nccl_file = tmppath / "nccl_v2.21.json"
+        with open(nccl_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "array": [{"name": "broadcast", "api_path": "nccl.broadcast"}]
+                    }
+                },
+                f,
+            )
+        errs = verify_collectives_grounding(tmppath)
+        assert len(errs) >= 4
+        assert any("is not grounded" in e for e in errs)
+
+        # 3. Missing collective from registry
+        with patch.dict(
+            "scripts.verify_grounding.COLLECTIVE_OPS_REGISTRY",
+            {},
+            clear=True,
+        ):
+            errs_missing_reg = verify_collectives_grounding(tmppath)
+            assert any(
+                "missing from COLLECTIVE_OPS_REGISTRY" in e for e in errs_missing_reg
+            )
+
+        # 4. Snapshot with non-list category, non-dict item, only api_path, only name
+        with open(nccl_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "categories": {
+                        "array": "not_a_list",
+                        "util": [
+                            "not_a_dict",
+                            {},
+                            {"name": "all_reduce"},
+                            {"api_path": "nccl.all_gather"},
+                            {"name": "reduce_scatter"},
+                            {"api_path": "nccl.all_to_all"},
+                        ],
+                    }
+                },
+                f,
+            )
+        fake_all_reduce_no_red = MagicMock()
+        fake_all_reduce_no_red.attributes = ["comm"]
+        fake_all_reduce_no_comm = MagicMock()
+        fake_all_reduce_no_comm.attributes = ["reduction_op"]
+
+        with patch.dict(
+            "scripts.verify_grounding.COLLECTIVE_OPS_REGISTRY",
+            {
+                "all_reduce": fake_all_reduce_no_red,
+                "all_gather": fake_all_reduce_no_red,
+                "reduce_scatter": fake_all_reduce_no_red,
+                "all_to_all": fake_all_reduce_no_red,
+            },
+        ):
+            errs_no_red = verify_collectives_grounding(tmppath)
+            assert any(
+                "schema missing 'reduction_op' attribute" in e for e in errs_no_red
+            )
+
+        with patch.dict(
+            "scripts.verify_grounding.COLLECTIVE_OPS_REGISTRY",
+            {
+                "all_reduce": fake_all_reduce_no_comm,
+                "all_gather": fake_all_reduce_no_comm,
+                "reduce_scatter": fake_all_reduce_no_comm,
+                "all_to_all": fake_all_reduce_no_comm,
+            },
+        ):
+            errs_no_comm = verify_collectives_grounding(tmppath)
+            assert any(
+                "schema missing 'comm' communicator attribute" in e
+                for e in errs_no_comm
+            )
+
+        # 5. Non-reduction collective schema with all communicator params valid
+        fake_coll_schema = MagicMock()
+        fake_coll_schema.attributes = ["comm", "stream", "datatype"]
+        fake_coll_schema_red = MagicMock()
+        fake_coll_schema_red.attributes = ["reduction_op", "comm", "stream", "datatype"]
+        with patch.dict(
+            "scripts.verify_grounding.COLLECTIVE_OPS_REGISTRY",
+            {
+                "all_reduce": fake_coll_schema_red,
+                "all_gather": fake_coll_schema,
+                "reduce_scatter": fake_coll_schema_red,
+                "all_to_all": fake_coll_schema,
+            },
+            clear=True,
+        ):
+            assert verify_collectives_grounding(tmppath) == []
+
+        # 6. Valid snapshot with fixture
+        fixtures_dir = Path(DEFAULT_SNAPSHOT_DIR)
+        if (fixtures_dir / "nccl_v2.21.json").is_file():
+            assert verify_collectives_grounding(fixtures_dir) == []
+
+
+def test_verify_grounding_custom_attention() -> None:
+    """Test verify_custom_ops_grounding with flash_attention snapshot checks and edge cases."""
+    with TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        flash_file = tmppath / "flash_attention_v2.6.3.json"
+
+        # 1. Defective JSON in flash_attention file
+        flash_file.write_text("{invalid_json", encoding="utf-8")
+        errs_bad_json = verify_custom_ops_grounding(tmppath)
+        assert any(
+            "Failed parsing flash_attention snapshot" in e for e in errs_bad_json
+        )
+
+        # 2. Non-list category and non-dict items
+        flash_file.write_text(
+            json.dumps(
+                {
+                    "categories": {
+                        "neural_ops": ["not_a_dict"],
+                        "util": "not_a_list",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert verify_custom_ops_grounding(tmppath) == []
+
+        # 3. Attention op inputs mismatch
+        flash_file.write_text(
+            json.dumps(
+                {
+                    "categories": {
+                        "neural_ops": [
+                            {
+                                "name": "FlashAttention",
+                                "api_path": "ml.switcheroo.custom.FlashAttention",
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        fake_schema = MagicMock()
+        fake_schema.inputs = ["wrong_q", "wrong_k"]
+        fake_schema.outputs = ["out"]
+        fake_schema.name = "FlashAttention"
+        fake_schema.domain = "ml.switcheroo.custom"
+        with patch.dict(
+            "scripts.verify_grounding.CUSTOM_OPS_REGISTRY",
+            {"FlashAttention": fake_schema},
+        ):
+            errs_mismatch = verify_custom_ops_grounding(tmppath)
+            assert any(
+                "inputs ['wrong_q', 'wrong_k'] do not match expected" in e
+                for e in errs_mismatch
+            )
+
+        # 4. Valid flash_attention snapshot matching CUSTOM_OPS_REGISTRY
+        fixtures_dir = Path(DEFAULT_SNAPSHOT_DIR)
+        if (fixtures_dir / "flash_attention_v2.6.3.json").is_file():
+            assert verify_custom_ops_grounding(fixtures_dir) == []
+
+        # 5. Snapshot item with empty dict and api_path but no name
+        flash_file.write_text(
+            json.dumps(
+                {
+                    "categories": {
+                        "neural_ops": [
+                            {},
+                            {
+                                "api_path": "ml.switcheroo.custom.FlashAttention",
+                            },
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert verify_custom_ops_grounding(tmppath) == []
+
+        # 6. Missing attention op in registry
+        with patch.dict(
+            "scripts.verify_grounding.CUSTOM_OPS_REGISTRY",
+            {},
+            clear=True,
+        ):
+            errs_missing = verify_custom_ops_grounding(fixtures_dir)
+            assert any("missing from CUSTOM_OPS_REGISTRY" in e for e in errs_missing)
+
+
+def test_verify_grounding_main_ecosystem_and_strict() -> None:
+    """Test verify_grounding main function with --ecosystem-snapshots-dir and --strict flags."""
+    fixtures_dir = str(DEFAULT_SNAPSHOT_DIR)
+
+    # Strict mode with non-existent directory returns 1
+    assert (
+        verify_grounding_main(["--strict", "--snapshots-dir", "/nonexistent/dir"]) == 1
+    )
+
+    # Strict mode with empty directory returns 1
+    with TemporaryDirectory() as empty_dir:
+        assert verify_grounding_main(["--strict", "--snapshots-dir", empty_dir]) == 1
+
+        # Strict mode when target_dir is None and empty snapshots_dir
+        with patch(
+            "scripts.verify_grounding.find_snapshots_directory",
+            return_value=Path(empty_dir),
+        ):
+            assert verify_grounding_main(["--strict"]) == 1
+            assert verify_grounding_main([]) == 0
+
+    # Passing explicit --ecosystem-snapshots-dir with valid fixtures
+    assert (
+        verify_grounding_main(["--strict", "--ecosystem-snapshots-dir", fixtures_dir])
+        == 0
+    )

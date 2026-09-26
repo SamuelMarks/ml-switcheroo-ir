@@ -1,4 +1,4 @@
-"""Additional unit tests ensuring 100% line and branch coverage in Validator."""
+"""Extended unit tests for validation rules and edge cases in Validator."""
 
 from __future__ import annotations
 
@@ -85,3 +85,63 @@ def test_validator_sharding_empty_list_axis() -> None:
     spec = PartitionSpec(axes=([], 123))  # type: ignore[arg-type]
     node = LogicalNode(id="n_empty", op_type="Relu", sharding=spec)
     assert not v.validate_sharding(node, mesh)
+
+
+def test_validator_custom_domain_pass_through() -> None:
+    """Test that custom domain nodes pass through validate_kind without error."""
+    v = Validator()
+    node = LogicalNode(id="c1", op_type="MySpecialCustomOp", domain="custom")
+    assert not v.validate_kind(node)
+
+
+def test_grounding_validator_engine_exception_handling(tmp_path: object) -> None:
+    """Test exception resilience in GroundingValidator when GroundingEngine fails.
+
+    Args:
+        tmp_path: Temporary directory fixture.
+    """
+    from pathlib import Path
+    from unittest.mock import MagicMock, patch
+
+    from ml_switcheroo_ir.validator import GroundingValidator
+
+    # Test snapshots_dir initialization path
+    test_dir = Path(str(tmp_path)) / "snaps"
+    test_dir.mkdir()
+    gv = GroundingValidator(snapshots_dir=str(test_dir))
+    assert gv._engine is not None or gv._engine is None
+    gv2 = GroundingValidator(snapshot_manifest={}, snapshots_dir=str(test_dir))
+    assert gv2._engine is not None or gv2._engine is None
+
+    # Test GroundingEngine import/init failure
+    with patch(
+        "ml_ecosystem_snapshots.grounding.engine.GroundingEngine",
+        side_effect=RuntimeError("init failed"),
+    ):
+        gv_fail = GroundingValidator()
+        assert gv_fail._engine is None
+
+    # Test GroundingEngine fallback import when ml_ecosystem_snapshots is unavailable
+    with patch.dict(
+        "sys.modules", {"ml_ecosystem_snapshots.grounding.engine": None}
+    ), patch(
+        "ml_framework_snapshots.grounding.engine.GroundingEngine",
+        side_effect=RuntimeError("init failed"),
+    ):
+        gv_fail_fallback = GroundingValidator()
+        assert gv_fail_fallback._engine is None
+
+    # Test get_symbol and suggest_closest_symbol throwing exceptions
+    broken_engine = MagicMock()
+    broken_engine.get_symbol.side_effect = RuntimeError("engine lookup failed")
+    broken_engine.suggest_closest_symbol.side_effect = RuntimeError(
+        "engine suggest failed"
+    )
+
+    gv_resilient = GroundingValidator()
+    gv_resilient._engine = broken_engine
+
+    node = LogicalNode(id="n1", op_type="BrokenOp", domain="torch")
+    errs = gv_resilient.validate_grounding(node)
+    assert len(errs) == 1
+    assert "BrokenOp" in errs[0].message

@@ -33,3 +33,20 @@ def test_compliance_tabulate_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
         # Restore normal tabulate if it exists
         monkeypatch.undo()
         importlib.reload(ml_switcheroo_ir.compliance)
+
+
+def test_compliance_deprecation_warning() -> None:
+    """Test that importing or reloading compliance emits a DeprecationWarning."""
+    import importlib
+    import warnings
+
+    import ml_switcheroo_ir.compliance
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        importlib.reload(ml_switcheroo_ir.compliance)
+        assert any(
+            issubclass(w.category, DeprecationWarning)
+            and "ml_switcheroo_ir.compliance is deprecated" in str(w.message)
+            for w in record
+        )

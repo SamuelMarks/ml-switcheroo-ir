@@ -141,3 +141,13 @@ def test_topological_sort_strict_cycle() -> None:
     # Non-strict mode should still handle it by appending
     nodes = topological_sort(graph, strict=False)
     assert len(nodes) == 2
+
+
+def test_graph_edges_unresolved_colon_input() -> None:
+    """Test edges property derivation when an input has colon syntax but no producing node."""
+    node = LogicalNode(id="n1", op_type="Relu", inputs=["missing_node:3"])
+    graph = LogicalGraph(nodes={"n1": node})
+    edges = graph.edges
+    assert len(edges) == 1
+    assert edges[0].source == "missing_node:3"
+    assert edges[0].source_idx == 0

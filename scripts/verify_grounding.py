@@ -10,7 +10,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
+from ml_switcheroo_ir.schema.custom_ops import (
+    COLLECTIVE_OPS_REGISTRY,
+    CUSTOM_OPS_REGISTRY,
+)
+from ml_switcheroo_ir.schema.framework_registries import (
+    ARRAY_API_REGISTRY,
+    ATEN_REGISTRY,
+)
 from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
@@ -24,6 +31,18 @@ from ml_switcheroo_ir.validator import (
 def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     """Locate the ground-truth snapshots directory.
 
+    Checks:
+        1. Explicit override_path argument.
+        2. ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable.
+        3. ML_FRAMEWORK_SNAPSHOTS_DIR environment variable.
+        4. DEFAULT_SNAPSHOT_DIR from validator.
+        5. Sibling directory ../ml-ecosystem-snapshots/src/ml_framework_snapshots/snapshots/
+           and ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/.
+        6. User cache directory (~/.cache/ml_ecosystem_snapshots).
+        7. User cache directory (~/.cache/ml_framework_snapshots).
+        8. Sibling directory ../ml-framework-snapshots/src/ml_framework_snapshots/snapshots/.
+        9. Bundled fixture directory tests/fixtures/snapshots.
+
     Args:
         override_path (Optional[str]): Explicit path provided via CLI flag or config.
 
@@ -36,6 +55,12 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
             return p
         return None
 
+    env_eco = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
+    if env_eco:
+        p = Path(env_eco).resolve()
+        if p.is_dir():
+            return p
+
     env_dir = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR")
     if env_dir:
         p = Path(env_dir).resolve()
@@ -46,16 +71,52 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     if default_path.is_dir():
         return default_path
 
-    # Fallback to relative path from script
-    script_relative = (
+    sibling_eco_fw = (
+        Path(__file__).resolve().parent.parent.parent
+        / "ml-ecosystem-snapshots"
+        / "src"
+        / "ml_framework_snapshots"
+        / "snapshots"
+    )
+    if sibling_eco_fw.is_dir():
+        return sibling_eco_fw
+
+    sibling_eco = (
+        Path(__file__).resolve().parent.parent.parent
+        / "ml-ecosystem-snapshots"
+        / "src"
+        / "ml_ecosystem_snapshots"
+        / "snapshots"
+    )
+    if sibling_eco.is_dir():
+        return sibling_eco
+
+    user_cache_eco = Path("~/.cache/ml_ecosystem_snapshots").expanduser().resolve()
+    if user_cache_eco.is_dir():
+        return user_cache_eco
+
+    user_cache_fw = Path("~/.cache/ml_framework_snapshots").expanduser().resolve()
+    if user_cache_fw.is_dir():
+        return user_cache_fw
+
+    sibling_fw = (
         Path(__file__).resolve().parent.parent.parent
         / "ml-framework-snapshots"
         / "src"
         / "ml_framework_snapshots"
         / "snapshots"
     )
-    if script_relative.is_dir():
-        return script_relative
+    if sibling_fw.is_dir():
+        return sibling_fw
+
+    fixtures_dir = (
+        Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "snapshots"
+    )
+    if fixtures_dir.is_dir():
+        return fixtures_dir
+
+    if default_path.is_dir():
+        return default_path
 
     return None
 
@@ -129,8 +190,13 @@ def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
     return errors
 
 
-def verify_custom_ops_grounding() -> list[str]:
+def verify_custom_ops_grounding(snapshots_dir: Path | None = None) -> list[str]:
     """Verify all custom operator schemas in CUSTOM_OPS_REGISTRY have valid specifications.
+
+    Also audits custom attention operations against flash_attention snapshot when available.
+
+    Args:
+        snapshots_dir (Optional[Path]): Directory containing snapshots.
 
     Returns:
         List[str]: List of diagnostic errors for custom operators.
@@ -145,6 +211,257 @@ def verify_custom_ops_grounding() -> list[str]:
             )
         if not schema.outputs:
             errors.append(f"Custom op '{op_name}' has no defined outputs.")
+
+    if snapshots_dir is not None:
+        flash_candidates = sorted(snapshots_dir.glob("*flash_attention*.json"))
+        if flash_candidates:
+            flash_file = flash_candidates[-1]
+            try:
+                with open(flash_file, "r", encoding="utf-8") as f:
+                    flash_data = json.load(f)
+                snap_symbols: dict[str, Any] = {}
+                for cat_items in flash_data.get("categories", {}).values():
+                    if isinstance(cat_items, list):
+                        for item in cat_items:
+                            if isinstance(item, dict):
+                                name = item.get("name")
+                                api_path = item.get("api_path")
+                                if name:
+                                    snap_symbols[name] = item
+                                if api_path:
+                                    snap_symbols[api_path] = item
+                                    snap_symbols[api_path.split(".")[-1]] = item
+
+                attention_ops = {
+                    "FlashAttention": ["Q", "K", "V"],
+                    "PagedAttention": [
+                        "query",
+                        "key_cache",
+                        "value_cache",
+                        "block_tables",
+                        "context_lens",
+                    ],
+                    "RaggedPagedAttention": [
+                        "query",
+                        "key_cache",
+                        "value_cache",
+                        "block_tables",
+                        "context_lens",
+                    ],
+                }
+                for att_name, exp_inputs in attention_ops.items():
+                    if att_name not in CUSTOM_OPS_REGISTRY:
+                        errors.append(
+                            f"Custom attention op '{att_name}' missing from CUSTOM_OPS_REGISTRY."
+                        )
+                    else:
+                        att_schema = CUSTOM_OPS_REGISTRY[att_name]
+                        if att_schema.inputs != exp_inputs:
+                            errors.append(
+                                f"Custom attention op '{att_name}' inputs {att_schema.inputs} do not match expected {exp_inputs}."
+                            )
+            except (
+                ValueError,
+                OSError,
+                KeyError,
+                TypeError,
+                json.JSONDecodeError,
+            ) as exc:
+                errors.append(
+                    f"Failed parsing flash_attention snapshot {flash_file.name}: {exc}"
+                )
+
+    return errors
+
+
+def verify_array_api_grounding(snapshots_dir: Path) -> list[str]:
+    """Verify Array API operators against array_api snapshot.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for ungrounded Array API operations.
+    """
+    candidates = sorted(snapshots_dir.glob("*array_api*.json"))
+    if not candidates:
+        return []
+
+    errors: list[str] = []
+    array_api_file = candidates[-1]
+    with open(array_api_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    snap_symbols: dict[str, Any] = {}
+    for cat_items in data.get("categories", {}).values():
+        if isinstance(cat_items, list):
+            for item in cat_items:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    api_path = item.get("api_path")
+                    if name:
+                        snap_symbols[name] = item
+                    if api_path:
+                        snap_symbols[api_path] = item
+                        snap_symbols[api_path.split(".")[-1]] = item
+
+    for op_name, schema in ARRAY_API_REGISTRY.items():
+        if op_name not in snap_symbols and f"array_api.{op_name}" not in snap_symbols:
+            errors.append(
+                f"Array API op '{op_name}' is not grounded in {array_api_file.name} snapshot."
+            )
+            continue
+
+        sym_record = snap_symbols.get(op_name) or snap_symbols[f"array_api.{op_name}"]
+        snap_params = sym_record.get("params") or []
+        if schema.inputs:
+            pos_params = [
+                p["name"]
+                for p in snap_params
+                if p.get("kind") in ("POSITIONAL_ONLY", "POSITIONAL_OR_KEYWORD")
+            ]
+            for idx, inp in enumerate(schema.inputs):
+                if (
+                    idx < len(pos_params)
+                    and inp != pos_params[idx]
+                    and inp not in pos_params
+                ):
+                    errors.append(
+                        f"Array API op '{op_name}' input {idx} ('{inp}') does not match snapshot parameter '{pos_params[idx]}'."
+                    )
+        if schema.attributes:
+            kw_params = {
+                p["name"]: p for p in snap_params if p.get("kind") == "KEYWORD_ONLY"
+            }
+            for attr_name in schema.attributes:
+                if (
+                    kw_params
+                    and attr_name not in kw_params
+                    and attr_name not in sym_record.get("kwargs", [])
+                ):
+                    errors.append(
+                        f"Array API op '{op_name}' attribute '{attr_name}' is not recognized in {array_api_file.name}."
+                    )
+    return errors
+
+
+def verify_aten_grounding(snapshots_dir: Path) -> list[str]:
+    """Verify ATen operators against aten snapshot.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for ungrounded ATen operations.
+    """
+    candidates = sorted(snapshots_dir.glob("*aten*.json"))
+    if not candidates:
+        return []
+
+    errors: list[str] = []
+    aten_file = candidates[-1]
+    with open(aten_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    snap_symbols: dict[str, Any] = {}
+    for cat_items in data.get("categories", {}).values():
+        if isinstance(cat_items, list):
+            for item in cat_items:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    api_path = item.get("api_path")
+                    if name:
+                        snap_symbols[name] = item
+                    if api_path:
+                        snap_symbols[api_path] = item
+                        snap_symbols[api_path.split(".")[-1]] = item
+
+    for op_name, schema in ATEN_REGISTRY.items():
+        if op_name not in snap_symbols and f"aten.{op_name}" not in snap_symbols:
+            errors.append(
+                f"ATen op '{op_name}' is not grounded in {aten_file.name} snapshot."
+            )
+            continue
+
+        sym_record = snap_symbols.get(op_name) or snap_symbols[f"aten.{op_name}"]
+        if schema.attributes:
+            known_params = {
+                p["name"]
+                for p in sym_record.get("params") or []
+                if isinstance(p, dict) and p.get("name")
+            }
+            for attr_name in schema.attributes:
+                if known_params and attr_name not in known_params:
+                    errors.append(
+                        f"ATen op '{op_name}' attribute '{attr_name}' is not recognized in {aten_file.name}."
+                    )
+    return errors
+
+
+def verify_collectives_grounding(snapshots_dir: Path) -> list[str]:
+    """Verify collective operations against NCCL snapshot.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for collective operations.
+    """
+    candidates = sorted(snapshots_dir.glob("*nccl*.json"))
+    if not candidates:
+        return []
+
+    errors: list[str] = []
+    nccl_file = candidates[-1]
+    with open(nccl_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    snap_symbols: dict[str, Any] = {}
+    for cat_items in data.get("categories", {}).values():
+        if isinstance(cat_items, list):
+            for item in cat_items:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    api_path = item.get("api_path")
+                    if name:
+                        snap_symbols[name] = item
+                    if api_path:
+                        snap_symbols[api_path] = item
+                        snap_symbols[api_path.split(".")[-1]] = item
+
+    core_collectives = ["all_reduce", "all_gather", "reduce_scatter", "all_to_all"]
+    for coll_name in core_collectives:
+        if (
+            coll_name not in COLLECTIVE_OPS_REGISTRY
+            and f"collective.{coll_name}" not in COLLECTIVE_OPS_REGISTRY
+        ):
+            errors.append(
+                f"Collective operation '{coll_name}' missing from COLLECTIVE_OPS_REGISTRY."
+            )
+            continue
+
+        if coll_name not in snap_symbols and f"nccl.{coll_name}" not in snap_symbols:
+            errors.append(
+                f"Collective op '{coll_name}' is not grounded in {nccl_file.name} snapshot."
+            )
+            continue
+
+        schema = (
+            COLLECTIVE_OPS_REGISTRY.get(coll_name)
+            or COLLECTIVE_OPS_REGISTRY[f"collective.{coll_name}"]
+        )
+        if (
+            coll_name in ("all_reduce", "reduce_scatter")
+            and "reduction_op" not in schema.attributes
+        ):
+            errors.append(
+                f"Collective op '{coll_name}' schema missing 'reduction_op' attribute."
+            )
+        if "comm" not in schema.attributes:
+            errors.append(
+                f"Collective op '{coll_name}' schema missing 'comm' communicator attribute."
+            )
+
     return errors
 
 
@@ -276,8 +593,195 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
     return errors
 
 
+def verify_rdna_grounding(snapshots_dir: Path) -> list[str]:
+    """Verify AMD RDNA instructions and VOPD specifications against snapshot.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for ungrounded RDNA instructions.
+    """
+    candidates = sorted(snapshots_dir.glob("*rdna*.json"))
+    if not candidates:
+        return []
+
+    errors: list[str] = []
+    rdna_file = candidates[-1]
+    with open(rdna_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    instructions = data.get("categories", {}).get("instructions", [])
+    for inst in instructions:
+        if not isinstance(inst, dict):
+            continue
+        name = inst.get("name") or inst.get("mnemonic")
+        if not name:
+            errors.append(
+                f"RDNA instruction missing name/mnemonic in {rdna_file.name}."
+            )
+            continue
+        vopd_slot = inst.get("vopd_slot")
+        if vopd_slot is not None and vopd_slot not in ("X", "Y", "BOTH"):
+            errors.append(
+                f"RDNA instruction '{name}' has invalid vopd_slot '{vopd_slot}'."
+            )
+    return errors
+
+
+def verify_sass_grounding(snapshots_dir: Path) -> list[str]:
+    """Verify NVIDIA SASS instructions and control codes against snapshot.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for ungrounded SASS instructions.
+    """
+    candidates = sorted(snapshots_dir.glob("*sass*.json"))
+    if not candidates:
+        return []
+
+    errors: list[str] = []
+    sass_file = candidates[-1]
+    with open(sass_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    instructions = data.get("categories", {}).get("instructions", [])
+    for inst in instructions:
+        if not isinstance(inst, dict):
+            continue
+        name = inst.get("name") or inst.get("mnemonic")
+        if not name:
+            errors.append(
+                f"SASS instruction missing name/mnemonic in {sass_file.name}."
+            )
+            continue
+        latency = inst.get("execution_latency")
+        if latency is not None and not isinstance(latency, (int, list, tuple)):
+            errors.append(
+                f"SASS instruction '{name}' has invalid execution_latency '{latency}'."
+            )
+    return errors
+
+
+def verify_wgsl_grounding(snapshots_dir: Path) -> list[str]:
+    """Verify WebGPU WGSL operations and attributes against snapshot or schema.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for ungrounded WGSL operations.
+    """
+    wgsl_file = snapshots_dir / "wgsl_ops.json"
+    if not wgsl_file.is_file():
+        wgsl_file = Path(DEFAULT_SNAPSHOT_DIR) / "wgsl_ops.json"
+    if not wgsl_file.is_file():
+        return []
+
+    errors: list[str] = []
+    with open(wgsl_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    for op in data.get("ops", []):
+        name = op.get("name")
+        if not name:
+            errors.append("WGSL op missing name.")
+            continue
+        if op.get("domain") != "wgsl":
+            errors.append(f"WGSL op '{name}' has invalid domain '{op.get('domain')}'.")
+    return errors
+
+
+def verify_ptx_grounding(snapshots_dir: Path) -> list[str]:
+    """Verify NVIDIA PTX operations against snapshot if available.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for ungrounded PTX operations.
+    """
+    candidates = sorted(snapshots_dir.glob("*ptx*.json"))
+    if not candidates:
+        return []
+
+    errors: list[str] = []
+    ptx_file = candidates[-1]
+    with open(ptx_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    for cat_items in data.get("categories", {}).values():
+        if isinstance(cat_items, list):
+            for item in cat_items:
+                if isinstance(item, dict) and not (
+                    item.get("api_path") or item.get("name") or item.get("mnemonic")
+                ):
+                    errors.append(f"PTX item missing identifier in {ptx_file.name}.")
+    return errors
+
+
+def verify_metal_grounding(snapshots_dir: Path) -> list[str]:
+    """Verify Metal MSL compute operations against snapshot if available.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for ungrounded Metal operations.
+    """
+    candidates = sorted(snapshots_dir.glob("*metal*.json"))
+    if not candidates:
+        return []
+
+    errors: list[str] = []
+    metal_file = candidates[-1]
+    with open(metal_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    for cat_items in data.get("categories", {}).values():
+        if isinstance(cat_items, list):
+            for item in cat_items:
+                if isinstance(item, dict) and not (
+                    item.get("api_path") or item.get("name")
+                ):
+                    errors.append(
+                        f"Metal item missing identifier in {metal_file.name}."
+                    )
+    return errors
+
+
+def verify_wasm_grounding(snapshots_dir: Path) -> list[str]:
+    """Verify WebAssembly SIMD operations against snapshot if available.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for ungrounded WASM operations.
+    """
+    candidates = sorted(snapshots_dir.glob("*wasm*.json"))
+    if not candidates:
+        return []
+
+    errors: list[str] = []
+    wasm_file = candidates[-1]
+    with open(wasm_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    for cat_items in data.get("categories", {}).values():
+        if isinstance(cat_items, list):
+            for item in cat_items:
+                if isinstance(item, dict) and not (
+                    item.get("api_path") or item.get("name")
+                ):
+                    errors.append(f"WASM item missing identifier in {wasm_file.name}.")
+    return errors
+
+
 def _verify_local_schemas_only() -> int:
-    """Verify local custom ops and ONNX registries when snapshot directory is missing or empty.
+    """Verify local custom ops, ONNX, Array API, ATen, and collective registries when snapshot directory is missing or empty.
 
     Returns:
         int: Process exit code (0 for success, 1 for failure).
@@ -309,22 +813,40 @@ def main(argv: list[str] | None = None) -> int:
         "--snapshots-dir",
         type=str,
         default=None,
-        help="Path to ml-framework-snapshots directory.",
+        help="Path to snapshots directory.",
+    )
+    parser.add_argument(
+        "--ecosystem-snapshots-dir",
+        type=str,
+        default=None,
+        help="Path to ml-ecosystem-snapshots directory.",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Treat missing snapshot directories or ungrounded symbols strictly as errors.",
     )
     args = parser.parse_args(argv)
 
     print("=== Auditing ml-switcheroo-ir Schema Grounding ===")
 
-    snapshots_dir = find_snapshots_directory(args.snapshots_dir)
+    target_dir = args.ecosystem_snapshots_dir or args.snapshots_dir
+    snapshots_dir = find_snapshots_directory(target_dir)
     if snapshots_dir is None:
-        print(
-            "[WARNING] ml-framework-snapshots directory not found. Skipping live snapshot checks."
-        )
+        if args.strict:
+            print("[ERROR] Snapshot directory not found in strict mode.")
+            return 1
+        print("[WARNING] Snapshot directory not found. Skipping live snapshot checks.")
         return _verify_local_schemas_only()
 
-    if args.snapshots_dir is None and not any(snapshots_dir.glob("*.json")):
+    if target_dir is None and not any(snapshots_dir.glob("*.json")):
+        if args.strict:
+            print(
+                "[ERROR] Snapshot directory contains no snapshot files in strict mode."
+            )
+            return 1
         print(
-            "[WARNING] ml-framework-snapshots directory contains no snapshot files. Skipping live snapshot checks."
+            "[WARNING] Snapshot directory contains no snapshot files. Skipping live snapshot checks."
         )
         return _verify_local_schemas_only()
 
@@ -333,17 +855,43 @@ def main(argv: list[str] | None = None) -> int:
     stablehlo_errors = verify_stablehlo_grounding(snapshots_dir)
     mlir_errors = verify_mlir_grounding(snapshots_dir)
     ir_errors = verify_ir_snapshot_grounding(snapshots_dir)
-    custom_errors = verify_custom_ops_grounding()
+    custom_errors = verify_custom_ops_grounding(snapshots_dir)
     onnx_errors = verify_onnx_grounding()
+    rdna_errors = verify_rdna_grounding(snapshots_dir)
+    sass_errors = verify_sass_grounding(snapshots_dir)
+    wgsl_errors = verify_wgsl_grounding(snapshots_dir)
+    ptx_errors = verify_ptx_grounding(snapshots_dir)
+    metal_errors = verify_metal_grounding(snapshots_dir)
+    wasm_errors = verify_wasm_grounding(snapshots_dir)
+    array_api_errors = verify_array_api_grounding(snapshots_dir)
+    aten_errors = verify_aten_grounding(snapshots_dir)
+    collectives_errors = verify_collectives_grounding(snapshots_dir)
 
     all_errors = (
-        stablehlo_errors + mlir_errors + ir_errors + custom_errors + onnx_errors
+        stablehlo_errors
+        + mlir_errors
+        + ir_errors
+        + custom_errors
+        + onnx_errors
+        + rdna_errors
+        + sass_errors
+        + wgsl_errors
+        + ptx_errors
+        + metal_errors
+        + wasm_errors
+        + array_api_errors
+        + aten_errors
+        + collectives_errors
     )
 
     print(f"Audited StableHLO schemas: {len(STABLEHLO_REGISTRY)} ops.")
     print(f"Audited MLIR dialects: {len(CORE_MLIR_DIALECTS)} dialects.")
     print(f"Audited Custom ops: {len(CUSTOM_OPS_REGISTRY)} ops.")
     print(f"Audited ONNX schemas: {len(ONNX_REGISTRY)} ops.")
+    print(f"Audited Array API schemas: {len(ARRAY_API_REGISTRY)} ops.")
+    print(f"Audited ATen schemas: {len(ATEN_REGISTRY)} ops.")
+    print(f"Audited Collective schemas: {len(COLLECTIVE_OPS_REGISTRY)} ops.")
+    print("Audited Low-Level & Hardware ISAs (RDNA, SASS, WGSL, PTX, Metal, WASM).")
 
     if all_errors:
         print(

@@ -4,7 +4,37 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Iterator, List, Mapping, Sequence, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    Sequence,
+    Union,
+)
+
+if TYPE_CHECKING:
+    from ml_switcheroo_ir import NoTangent, ZeroTangent
+
+from ml_switcheroo_ir.shapes import (
+    DimensionType,
+    SymInt,
+    SymNode,
+    broadcast_shapes,
+    matmul_shape,
+)
+
+__all__ = [
+    "AttributeValue",
+    "DType",
+    "DimensionType",
+    "NoTangent",
+    "TensorShape",
+    "TensorSpec",
+    "ZeroTangent",
+]
 
 AttributeValue = Union[
     int,
@@ -143,19 +173,21 @@ class DType(str, Enum):
 
 @dataclass
 class TensorShape:
-    """Represents a tensor shape with dimension query capabilities.
+    """Represents a tensor shape with dimension query and symbolic manipulation capabilities.
 
     Attributes:
-        dims (Tuple[Union[int, str], ...]): Tensor dimension sizes or symbolic names.
+        dims (tuple[DimensionType, ...]): Tensor dimension sizes, symbolic names, or SymNode expressions.
     """
 
-    dims: tuple[int | str, ...]
+    dims: tuple[DimensionType, ...]
 
-    def __init__(self, dims: tuple[int | str, ...] | Sequence[int | str] | Any) -> None:
+    def __init__(
+        self, dims: tuple[DimensionType, ...] | Sequence[DimensionType] | Any
+    ) -> None:
         """Initialize TensorShape normalizing inputs into a tuple.
 
         Args:
-            dims (Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]): Dimensions.
+            dims (tuple[DimensionType, ...] | Sequence[DimensionType] | Any): Dimensions.
         """
         if isinstance(dims, tuple):
             self.dims = dims
@@ -183,10 +215,13 @@ class TensorShape:
         """Check if shape contains dynamic or symbolic dimensions.
 
         Returns:
-            bool: True if dynamic or negative dimensions are present.
+            bool: True if dynamic or ungrounded symbolic dimensions are present.
         """
         return any(
-            isinstance(d, str) or (isinstance(d, int) and d < 0) for d in self.dims
+            isinstance(d, str)
+            or (isinstance(d, int) and d < 0)
+            or (isinstance(d, (SymNode, SymInt)) and not d.is_constant)
+            for d in self.dims
         )
 
     @property
@@ -194,7 +229,7 @@ class TensorShape:
         """Return static shape or raise ValueError if dynamic.
 
         Returns:
-            Tuple[int, ...]: Tuple of non-negative integer dimension sizes.
+            tuple[int, ...]: Tuple of non-negative integer dimension sizes.
 
         Raises:
             ValueError: If the shape contains dynamic or symbolic dimensions.
@@ -203,7 +238,65 @@ class TensorShape:
             raise ValueError(
                 f"Shape {self.dims} contains dynamic or symbolic dimensions."
             )
-        return tuple(int(d) for d in self.dims)
+        res: list[int] = []
+        for d in self.dims:
+            if isinstance(d, (SymNode, SymInt)):
+                res.append(d.eval({}))
+            else:
+                res.append(int(d))
+        return tuple(res)
+
+    def evaluate(self, bindings: dict[str, int]) -> tuple[int, ...]:
+        """Evaluate all symbolic dimensions into concrete integers using runtime bindings.
+
+        Args:
+            bindings (dict[str, int]): Mapping from dimension variable names to concrete integers.
+
+        Returns:
+            tuple[int, ...]: Tuple of concrete integer dimension sizes.
+
+        Raises:
+            KeyError: If an unbound symbolic variable is encountered.
+        """
+        res: list[int] = []
+        for d in self.dims:
+            if isinstance(d, int):
+                res.append(d)
+            elif isinstance(d, (SymNode, SymInt)):
+                res.append(d.evaluate(bindings))
+            elif d.isdigit():
+                res.append(int(d))
+            elif d in bindings:
+                res.append(bindings[d])
+            else:
+                res.append(SymNode.to_node(d).evaluate(bindings))
+        return tuple(res)
+
+    def broadcast_with(
+        self, other: TensorShape | Sequence[DimensionType]
+    ) -> TensorShape:
+        """Broadcast this shape with another shape using NumPy-compliant broadcasting.
+
+        Args:
+            other (TensorShape | Sequence[DimensionType]): Target shape to broadcast with.
+
+        Returns:
+            TensorShape: Resulting broadcasted TensorShape.
+        """
+        other_dims = other.dims if isinstance(other, TensorShape) else tuple(other)
+        return TensorShape(broadcast_shapes(self.dims, other_dims))
+
+    def matmul_with(self, other: TensorShape | Sequence[DimensionType]) -> TensorShape:
+        """Infer the resulting matrix multiplication shape with another shape.
+
+        Args:
+            other (TensorShape | Sequence[DimensionType]): Target shape to matrix multiply with.
+
+        Returns:
+            TensorShape: Resulting matrix multiplication TensorShape.
+        """
+        other_dims = other.dims if isinstance(other, TensorShape) else tuple(other)
+        return TensorShape(matmul_shape(self.dims, other_dims))
 
     def __len__(self) -> int:
         """Return number of dimensions.
@@ -213,11 +306,11 @@ class TensorShape:
         """
         return len(self.dims)
 
-    def __iter__(self) -> Iterator[int | str]:
+    def __iter__(self) -> Iterator[DimensionType]:
         """Iterate over dimension sizes.
 
         Returns:
-            Iterator[Union[int, str]]: Iterator over dimensions.
+            Iterator[DimensionType]: Iterator over dimensions.
         """
         return iter(self.dims)
 
@@ -253,27 +346,27 @@ class TensorSpec:
     """Specification for tensor values including shape, dtype, and sparsity.
 
     Attributes:
-        shape (Tuple[Union[int, str], ...]): Dimensions of the tensor.
+        shape (tuple[DimensionType, ...]): Dimensions of the tensor.
         dtype (DType): Tensor data type.
-        sparsity (Optional[str]): Sparsity layout or format if applicable.
+        sparsity (str | None): Sparsity layout or format if applicable.
     """
 
-    shape: tuple[int | str, ...]
+    shape: tuple[DimensionType, ...]
     dtype: DType
     sparsity: str | None = None
 
     def __init__(
         self,
-        shape: tuple[int | str, ...] | Sequence[int | str] | TensorShape,
+        shape: tuple[DimensionType, ...] | Sequence[DimensionType] | TensorShape,
         dtype: DType | str,
         sparsity: str | None = None,
     ) -> None:
         """Initialize TensorSpec with shape and dtype normalization.
 
         Args:
-            shape (Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], TensorShape]): Tensor dimensions.
-            dtype (Union[DType, str]): Data type as DType enum or string name.
-            sparsity (Optional[str]): Optional sparsity layout.
+            shape (tuple[DimensionType, ...] | Sequence[DimensionType] | TensorShape): Tensor dimensions.
+            dtype (DType | str): Data type as DType enum or string name.
+            sparsity (str | None): Optional sparsity layout.
         """
         if isinstance(shape, TensorShape):
             self.shape = shape.dims
@@ -297,7 +390,10 @@ class TensorSpec:
             bool: True if dynamic dimensions are present.
         """
         return any(
-            isinstance(d, str) or (isinstance(d, int) and d < 0) for d in self.shape
+            isinstance(d, str)
+            or (isinstance(d, int) and d < 0)
+            or (isinstance(d, (SymNode, SymInt)) and not d.is_constant)
+            for d in self.shape
         )
 
     @property
@@ -305,14 +401,20 @@ class TensorSpec:
         """Return static shape tuple if static, else raises ValueError.
 
         Returns:
-            Tuple[int, ...]: Non-negative integer dimension tuple.
+            tuple[int, ...]: Non-negative integer dimension tuple.
 
         Raises:
             ValueError: If the shape is dynamic.
         """
         if self.is_dynamic:
             raise ValueError(f"Shape {self.shape} has dynamic dimensions.")
-        return tuple(int(d) for d in self.shape)
+        res: list[int] = []
+        for d in self.shape:
+            if isinstance(d, (SymNode, SymInt)):
+                res.append(d.eval({}))
+            else:
+                res.append(int(d))
+        return tuple(res)
 
     @property
     def rank(self) -> int:
@@ -322,3 +424,41 @@ class TensorSpec:
             int: Tensor rank.
         """
         return len(self.shape)
+
+    def evaluate(self, bindings: dict[str, int]) -> TensorSpec:
+        """Evaluate symbolic dimensions into concrete integers using runtime bindings.
+
+        Args:
+            bindings (dict[str, int]): Variable bindings mapping names to integer sizes.
+
+        Returns:
+            TensorSpec: New TensorSpec instance with concrete evaluated shape.
+        """
+        shape_obj = TensorShape(self.shape)
+        concrete_shape = shape_obj.evaluate(bindings)
+        return TensorSpec(
+            shape=concrete_shape,
+            dtype=self.dtype,
+            sparsity=self.sparsity,
+        )
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily export ZeroTangent and NoTangent from ml_switcheroo_ir.
+
+    Args:
+        name (str): Attribute name to retrieve.
+
+    Returns:
+        Any: Exported object.
+
+    Raises:
+        AttributeError: If attribute is not found.
+    """
+    if name in ("ZeroTangent", "NoTangent"):
+        import ml_switcheroo_ir
+
+        val = getattr(ml_switcheroo_ir, name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ml_switcheroo_ir.schema.onnx_registry import OpAttribute, OpSchema
@@ -265,6 +266,66 @@ SCALED_DOT_PRODUCT_ATTENTION_SCHEMA = CustomOpSchema(
     ],
 )
 
+PAGED_ATTENTION_SCHEMA = CustomOpSchema(
+    name="PagedAttention",
+    domain="ml.switcheroo.custom",
+    inputs=["query", "key_cache", "value_cache", "block_tables", "context_lens"],
+    outputs=["out"],
+    attributes=[
+        CustomAttributeSchema(
+            name="num_kv_heads",
+            type="int",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="scale",
+            type="float",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="block_size",
+            type="int",
+            required=False,
+            default=16,
+        ),
+        CustomAttributeSchema(
+            name="max_context_len",
+            type="int",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="alibi_slopes",
+            type="any",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="kv_cache_dtype",
+            type="str",
+            required=False,
+            default="auto",
+        ),
+    ],
+)
+
+RAGGED_PAGED_ATTENTION_SCHEMA = CustomOpSchema(
+    name="RaggedPagedAttention",
+    domain="ml.switcheroo.custom",
+    inputs=["query", "key_cache", "value_cache", "block_tables", "context_lens"],
+    outputs=["out"],
+    attributes=[
+        CustomAttributeSchema(
+            name="block_size",
+            type="int",
+            required=False,
+            default=16,
+        ),
+    ],
+)
+
 LAYER_NORM_SCHEMA = CustomOpSchema(
     name="LayerNorm",
     domain="ml.switcheroo.custom",
@@ -385,6 +446,24 @@ COLLECTIVE_ALL_REDUCE_SCHEMA = CustomOpSchema(
             required=False,
             default=0,
         ),
+        CustomAttributeSchema(
+            name="comm",
+            type="str",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="stream",
+            type="int",
+            required=False,
+            default=0,
+        ),
+        CustomAttributeSchema(
+            name="datatype",
+            type="str",
+            required=False,
+            default=None,
+        ),
     ],
 )
 
@@ -403,6 +482,24 @@ COLLECTIVE_ALL_GATHER_SCHEMA = CustomOpSchema(
             name="mesh_axis",
             type="str",
             required=True,
+        ),
+        CustomAttributeSchema(
+            name="comm",
+            type="str",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="stream",
+            type="int",
+            required=False,
+            default=0,
+        ),
+        CustomAttributeSchema(
+            name="datatype",
+            type="str",
+            required=False,
+            default=None,
         ),
     ],
 )
@@ -428,6 +525,24 @@ COLLECTIVE_REDUCE_SCATTER_SCHEMA = CustomOpSchema(
             type="str",
             required=True,
         ),
+        CustomAttributeSchema(
+            name="comm",
+            type="str",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="stream",
+            type="int",
+            required=False,
+            default=0,
+        ),
+        CustomAttributeSchema(
+            name="datatype",
+            type="str",
+            required=False,
+            default=None,
+        ),
     ],
 )
 
@@ -451,6 +566,24 @@ COLLECTIVE_ALL_TO_ALL_SCHEMA = CustomOpSchema(
             name="mesh_axis",
             type="str",
             required=True,
+        ),
+        CustomAttributeSchema(
+            name="comm",
+            type="str",
+            required=False,
+            default=None,
+        ),
+        CustomAttributeSchema(
+            name="stream",
+            type="int",
+            required=False,
+            default=0,
+        ),
+        CustomAttributeSchema(
+            name="datatype",
+            type="str",
+            required=False,
+            default=None,
         ),
     ],
 )
@@ -539,8 +672,16 @@ CUSTOM_OPS_REGISTRY: dict[str, OpSchema] = {
     SWIGLU_SCHEMA.name: SWIGLU_SCHEMA.to_op_schema(),
     ROPE_SCHEMA.name: ROPE_SCHEMA.to_op_schema(),
     FLASH_ATTENTION_SCHEMA.name: FLASH_ATTENTION_SCHEMA.to_op_schema(),
+    "flash_attention": FLASH_ATTENTION_SCHEMA.to_op_schema(),
+    PAGED_ATTENTION_SCHEMA.name: PAGED_ATTENTION_SCHEMA.to_op_schema(),
+    "paged_attention": PAGED_ATTENTION_SCHEMA.to_op_schema(),
+    "PagedAttention": PAGED_ATTENTION_SCHEMA.to_op_schema(),
+    RAGGED_PAGED_ATTENTION_SCHEMA.name: RAGGED_PAGED_ATTENTION_SCHEMA.to_op_schema(),
+    "ragged_paged_attention": RAGGED_PAGED_ATTENTION_SCHEMA.to_op_schema(),
+    "RaggedPagedAttention": RAGGED_PAGED_ATTENTION_SCHEMA.to_op_schema(),
     VISION_PATCH_EMBEDDING_SCHEMA.name: VISION_PATCH_EMBEDDING_SCHEMA.to_op_schema(),
     SCALED_DOT_PRODUCT_ATTENTION_SCHEMA.name: SCALED_DOT_PRODUCT_ATTENTION_SCHEMA.to_op_schema(),
+    "scaled_dot_product_attention": SCALED_DOT_PRODUCT_ATTENTION_SCHEMA.to_op_schema(),
     LAYER_NORM_SCHEMA.name: LAYER_NORM_SCHEMA.to_op_schema(),
     GROUP_NORM_SCHEMA.name: GROUP_NORM_SCHEMA.to_op_schema(),
     GELU_SCHEMA.name: GELU_SCHEMA.to_op_schema(),
@@ -549,3 +690,43 @@ CUSTOM_OPS_REGISTRY: dict[str, OpSchema] = {
     **COLLECTIVE_OPS_REGISTRY,
     **QUANTIZATION_OPS_REGISTRY,
 }
+
+STATE_OPS_REGISTRY: dict[str, OpSchema] = {}
+
+
+def _load_state_schemas(json_path: Path | str | None = None) -> None:
+    """Load state mutation schemas from state_ops.json into STATE_OPS_REGISTRY.
+
+    Args:
+        json_path (Optional[Union[Path, str]]): Explicit path to state_ops.json.
+    """
+    from ml_switcheroo_ir.snapshots import find_schema_file
+
+    path = find_schema_file("state_ops.json", override_path=json_path)
+    if path is None or not path.is_file():
+        return
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    for op_data in data.get("ops", []):
+        attrs = [
+            CustomAttributeSchema(
+                name=a.get("name", ""),
+                type=a.get("type", "Any"),
+                required=a.get("required", False),
+                default=a.get("default", None),
+            )
+            for a in op_data.get("attributes", [])
+        ]
+        schema = CustomOpSchema(
+            name=op_data["name"],
+            domain=op_data.get("domain", "ml.switcheroo.state"),
+            attributes=attrs,
+            inputs=op_data.get("inputs", []),
+            outputs=op_data.get("outputs", []),
+        )
+        STATE_OPS_REGISTRY[schema.name] = schema.to_op_schema()
+
+
+_load_state_schemas()

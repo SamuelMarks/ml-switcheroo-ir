@@ -9,6 +9,7 @@ It acts as the contract between the Frontend (Ingestion) and the Backend (Synthe
 
 from __future__ import annotations
 
+import copy
 import gzip
 import io
 import json
@@ -25,6 +26,43 @@ try:
 except ImportError:  # pragma: no cover
     zstandard = None  # type: ignore[assignment]
 
+from ml_switcheroo_ir.distributed import (
+    DependencyConfig,
+    MeshMappingConfig,
+    MicrobatchSplittingConfig,
+    PipelineScheduleConfig,
+    PipelineTopologyConfig,
+    SchedulePhaseConfig,
+    StageCommunicationConfig,
+    WebRTCPeerConfig,
+    WebRTCSignalingTopology,
+)
+from ml_switcheroo_ir.schema.framework_registries import (
+    ARRAY_API_REGISTRY,
+    ATEN_REGISTRY,
+    ODL_CATALOG,
+    get_abstract_op,
+)
+from ml_switcheroo_ir.shapes import (
+    DimensionType,
+    Polynomial,
+    ShapeMismatchError,
+    ShapeTracker,
+    SymBinaryOp,
+    SymbolicConstraintTracker,
+    SymbolicSolver,
+    SymCondition,
+    SymConst,
+    SymInt,
+    SymNode,
+    SymPiecewise,
+    SymUnaryOp,
+    SymVar,
+    broadcast_dimension,
+    broadcast_shapes,
+    matmul_shape,
+    normalize_axis,
+)
 from ml_switcheroo_ir.types import (
     AttributeValue,
     DType,
@@ -35,29 +73,67 @@ from ml_switcheroo_ir.types import (
 __version__ = "0.0.3"
 
 __all__ = [
+    "ARRAY_API_REGISTRY",
+    "ATEN_REGISTRY",
+    "ODL_CATALOG",
     "AttributeValue",
     "BaseFrontend",
     "CompilerBackend",
     "CyclicGraphError",
     "DType",
+    "DependencyConfig",
+    "DiagnosticSeverity",
+    "DimensionType",
     "GraphFrontend",
+    "GroundingDiagnostic",
+    "GroundingReport",
     "LogicalAxis",
     "LogicalEdge",
     "LogicalGraph",
     "LogicalMesh",
     "LogicalNode",
+    "MeshMappingConfig",
+    "MicrobatchSplittingConfig",
+    "NoTangent",
     "NodeDict",
+    "ParameterTranslationEngine",
     "PartitionSpec",
+    "PipelineScheduleConfig",
+    "PipelineTopologyConfig",
+    "Polynomial",
+    "SchedulePhaseConfig",
+    "ShapeMismatchError",
+    "ShapeTracker",
+    "StageCommunicationConfig",
+    "SymBinaryOp",
+    "SymCondition",
+    "SymConst",
+    "SymInt",
+    "SymNode",
+    "SymPiecewise",
+    "SymUnaryOp",
+    "SymVar",
+    "SymbolicConstraintTracker",
+    "SymbolicSolver",
     "TensorShape",
     "TensorSpec",
+    "WebRTCPeerConfig",
+    "WebRTCSignalingTopology",
+    "ZeroTangent",
     "__version__",
+    "broadcast_dimension",
+    "broadcast_shapes",
     "eliminate_common_subexpressions",
     "eliminate_dead_nodes",
     "estimate_communication_volume",
     "estimate_graph_communication_volume",
     "export_schemas",
+    "export_to_python",
     "generate_typescript_definitions",
+    "get_abstract_op",
     "get_json_schema",
+    "matmul_shape",
+    "normalize_axis",
     "propagate_shapes_and_constants",
     "topological_sort",
 ]
@@ -100,10 +176,12 @@ class LogicalMesh:
 
     Attributes:
         shape (Dict[str, int]): Mapping of mesh axis names to their sizes (e.g., {'data': 4, 'model': 2}).
+        webrtc_topology (Optional[WebRTCSignalingTopology]): WebRTC cluster mesh signaling configuration.
 
     """
 
     shape: dict[str, int]
+    webrtc_topology: WebRTCSignalingTopology | None = None
 
 
 @dataclass
@@ -131,6 +209,7 @@ class CyclicGraphError(Exception):
 
 
 _UNSET_OP_TYPE: Any = object()
+_CLONE_UNSET: Any = object()
 
 
 @dataclass
@@ -445,7 +524,7 @@ class LogicalNode:
             str: The operation type of this node.
         """
         warnings.warn(
-            "The 'kind' property is deprecated; use 'op_type' instead.",
+            "The 'kind' property is deprecated and will be removed in version 0.1.0; use 'op_type' instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -459,7 +538,7 @@ class LogicalNode:
             value (str): The operation type to set.
         """
         warnings.warn(
-            "The 'kind' setter is deprecated; use 'op_type' instead.",
+            "The 'kind' setter is deprecated and will be removed in version 0.1.0; use 'op_type' instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -473,7 +552,7 @@ class LogicalNode:
             dict[str, Any]: Dictionary of attribute metadata.
         """
         warnings.warn(
-            "The 'metadata' property is deprecated; use 'attributes' instead.",
+            "The 'metadata' property is deprecated and will be removed in version 0.1.0; use 'attributes' instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -487,7 +566,7 @@ class LogicalNode:
             value (dict[str, Any]): Dictionary of attribute metadata.
         """
         warnings.warn(
-            "The 'metadata' setter is deprecated; use 'attributes' instead.",
+            "The 'metadata' setter is deprecated and will be removed in version 0.1.0; use 'attributes' instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -567,6 +646,210 @@ class LogicalNode:
             return 0
         return len(self.shape_metadata)
 
+    def clone(
+        self,
+        id: str | None = None,
+        op_type: str | None = None,
+        domain: str | None = None,
+        version: int | None = None,
+        attributes: dict[str, AttributeValue] | None = None,
+        inputs: list[str] | None = None,
+        outputs: list[str] | None = None,
+        shape_metadata: tuple[int | str, ...]
+        | Sequence[int | str]
+        | Any = _CLONE_UNSET,
+        source_ast_ref: str | None = _CLONE_UNSET,
+        sharding: PartitionSpec | None = _CLONE_UNSET,
+        dtype: DType | None = _CLONE_UNSET,
+        output_specs: list[TensorSpec] | None = None,
+        subgraphs: dict[str, Any] | None = None,
+        device: str | None = _CLONE_UNSET,
+        stream: str | None = _CLONE_UNSET,
+        **kwargs: Any,
+    ) -> LogicalNode:
+        """Create a deep clone of this LogicalNode with optional keyword overrides.
+
+        Args:
+            id (Optional[str]): Override node identifier.
+            op_type (Optional[str]): Override operation type.
+            domain (Optional[str]): Override operator domain.
+            version (Optional[int]): Override operator version.
+            attributes (Optional[Dict[str, AttributeValue]]): Override attributes dictionary.
+            inputs (Optional[List[str]]): Override input IDs.
+            outputs (Optional[List[str]]): Override output names.
+            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]):
+                Override tensor shape metadata.
+            source_ast_ref (Optional[str]): Override source AST reference.
+            sharding (Optional[PartitionSpec]): Override partition specification.
+            dtype (Optional[DType]): Override data type.
+            output_specs (Optional[List[TensorSpec]]): Override output tensor specifications.
+            subgraphs (Optional[Dict[str, Any]]): Override nested subgraphs dictionary.
+            device (Optional[str]): Override target device placement.
+            stream (Optional[str]): Override asynchronous execution stream.
+            **kwargs (Any): Additional attribute overrides.
+
+        Returns:
+            LogicalNode: A cloned LogicalNode with deep-copied collections and applied overrides.
+        """
+        cloned_id = id if id is not None else self.id
+        cloned_op = op_type if op_type is not None else self.op_type
+        cloned_domain = domain if domain is not None else self.domain
+        cloned_version = version if version is not None else self.version
+        cloned_attrs = (
+            copy.deepcopy(attributes)
+            if attributes is not None
+            else copy.deepcopy(self.attributes)
+        )
+        if kwargs:
+            cloned_attrs.update(kwargs)
+
+        cloned_inputs = list(inputs) if inputs is not None else list(self.inputs)
+        cloned_outputs = list(outputs) if outputs is not None else list(self.outputs)
+        cloned_shape = (
+            copy.deepcopy(shape_metadata)
+            if shape_metadata is not _CLONE_UNSET
+            else copy.deepcopy(self.shape_metadata)
+        )
+        cloned_ast = (
+            source_ast_ref
+            if source_ast_ref is not _CLONE_UNSET
+            else self.source_ast_ref
+        )
+        cloned_sharding = (
+            copy.deepcopy(sharding)
+            if sharding is not _CLONE_UNSET
+            else copy.deepcopy(self.sharding)
+        )
+        cloned_dtype = dtype if dtype is not _CLONE_UNSET else self.dtype
+        cloned_specs = (
+            [copy.deepcopy(s) for s in output_specs]
+            if output_specs is not None
+            else [copy.deepcopy(s) for s in self.output_specs]
+        )
+        cloned_subgraphs = (
+            {
+                k: v.clone() if hasattr(v, "clone") else copy.deepcopy(v)
+                for k, v in subgraphs.items()
+            }
+            if subgraphs is not None
+            else {
+                k: v.clone() if hasattr(v, "clone") else copy.deepcopy(v)
+                for k, v in self.subgraphs.items()
+            }
+        )
+        cloned_device = device if device is not _CLONE_UNSET else self.device
+        cloned_stream = stream if stream is not _CLONE_UNSET else self.stream
+
+        cls = self.__class__ if self.__class__ is not LogicalNode else LogicalNode
+        return cls(
+            id=cloned_id,
+            op_type=cloned_op,
+            domain=cloned_domain,
+            version=cloned_version,
+            attributes=cloned_attrs,
+            inputs=cloned_inputs,
+            outputs=cloned_outputs,
+            shape_metadata=cloned_shape,
+            source_ast_ref=cloned_ast,
+            sharding=cloned_sharding,
+            dtype=cloned_dtype,
+            output_specs=cloned_specs,
+            subgraphs=cloned_subgraphs,
+            device=cloned_device,
+            stream=cloned_stream,
+        )
+
+    def get_output_name(self, index: int) -> str:
+        """Return explicit SSA output name or generate '{node.id}:{index}' default.
+
+        Args:
+            index (int): Zero-based output port index.
+
+        Returns:
+            str: Output name for the specified index.
+        """
+        if 0 <= index < len(self.outputs):
+            return self.outputs[index]
+        return f"{self.id}:{index}"
+
+    @property
+    def has_multiple_outputs(self) -> bool:
+        """Return True if this node produces multiple SSA outputs or output specs.
+
+        Returns:
+            bool: True if outputs count or output_specs count exceeds 1.
+        """
+        return len(self.outputs) > 1 or len(self.output_specs) > 1
+
+
+@dataclass
+class ZeroTangent(LogicalNode):
+    """Represents a mathematically zero tangent vector with explicit shape and dtype.
+
+    Attributes:
+        id (str): Unique node identifier.
+        shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]):
+            Shape of the zero tangent vector.
+        dtype (Optional[DType]): Data type of the zero tangent vector.
+    """
+
+    def __init__(
+        self,
+        id: str,
+        shape: tuple[int | str, ...] | Sequence[int | str] | Any = None,
+        dtype: DType | None = DType.float32,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize ZeroTangent sentinel node.
+
+        Args:
+            id (str): Unique node identifier.
+            shape (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Vector shape.
+            dtype (Optional[DType]): Tensor data type.
+            **kwargs (Any): Additional node keyword arguments.
+        """
+        kwargs.pop("op_type", None)
+        kwargs.pop("domain", None)
+        shape_val = kwargs.pop("shape_metadata", shape)
+        dtype_val = kwargs.pop("dtype", dtype)
+        super().__init__(
+            id=id,
+            op_type="ZeroTangent",
+            domain="ml.switcheroo.ad",
+            shape_metadata=shape_val,
+            dtype=dtype_val,
+            **kwargs,
+        )
+
+
+@dataclass
+class NoTangent(LogicalNode):
+    """Represents a non-differentiable or structurally missing cotangent path.
+
+    Attributes:
+        id (str): Unique node identifier.
+    """
+
+    def __init__(
+        self,
+        id: str,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize NoTangent sentinel node.
+
+        Args:
+            id (str): Unique node identifier.
+            **kwargs (Any): Additional node keyword arguments.
+        """
+        kwargs.pop("op_type", None)
+        kwargs.pop("domain", None)
+        super().__init__(
+            id=id,
+            op_type="NoTangent",
+            domain="ml.switcheroo.ad",
+            **kwargs,
+        )
+
 
 class EdgeList(list["LogicalEdge"]):
     """List of LogicalEdge instances with bidirectional synchronization to node inputs."""
@@ -593,13 +876,15 @@ class EdgeList(list["LogicalEdge"]):
         """
         super().append(edge)
         graph = getattr(self, "_graph", None)
-        if graph is not None:
-            if edge.target in graph.nodes:
-                target_node = graph.nodes[edge.target]
-                if edge.source not in target_node.inputs:
-                    target_node.inputs.append(edge.source)
-            else:
-                graph._pending_edges.append(edge)
+        if graph is not None and edge.target in graph.nodes:
+            target_node = graph.nodes[edge.target]
+            src_name = edge.source
+            if edge.source in graph.nodes and edge.source_idx is not None:
+                src_name = graph.nodes[edge.source].get_output_name(edge.source_idx)
+            if src_name not in target_node.inputs:
+                target_node.inputs.append(src_name)
+        elif graph is not None:
+            graph._pending_edges.append(edge)
 
     def extend(self, edges: Sequence[LogicalEdge] | Any) -> None:
         """Extend EdgeList with multiple edges and synchronize into node inputs.
@@ -734,7 +1019,7 @@ class NodeDict(dict[str, "LogicalNode"]):
             node (LogicalNode): The node to add.
         """
         warnings.warn(
-            "Using graph.nodes.append() is deprecated; use graph.nodes[node.id] = node or graph.add_node(node) instead.",
+            "Using graph.nodes.append() is deprecated and will be removed in version 0.1.0; use graph.nodes[node.id] = node or graph.add_node(node) instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -747,7 +1032,7 @@ class NodeDict(dict[str, "LogicalNode"]):
             nodes (Union[Sequence[LogicalNode], Any]): Iterable of nodes to append.
         """
         warnings.warn(
-            "Using graph.nodes.extend() is deprecated; use graph.nodes.update() instead.",
+            "Using graph.nodes.extend() is deprecated and will be removed in version 0.1.0; use graph.nodes.update() instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -755,12 +1040,17 @@ class NodeDict(dict[str, "LogicalNode"]):
             self.append(node)
 
     def insert(self, index: int, node: LogicalNode) -> None:
-        """Insert node with sequence ergonomics.
+        """Insert node with sequence ergonomics (deprecated).
 
         Args:
             index (int): Sequence index.
             node (LogicalNode): Node to insert.
         """
+        warnings.warn(
+            "Using graph.nodes.insert() is deprecated and will be removed in version 0.1.0; use graph.nodes[node.id] = node instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self[node.id] = node
 
     def pop(self, key: Any, *args: Any) -> Any:
@@ -837,6 +1127,7 @@ class LogicalGraph:
     outputs: list[str] = field(default_factory=list)
     initializers: dict[str, Any] = field(default_factory=dict)
     mesh: LogicalMesh | None = None
+    pipeline_topology: PipelineTopologyConfig | None = None
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Intercept assignments to ensure nodes and edges remain synchronized.
@@ -883,6 +1174,7 @@ class LogicalGraph:
         initializers: dict[str, Any] | None = None,
         *,
         edges: list[LogicalEdge] | None = None,
+        pipeline_topology: PipelineTopologyConfig | None = None,
     ) -> None:
         """Initialize LogicalGraph with nodes specified as a dictionary.
 
@@ -895,6 +1187,7 @@ class LogicalGraph:
             input_specs (Optional[Dict[str, TensorSpec]]): Mapping of input names to TensorSpecs.
             initializers (Optional[Dict[str, Any]]): Constant tensor initializers.
             edges (Optional[List[LogicalEdge]]): Optional list of directed edges to populate.
+            pipeline_topology (Optional[PipelineTopologyConfig]): Optional distributed pipeline topology.
         """
 
     @overload
@@ -909,6 +1202,7 @@ class LogicalGraph:
         initializers: dict[str, Any] | None = None,
         *,
         edges: list[LogicalEdge] | None = None,
+        pipeline_topology: PipelineTopologyConfig | None = None,
     ) -> None:
         """Initialize LogicalGraph with nodes specified as a list of LogicalNode instances (deprecated).
 
@@ -921,6 +1215,7 @@ class LogicalGraph:
             input_specs (Optional[Dict[str, TensorSpec]]): Mapping of input names to TensorSpecs.
             initializers (Optional[Dict[str, Any]]): Constant tensor initializers.
             edges (Optional[List[LogicalEdge]]): Optional list of directed edges to populate.
+            pipeline_topology (Optional[PipelineTopologyConfig]): Optional distributed pipeline topology.
         """
 
     def __init__(
@@ -934,6 +1229,7 @@ class LogicalGraph:
         initializers: dict[str, Any] | None = None,
         *,
         edges: list[LogicalEdge] | None = None,
+        pipeline_topology: PipelineTopologyConfig | None = None,
     ) -> None:
         """Initialize a LogicalGraph instance with flexible node and edge specifications.
 
@@ -949,6 +1245,7 @@ class LogicalGraph:
             initializers (Optional[Dict[str, Any]]): Constant tensor initializers.
             edges (Optional[List[LogicalEdge]]): Optional list of directed edges to populate
                 directly into each target node's inputs list.
+            pipeline_topology (Optional[PipelineTopologyConfig]): Optional distributed pipeline topology.
         """
         self.name = name
         self._pending_edges = []
@@ -957,7 +1254,7 @@ class LogicalGraph:
             self.nodes = NodeDict(self)
         elif isinstance(nodes, list):
             warnings.warn(
-                "Passing a list of nodes to LogicalGraph is deprecated; provide a dict[str, LogicalNode] instead.",
+                "Passing a list of nodes to LogicalGraph is deprecated and will be removed in version 0.1.0; provide a dict[str, LogicalNode] instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -972,6 +1269,12 @@ class LogicalGraph:
         # Auto-detect legacy Input pseudo-nodes into graph.inputs and input_specs
         for nid, node in list(self.nodes.items()):
             if node.op_type == "Input":
+                warnings.warn(
+                    "Legacy 'Input' pseudo-node auto-detection is deprecated and will be removed in version 0.1.0; "
+                    "specify explicit inputs and input_specs on LogicalGraph instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
                 param_name = str(node.attributes.get("name", nid))
                 if param_name not in self.inputs:
                     self.inputs.append(param_name)
@@ -1006,6 +1309,12 @@ class LogicalGraph:
             out_ids: list[str] = []
             for nid, n in self.nodes.items():
                 if n.op_type == "Output":
+                    warnings.warn(
+                        "Legacy 'Output' pseudo-node auto-detection is deprecated and will be removed in version 0.1.0; "
+                        "specify explicit outputs on LogicalGraph instead.",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
                     for inp in n.inputs:
                         if inp not in out_ids:
                             out_ids.append(inp)
@@ -1014,6 +1323,7 @@ class LogicalGraph:
             self.outputs = out_ids
 
         self.mesh = mesh
+        self.pipeline_topology = pipeline_topology
 
     @property
     def nodes_list(self) -> list[LogicalNode]:
@@ -1036,8 +1346,12 @@ class LogicalGraph:
             for target_idx, src in enumerate(target_node.inputs):
                 src_idx = 0
                 producer = self.get_output_producer(src)
-                if producer is not None and src in producer.outputs:
+                if producer is not None:
                     src_idx = producer.outputs.index(src)
+                elif ":" in src:
+                    prod_tuple = self.get_producing_output_index(src)
+                    if prod_tuple is not None:
+                        src_idx = prod_tuple[1]
                 result.append(
                     LogicalEdge(
                         source=src,
@@ -1056,7 +1370,7 @@ class LogicalGraph:
             edge_list (List[LogicalEdge]): List of edges to configure.
         """
         warnings.warn(
-            "Setting 'edges' directly is deprecated; configure node.inputs directly instead.",
+            "Setting 'edges' directly is deprecated and will be removed in version 0.1.0; configure node.inputs directly instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -1066,10 +1380,21 @@ class LogicalGraph:
         for edge in edge_list:
             if edge.target in self.nodes:
                 target_node = self.nodes[edge.target]
-                if edge.source not in target_node.inputs:
-                    target_node.inputs.append(edge.source)
+                src_name = edge.source
+                if edge.source in self.nodes and edge.source_idx is not None:
+                    src_name = self.nodes[edge.source].get_output_name(edge.source_idx)
+                if src_name not in target_node.inputs:
+                    target_node.inputs.append(src_name)
             else:
                 self._pending_edges.append(edge)
+
+    def set_pipeline_topology(self, topology: PipelineTopologyConfig) -> None:
+        """Set distributed pipeline topology configuration for this graph.
+
+        Args:
+            topology (PipelineTopologyConfig): Distributed pipeline topology configuration.
+        """
+        self.pipeline_topology = topology
 
     def add_node(self, node: LogicalNode) -> None:
         """Add or update a node in the graph.
@@ -1104,6 +1429,61 @@ class LogicalGraph:
             if output_name in node.outputs:
                 return node
         return None
+
+    def get_producing_output_index(
+        self, output_name: str
+    ) -> tuple[LogicalNode, int] | None:
+        """Resolve both the producing node and the specific output port index.
+
+        Args:
+            output_name (str): The name or SSA identifier of the output value.
+
+        Returns:
+            Optional[Tuple[LogicalNode, int]]: Tuple of (producing_node, output_index)
+                if found, or None.
+        """
+        for node in self.nodes.values():
+            if output_name in node.outputs:
+                return node, node.outputs.index(output_name)
+
+        if output_name in self.nodes:
+            return self.nodes[output_name], 0
+
+        if ":" in output_name:
+            prefix, idx_str = output_name.rsplit(":", 1)
+            if prefix in self.nodes and (
+                idx_str.isdigit() or (idx_str.startswith("-") and idx_str[1:].isdigit())
+            ):
+                return self.nodes[prefix], int(idx_str)
+
+        return None
+
+    def clone(self) -> LogicalGraph:
+        """Create a complete, isolated clone of this graph and all its nodes.
+
+        Returns:
+            LogicalGraph: A deep copy of this graph with isolated nodes and edges.
+        """
+        cloned_nodes = {nid: node.clone() for nid, node in self.nodes.items()}
+        cloned_specs = {k: copy.deepcopy(v) for k, v in self.input_specs.items()}
+        cloned_inits = copy.deepcopy(self.initializers)
+        cloned_mesh = copy.deepcopy(self.mesh) if self.mesh is not None else None
+        cloned_topology = getattr(self, "pipeline_topology", None)
+        if cloned_topology is not None:
+            cloned_topology = copy.deepcopy(cloned_topology)
+
+        new_g = LogicalGraph(
+            name=self.name,
+            nodes=cloned_nodes,
+            inputs=list(self.inputs),
+            input_specs=cloned_specs,
+            outputs=list(self.outputs),
+            mesh=cloned_mesh,
+            initializers=cloned_inits,
+        )
+        if cloned_topology is not None:
+            new_g.set_pipeline_topology(cloned_topology)
+        return new_g
 
     def get_inputs(self, node_id: str) -> list[LogicalNode]:
         """Retrieve upstream input LogicalNode instances for a node.
@@ -1185,6 +1565,10 @@ class LogicalGraph:
         data = asdict(self)
         if format == "canonical":
             data["edges"] = [asdict(edge) for edge in self.edges]
+        if self.pipeline_topology is not None:
+            data["pipeline_topology"] = self.pipeline_topology.to_dict()
+        if self.mesh is not None and self.mesh.webrtc_topology is not None:
+            data["mesh"]["webrtc_topology"] = self.mesh.webrtc_topology.to_dict()
         return data
 
     def to_json(self, format: str = "canonical", indent: int = 2) -> str:
@@ -1323,6 +1707,12 @@ class LogicalGraph:
                     "jvp_graph",
                 ):
                     if legacy_key in attrs and legacy_key not in resolved_subgraphs:
+                        warnings.warn(
+                            f"Legacy subgraph key '{legacy_key}' is deprecated and will be removed in version 0.1.0; "
+                            "use canonical subgraph keys ('body', 'bwd') instead.",
+                            DeprecationWarning,
+                            stacklevel=2,
+                        )
                         val = attrs[legacy_key]
                         canonical_key = (
                             "body"
@@ -1347,7 +1737,24 @@ class LogicalGraph:
                     nodes[tgt].inputs.append(src)
 
         mesh_data = data.get("mesh")
-        mesh = LogicalMesh(shape=mesh_data["shape"]) if mesh_data else None
+        mesh = None
+        if mesh_data:
+            webrtc_topo = None
+            if mesh_data.get("webrtc_topology"):
+                webrtc_topo = WebRTCSignalingTopology.from_dict(
+                    mesh_data["webrtc_topology"]
+                )
+            mesh = LogicalMesh(
+                shape=mesh_data["shape"],
+                webrtc_topology=webrtc_topo,
+            )
+
+        pipe_topo_raw = data.get("pipeline_topology")
+        pipe_topo = (
+            PipelineTopologyConfig.from_dict(pipe_topo_raw)
+            if pipe_topo_raw is not None
+            else None
+        )
 
         inputs_data = data.get("inputs")
         inputs = list(inputs_data) if inputs_data is not None else []
@@ -1364,7 +1771,7 @@ class LogicalGraph:
         initializers = data.get("initializers", {})
 
         outputs = data.get("outputs")
-        return cls(
+        graph = cls(
             name=data.get("name", "Model"),
             nodes=nodes,
             inputs=inputs,
@@ -1373,6 +1780,9 @@ class LogicalGraph:
             initializers=initializers,
             mesh=mesh,
         )
+        if pipe_topo is not None:
+            graph.pipeline_topology = pipe_topo
+        return graph
 
     @classmethod
     def from_file(
@@ -1567,6 +1977,7 @@ class GraphFrontend(BaseFrontend):
 # Import export utilities after LogicalGraph and LogicalNode are defined
 from ml_switcheroo_ir.export import (
     export_schemas,
+    export_to_python,
     generate_typescript_definitions,
     get_json_schema,
 )
@@ -1575,7 +1986,11 @@ from ml_switcheroo_ir.transforms import (
     eliminate_dead_nodes,
     propagate_shapes_and_constants,
 )
+from ml_switcheroo_ir.translation import ParameterTranslationEngine
 from ml_switcheroo_ir.validator import (
+    DiagnosticSeverity,
+    GroundingDiagnostic,
+    GroundingReport,
     estimate_communication_volume,
     estimate_graph_communication_volume,
 )

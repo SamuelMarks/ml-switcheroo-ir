@@ -338,6 +338,30 @@ class GhostIsaRef(ExtendedGhostRef):
         default=None,
         description="Microarchitectures supporting this instruction.",
     )
+    operand_signatures: list[list[str]] | None = Field(
+        default=None,
+        description="Explicit register or immediate operand signatures (e.g. [['vgpr', 'vgpr', 'sgpr']]).",
+    )
+    allowed_modifiers: list[str] | None = Field(
+        default=None,
+        description="Legal instruction modifier flags (e.g. ['.SAT', '.FTZ', 'omod:2']).",
+    )
+    execution_latency: int | tuple[int, int] | None = Field(
+        default=None,
+        description="Analytical execution clock cycle latency bounds.",
+    )
+    issue_rate: float | None = Field(
+        default=None,
+        description="Throughput instructions issued per clock cycle.",
+    )
+    scoreboard_barrier_mask: int | None = Field(
+        default=None,
+        description="Hardware dependency barrier index mask (0-5).",
+    )
+    vopd_slot: str | None = Field(
+        default=None,
+        description="Dual-issue slot designation ('X', 'Y', or 'BOTH') for AMD RDNA3 VOPD instructions.",
+    )
 
 
 class GhostMlirRef(ExtendedGhostRef):

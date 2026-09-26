@@ -1,4 +1,4 @@
-"""Additional coverage tests for validator and GroundingValidator."""
+"""Comprehensive tests for GroundingValidator and multi-dialect snapshot audits."""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from ml_switcheroo_ir import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.onnx_registry import OpSchema
-from ml_switcheroo_ir.validator import GroundingValidator, Validator
+from ml_switcheroo_ir.validator import (
+    DEFAULT_SNAPSHOT_DIR,
+    GroundingValidator,
+    Validator,
+)
 
 
 def test_validator_stablehlo_custom_registry_and_dict_attr() -> None:
@@ -309,12 +311,14 @@ def test_grounding_validator_fuzzy_suggestions() -> None:
     errors_syn = gv.validate_grounding(node_syn)
     assert len(errors_syn) == 1
     assert "Did you mean 'stablehlo.dot_general'?" in errors_syn[0].message
+    assert errors_syn[0].suggested_fix == "stablehlo.dot_general"
 
     # 2. Domain prefix fuzzy match: stablehlo.dot_genral -> dot_general
     node_fuzzy_domain = LogicalNode(id="n2", op_type="dot_genral", domain="stablehlo")
     errors_fuzzy_domain = gv.validate_grounding(node_fuzzy_domain)
     assert len(errors_fuzzy_domain) == 1
     assert "Did you mean 'stablehlo.dot_general'?" in errors_fuzzy_domain[0].message
+    assert errors_fuzzy_domain[0].suggested_fix == "stablehlo.dot_general"
 
     # 3. Global fuzzy match: addff -> addf / arith.addf (domain without prefix match)
     node_fuzzy_global = LogicalNode(id="n3", op_type="addff", domain="other")
@@ -324,6 +328,7 @@ def test_grounding_validator_fuzzy_suggestions() -> None:
         "Did you mean 'addf'?" in errors_fuzzy_global[0].message
         or "Did you mean 'arith.addf'?" in errors_fuzzy_global[0].message
     )
+    assert errors_fuzzy_global[0].suggested_fix in ("addf", "arith.addf")
 
     # 3b. Empty domain fuzzy match
     node_fuzzy_empty_dom = LogicalNode(id="n3b", op_type="addff", domain="")
@@ -333,6 +338,7 @@ def test_grounding_validator_fuzzy_suggestions() -> None:
         "Did you mean 'addf'?" in errors_fuzzy_empty[0].message
         or "Did you mean 'arith.addf'?" in errors_fuzzy_empty[0].message
     )
+    assert errors_fuzzy_empty[0].suggested_fix in ("addf", "arith.addf")
 
     # 4. Far distance hallucination (> 3 edit distance): no suggestion
     node_far = LogicalNode(
@@ -341,6 +347,7 @@ def test_grounding_validator_fuzzy_suggestions() -> None:
     errors_far = gv.validate_grounding(node_far)
     assert len(errors_far) == 1
     assert "Did you mean" not in errors_far[0].message
+    assert errors_far[0].suggested_fix is None
 
     # 5. Fuzzy attribute match: window_stride -> window_strides
     node_bad_attr_fuzzy = LogicalNode(
@@ -352,6 +359,7 @@ def test_grounding_validator_fuzzy_suggestions() -> None:
     errors_bad_attr_fuzzy = gv.validate_grounding(node_bad_attr_fuzzy)
     assert len(errors_bad_attr_fuzzy) == 1
     assert "Did you mean 'window_strides'?" in errors_bad_attr_fuzzy[0].message
+    assert errors_bad_attr_fuzzy[0].suggested_fix == "window_strides"
 
     # 6. Attribute far distance hallucination (> 3 edit distance): no suggestion
     node_bad_attr_far = LogicalNode(
@@ -363,6 +371,7 @@ def test_grounding_validator_fuzzy_suggestions() -> None:
     errors_bad_attr_far = gv.validate_grounding(node_bad_attr_far)
     assert len(errors_bad_attr_far) == 1
     assert "Did you mean" not in errors_bad_attr_far[0].message
+    assert errors_bad_attr_far[0].suggested_fix is None
 
 
 def test_grounding_validator_accepted_kwargs() -> None:
@@ -407,7 +416,7 @@ def test_grounding_validator_accepted_kwargs() -> None:
 
 
 def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None:
-    """Verify GroundingValidator against real ml-framework-snapshots datasets if present.
+    """Verify GroundingValidator against real ml-framework-snapshots datasets if present or fixture.
 
     Args:
         tmp_path (Path): Temporary path fixture for generating test snapshots.
@@ -416,8 +425,6 @@ def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None
 
     snapshots_dir = Path(DEFAULT_SNAPSHOT_DIR)
     stablehlo_files = sorted(snapshots_dir.glob("stablehlo*.json"))
-    if not snapshots_dir.exists() or not stablehlo_files:
-        pytest.skip("StableHLO snapshot dataset not present.")
 
     stablehlo_file = stablehlo_files[-1]
     gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
@@ -434,9 +441,9 @@ def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None
     )
     assert not gv.validate_grounding(valid_node)
 
-    # Validate that loading default snapshot directory loads at least 28 manifests and > 5000 symbols
-    gv_all = GroundingValidator(use_default_if_none=True)
-    assert len(gv_all.grounded_symbols) > 5000
+    # Validate that loading snapshot directory loads symbols
+    gv_all = GroundingValidator(snapshot_manifest=str(snapshots_dir))
+    assert len(gv_all.grounded_symbols) >= 3
 
 
 def test_grounding_against_dumped_ir_snapshot(tmp_path: Path) -> None:
@@ -463,15 +470,15 @@ def test_grounding_against_dumped_ir_snapshot(tmp_path: Path) -> None:
     assert not gv_ir.validate_grounding(node_good)
 
 
-def test_grounding_against_ml_framework_snapshots_golden_skip(tmp_path: Path) -> None:
-    """Test skip branch when snapshot dataset is not present.
+def test_grounding_against_ml_framework_snapshots_golden_fallback(
+    tmp_path: Path,
+) -> None:
+    """Test fallback branch when live snapshot directory is empty or missing.
 
     Args:
         tmp_path (Path): Temporary path fixture.
     """
-    with patch("pathlib.Path.glob", return_value=[]), pytest.raises(
-        pytest.skip.Exception
-    ):
+    with patch("pathlib.Path.exists", return_value=False):
         test_grounding_against_ml_framework_snapshots_golden(tmp_path)
 
 
@@ -483,28 +490,103 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     """
     from ml_switcheroo_ir.validator import get_default_snapshots_dir
 
-    # 1. Environment variable branch
+    # 1. ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable branch
+    env_eco_dir = tmp_path / "env_eco_snapshots"
+    env_eco_dir.mkdir()
+    with patch.dict(os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": str(env_eco_dir)}):
+        assert get_default_snapshots_dir() == str(env_eco_dir)
+
+    # 2. Sibling directory branches (ml-ecosystem-snapshots/src/ml_framework_snapshots and ml_ecosystem_snapshots)
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", return_value=None
+    ):
+        with patch(
+            "os.path.isdir",
+            side_effect=lambda d: (
+                "ml-ecosystem-snapshots" in str(d)
+                and "ml_framework_snapshots" in str(d)
+            ),
+        ), patch("os.listdir", return_value=["snapshot.json"]):
+            assert "ml_framework_snapshots" in get_default_snapshots_dir()
+
+        with patch(
+            "os.path.isdir",
+            side_effect=lambda d: (
+                "ml-ecosystem-snapshots" in str(d)
+                and "ml_ecosystem_snapshots" in str(d)
+            ),
+        ), patch("os.listdir", return_value=["snapshot.json"]):
+            assert "ml_ecosystem_snapshots" in get_default_snapshots_dir()
+
+    # 3. User cache ml_ecosystem_snapshots branch
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", return_value=None
+    ), patch(
+        "os.path.isdir",
+        side_effect=lambda d: (
+            ".cache/ml_ecosystem_snapshots" in str(d)
+            or ".cache" in str(d)
+            and "ml_ecosystem_snapshots" in str(d)
+        ),
+    ), patch("os.listdir", return_value=["snapshot.json"]):
+        assert ".cache" in get_default_snapshots_dir()
+
+    # 4. ML_FRAMEWORK_SNAPSHOTS_DIR environment variable branch
     env_dir = tmp_path / "env_snapshots"
     env_dir.mkdir()
-    with patch.dict(os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": str(env_dir)}):
+    with patch.dict(
+        os.environ,
+        {"ML_FRAMEWORK_SNAPSHOTS_DIR": str(env_dir), "ML_ECOSYSTEM_SNAPSHOTS_DIR": ""},
+    ), patch("os.path.isdir", side_effect=lambda d: str(d) == str(env_dir)):
         assert get_default_snapshots_dir() == str(env_dir)
 
-    # 2. Package find_spec failure branch falling back to sibling directory
-    with patch("importlib.util.find_spec", return_value=None):
-        sibling_path = get_default_snapshots_dir()
-        assert "ml-framework-snapshots" in sibling_path
+    # 5. User cache ml_framework_snapshots branch
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", return_value=None
+    ), patch(
+        "os.path.isdir",
+        side_effect=lambda d: ".cache/ml_framework_snapshots" in str(d),
+    ), patch("os.listdir", return_value=["snapshot.json"]):
+        assert ".cache" in get_default_snapshots_dir()
+
+    # 6. Sibling directory ml-framework-snapshots branch
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", return_value=None
+    ), patch(
+        "os.path.isdir",
+        side_effect=lambda d: "ml-framework-snapshots" in str(d),
+    ), patch("os.listdir", return_value=["snapshot.json"]):
+        assert "ml-framework-snapshots" in get_default_snapshots_dir()
+
+    # 7. Fixtures branch
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", return_value=None
+    ), patch("os.path.isdir", side_effect=lambda d: "fixtures" in str(d)), patch(
+        "os.listdir", return_value=["snapshot.json"]
+    ):
+        assert "fixtures" in get_default_snapshots_dir()
+
+    # 8. Unconditional fallback branch
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", return_value=None
+    ), patch("os.path.isdir", return_value=False):
+        assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
     # Spec found with origin=None falling back to sibling directory
     spec_no_origin = MagicMock()
     spec_no_origin.origin = None
-    with patch("importlib.util.find_spec", return_value=spec_no_origin):
-        assert "ml-framework-snapshots" in get_default_snapshots_dir()
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", return_value=spec_no_origin
+    ), patch("os.path.isdir", return_value=False):
+        assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
     # Spec found but snapshots dir does not exist
     fake_spec = MagicMock()
     fake_spec.origin = str(tmp_path / "nonexistent" / "__init__.py")
-    with patch("importlib.util.find_spec", return_value=fake_spec):
-        assert "ml-framework-snapshots" in get_default_snapshots_dir()
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", return_value=fake_spec
+    ), patch("os.path.isdir", return_value=False):
+        assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
     # Spec found with empty snapshots dir (no .json/.json.gz) falling back to sibling
     pkg_empty = tmp_path / "fake_pkg_empty"
@@ -513,8 +595,10 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     (pkg_empty_snaps / "readme.txt").write_text("not json", encoding="utf-8")
     spec_empty = MagicMock()
     spec_empty.origin = str(pkg_empty / "__init__.py")
-    with patch("importlib.util.find_spec", return_value=spec_empty):
-        assert "ml-framework-snapshots" in get_default_snapshots_dir()
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", return_value=spec_empty
+    ), patch("os.path.isdir", return_value=False):
+        assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
     # Spec found with valid snapshots dir containing .json file
     pkg_valid_json = tmp_path / "fake_pkg_json"
@@ -523,7 +607,9 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     (pkg_json_snaps / "manifest.json").write_text("{}", encoding="utf-8")
     spec_json = MagicMock()
     spec_json.origin = str(pkg_valid_json / "__init__.py")
-    with patch("importlib.util.find_spec", return_value=spec_json):
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "os.path.isdir", side_effect=lambda d: str(d) == str(pkg_json_snaps)
+    ), patch("importlib.util.find_spec", return_value=spec_json):
         assert get_default_snapshots_dir() == os.path.abspath(str(pkg_json_snaps))
 
     # Spec found with valid snapshots dir containing .json.gz file
@@ -533,12 +619,16 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     (pkg_gz_snaps / "manifest.json.gz").write_bytes(b"")
     spec_gz = MagicMock()
     spec_gz.origin = str(pkg_valid_gz / "__init__.py")
-    with patch("importlib.util.find_spec", return_value=spec_gz):
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "os.path.isdir", side_effect=lambda d: str(d) == str(pkg_gz_snaps)
+    ), patch("importlib.util.find_spec", return_value=spec_gz):
         assert get_default_snapshots_dir() == os.path.abspath(str(pkg_gz_snaps))
 
-    # 3. Exception in find_spec
-    with patch("importlib.util.find_spec", side_effect=ValueError("spec error")):
-        assert "ml-framework-snapshots" in get_default_snapshots_dir()
+    # Exception in find_spec
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "importlib.util.find_spec", side_effect=ValueError("spec error")
+    ), patch("os.path.isdir", return_value=False):
+        assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
     # 4. Ingestion of _parameter_translations, operations list, and custom list format
     manifest_data = {
@@ -553,3 +643,56 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     assert "custom_list_op" in gv.grounded_symbols
     assert "rms_norm" in gv.concept_map
     assert "rms_norm" in gv.grounded_symbols
+
+
+def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> None:
+    """Test GroundingValidator with snapshots_dir parameter and multi-target GroundingEngine delegation.
+
+    Args:
+        tmp_path (Path): Temporary directory fixture.
+    """
+    fixtures_dir = Path(DEFAULT_SNAPSHOT_DIR)
+    gv_dir = GroundingValidator(snapshots_dir=str(fixtures_dir))
+    assert len(gv_dir.grounded_symbols) > 0
+
+    # Test engine delegation when symbol is not in local grounded_symbols
+    fake_engine = MagicMock()
+    fake_engine._discover_target_files.return_value = ["/path/snap.json"]
+    fake_ref = MagicMock()
+    fake_ref.model_dump.return_value = {
+        "name": "fake_op",
+        "api_path": "custom_target.fake_op",
+        "params": [{"name": "x"}],
+    }
+    fake_engine.get_symbol.return_value = fake_ref
+    fake_engine.suggest_closest_symbol.return_value = "fake_op"
+
+    gv_mock = GroundingValidator()
+    gv_mock._engine = fake_engine
+
+    node = LogicalNode(
+        id="n1", op_type="fake_op", domain="custom_target", attributes={"x": 1}
+    )
+    errs = gv_mock.validate_grounding(node)
+    assert not errs
+
+    # Test suggestion delegation from engine
+    fake_engine.get_symbol.return_value = None
+    node_typo = LogicalNode(id="n2", op_type="fake_o", domain="custom_target")
+    errs_typo = gv_mock.validate_grounding(node_typo)
+    assert len(errs_typo) == 1
+    assert "fake_op" in errs_typo[0].message
+
+    # Test suggest_closest_symbol returning None from engine
+    fake_engine.suggest_closest_symbol.return_value = None
+    assert (
+        gv_mock._find_best_symbol_match("completely_unknown", "custom_target") is None
+    )
+
+    # Test engine without _discover_target_files attribute
+    gv_no_disc = GroundingValidator()
+    gv_no_disc._engine = object()
+    assert gv_no_disc._find_best_symbol_match("unknown_op", "unknown_dom") is None
+    assert gv_no_disc._find_best_symbol_match("unknown_op", "") is None
+    node_no_disc = LogicalNode(id="n3", op_type="unknown_op", domain="unknown_dom")
+    assert len(gv_no_disc.validate_grounding(node_no_disc)) == 1

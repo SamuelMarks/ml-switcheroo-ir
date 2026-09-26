@@ -815,3 +815,73 @@ def test_schema_compliance_ai_onnx_preview_training_gradient() -> None:
 
 def test_schema_compliance_ai_onnx_preview_training_momentum() -> None:
     """Test schema compliance for ai.onnx.preview.training.Momentum."""
+
+
+def test_load_onnx_schemas_branches(tmp_path: object) -> None:
+    """Test load_onnx_schemas caching, missing file, and custom file loading.
+
+    Args:
+        tmp_path: Pytest temporary directory fixture.
+    """
+    import json
+    from pathlib import Path
+
+    from ml_switcheroo_ir.schema.onnx_registry import (
+        OpAttribute,
+        OpSchema,
+        load_onnx_schemas,
+    )
+
+    # 1. Cached load returns existing registry
+    reg = load_onnx_schemas()
+    assert len(reg) == 205
+
+    # 2. Missing file load
+    nonexistent = Path(str(tmp_path)) / "does_not_exist.json"
+    res = load_onnx_schemas(json_path=nonexistent)
+    assert len(res) == 205
+
+    # 3. Custom valid JSON file
+    custom_json = Path(str(tmp_path)) / "custom_ops.json"
+    custom_json.write_text(
+        json.dumps(
+            {
+                "CustomOp": {
+                    "domain": "ai.onnx.custom",
+                    "version": 1,
+                    "attributes": {
+                        "alpha": {"type": "float", "required": False, "default": 1.0}
+                    },
+                    "inputs": ["x"],
+                    "outputs": ["y"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    custom_reg = load_onnx_schemas(json_path=custom_json)
+    assert "CustomOp" in custom_reg
+    assert custom_reg["CustomOp"].domain == "ai.onnx.custom"
+    assert "alpha" in custom_reg["CustomOp"].attributes
+    assert custom_reg["CustomOp"].attributes["alpha"].default == 1.0
+
+    # 4. OpAttribute and OpSchema dataclass fields
+    attr = OpAttribute(name="dim", type="int", required=True, default=0)
+    assert attr.name == "dim"
+    assert attr.type == "int"
+    assert attr.required is True
+    assert attr.default == 0
+
+    schema = OpSchema(
+        name="Op",
+        domain="ai.onnx",
+        version=1,
+        attributes={"dim": attr},
+        inputs=["in"],
+        outputs=["out"],
+    )
+    assert schema.name == "Op"
+    assert schema.domain == "ai.onnx"
+    assert schema.version == 1
+    assert schema.inputs == ["in"]
+    assert schema.outputs == ["out"]

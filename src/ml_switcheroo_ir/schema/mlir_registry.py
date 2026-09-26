@@ -7,15 +7,20 @@ from pathlib import Path
 
 from ml_switcheroo_ir.schema.custom_ops import CustomAttributeSchema, CustomOpSchema
 from ml_switcheroo_ir.schema.onnx_registry import OpSchema
+from ml_switcheroo_ir.snapshots import find_schema_file
 
 MLIR_REGISTRY: dict[str, OpSchema] = {}
 
 
-def _load_mlir_schemas() -> None:
-    """Load MLIR schemas from bundled mlir_ops.json."""
-    json_path = Path(__file__).parent / "mlir_ops.json"
-    if json_path.exists():
-        with open(json_path, "r", encoding="utf-8") as f:
+def _load_mlir_schemas(json_path: Path | str | None = None) -> None:
+    """Load MLIR schemas from bundled mlir_ops.json or snapshot directory.
+
+    Args:
+        json_path (Optional[Union[Path, str]]): Explicit path override for mlir_ops.json.
+    """
+    target = find_schema_file("mlir_ops.json", override_path=json_path)
+    if target and target.exists():
+        with open(target, "r", encoding="utf-8") as f:
             data = json.load(f)
         for op_data in data.get("ops", []):
             attrs = [

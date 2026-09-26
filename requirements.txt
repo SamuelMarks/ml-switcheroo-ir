@@ -1,3 +1,2 @@
-tabulate
 pydantic
 zstandard

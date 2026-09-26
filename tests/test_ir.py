@@ -14,6 +14,7 @@ from ml_switcheroo_ir import (
     DType,
     GraphFrontend,
     LogicalAxis,
+    LogicalEdge,
     LogicalGraph,
     LogicalMesh,
     LogicalNode,
@@ -925,3 +926,144 @@ def test_transforms_subgraphs_non_graph_branch() -> None:
     assert (
         cleaned.nodes["custom_node"].subgraphs["metadata_str"] == "not_a_logical_graph"
     )
+
+
+def test_legacy_ir_syntax_deprecations() -> None:
+    """Test that legacy IR syntax produces structured DeprecationWarnings targeting removal in 0.1.0."""
+    import warnings
+
+    # 1. node.kind getter & setter
+    n = LogicalNode(id="n1", op_type="Relu")
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        _ = n.kind
+        assert any(
+            "The 'kind' property is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        n.kind = "Gelu"
+        assert n.op_type == "Gelu"
+        assert any(
+            "The 'kind' setter is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+
+    # 2. node.metadata getter & setter
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        _ = n.metadata
+        assert any(
+            "The 'metadata' property is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        n.metadata = {"axis": 1}
+        assert n.attributes == {"axis": 1}
+        assert any(
+            "The 'metadata' setter is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+
+    # 3. List-based nodes in LogicalGraph.__init__
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        g = LogicalGraph(nodes=[LogicalNode(id="n_list", op_type="Relu")])
+        assert "n_list" in g.nodes
+        assert any(
+            "Passing a list of nodes to LogicalGraph is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+
+    # 4. NodeDict append, extend, insert
+    g2 = LogicalGraph()
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        g2.nodes.append(LogicalNode(id="n_app", op_type="Relu"))
+        assert "n_app" in g2.nodes
+        assert any(
+            "Using graph.nodes.append() is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        g2.nodes.extend([LogicalNode(id="n_ext", op_type="Relu")])
+        assert "n_ext" in g2.nodes
+        assert any(
+            "Using graph.nodes.extend() is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        g2.nodes.insert(0, LogicalNode(id="n_ins", op_type="Relu"))
+        assert "n_ins" in g2.nodes
+        assert any(
+            "Using graph.nodes.insert() is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+
+    # 5. edges setter
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        g2.edges = [LogicalEdge(source="n_app", target="n_ext")]
+        assert any(
+            "Setting 'edges' directly is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+
+    # 6. Legacy Input and Output pseudo-nodes
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        _ = LogicalGraph(nodes={"in_node": LogicalNode(id="in_node", op_type="Input")})
+        assert any(
+            "Legacy 'Input' pseudo-node auto-detection is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        _ = LogicalGraph(
+            nodes={
+                "out_node": LogicalNode(id="out_node", op_type="Output", inputs=["x"])
+            }
+        )
+        assert any(
+            "Legacy 'Output' pseudo-node auto-detection is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )
+
+    # 7. Legacy subgraph remappings in from_dict
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always", DeprecationWarning)
+        _ = LogicalGraph.from_dict(
+            {
+                "nodes": {
+                    "n_sub": {
+                        "id": "n_sub",
+                        "op_type": "CustomLoop",
+                        "attributes": {
+                            "body_subgraph": {
+                                "nodes": {"b": {"id": "b", "op_type": "Add"}}
+                            }
+                        },
+                    }
+                }
+            }
+        )
+        assert any(
+            "Legacy subgraph key 'body_subgraph' is deprecated and will be removed in version 0.1.0"
+            in str(w.message)
+            for w in record
+        )

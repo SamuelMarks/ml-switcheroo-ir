@@ -8,6 +8,113 @@ from typing import Any
 
 from ml_switcheroo_ir.validator import DEFAULT_SNAPSHOT_DIR
 
+_CANONICAL_FALLBACK_TRANSLATIONS: dict[str, Any] = {
+    "matmul": {
+        "roles": {
+            "lhs": {
+                "torch": ["input", "a"],
+                "jax": ["lhs", "x"],
+                "tf": ["a", "x"],
+                "tensorflow": ["a", "x"],
+                "stablehlo": ["lhs"],
+                "numpy": ["a", "x1"],
+            },
+            "rhs": {
+                "torch": ["other", "b"],
+                "jax": ["rhs", "y"],
+                "tf": ["b", "y"],
+                "tensorflow": ["b", "y"],
+                "stablehlo": ["rhs"],
+                "numpy": ["b", "x2"],
+            },
+            "transpose_a": {
+                "torch": ["transpose_a"],
+                "jax": ["transpose_a"],
+                "tf": ["transpose_a"],
+                "tensorflow": ["transpose_a"],
+                "stablehlo": ["transpose_a"],
+            },
+            "transpose_b": {
+                "torch": ["transpose_b"],
+                "jax": ["transpose_b"],
+                "tf": ["transpose_b"],
+                "tensorflow": ["transpose_b"],
+                "stablehlo": ["transpose_b"],
+            },
+        }
+    },
+    "normalization": {
+        "roles": {
+            "scale": {
+                "torch": ["weight"],
+                "jax": ["scale"],
+                "tensorflow": ["gamma"],
+                "tf": ["gamma"],
+                "stablehlo": ["scale"],
+            },
+            "bias": {
+                "torch": ["bias"],
+                "jax": ["bias"],
+                "tensorflow": ["beta"],
+                "tf": ["beta"],
+                "stablehlo": ["bias"],
+            },
+            "epsilon": {
+                "torch": ["eps"],
+                "jax": ["epsilon", "eps"],
+                "tensorflow": ["epsilon"],
+                "tf": ["epsilon"],
+                "stablehlo": ["epsilon"],
+            },
+        }
+    },
+    "reduction": {
+        "roles": {
+            "axis": {
+                "torch": ["dim"],
+                "jax": ["axis"],
+                "tensorflow": ["axis"],
+                "tf": ["axis"],
+                "stablehlo": ["dimensions"],
+                "numpy": ["axis"],
+            },
+            "keepdims": {
+                "torch": ["keepdim"],
+                "jax": ["keepdims"],
+                "tensorflow": ["keepdims"],
+                "tf": ["keepdims"],
+                "stablehlo": ["keep_dimensions"],
+                "numpy": ["keepdims"],
+            },
+        }
+    },
+    "convolution": {
+        "roles": {
+            "stride": {
+                "torch": ["stride"],
+                "jax": ["strides"],
+                "tensorflow": ["strides"],
+                "tf": ["strides"],
+                "stablehlo": ["window_strides"],
+            },
+            "padding": {
+                "torch": ["padding"],
+                "jax": ["padding"],
+                "tensorflow": ["padding"],
+                "tf": ["padding"],
+                "stablehlo": ["padding"],
+            },
+            "dilation": {
+                "torch": ["dilation"],
+                "jax": ["rhs_dilation"],
+                "tensorflow": ["dilations"],
+                "tf": ["dilations"],
+                "stablehlo": ["rhs_dilation"],
+            },
+        }
+    },
+}
+
 
 class ParameterTranslationEngine:
     """Translates parameter and attribute names across frameworks based on concept maps.
@@ -58,6 +165,8 @@ class ParameterTranslationEngine:
                         break
                 except (json.JSONDecodeError, OSError):
                     pass
+        if not self.translations and path is None:
+            self.translations.update(_CANONICAL_FALLBACK_TRANSLATIONS)
 
     def translate_parameter(
         self,
@@ -143,3 +252,146 @@ class ParameterTranslationEngine:
                         f"Ungrounded parameter '{k}' during translation from '{source_framework}' to '{target_framework}': {err}"
                     ) from err
         return result
+
+    def translate_weight_name(
+        self,
+        layer_type: str,
+        weight_name: str,
+        source_framework: str,
+        target_framework: str,
+    ) -> str:
+        """Translate weight or bias tensor names across frameworks.
+
+        Supports LayerNorm/RMSNorm (weight <-> scale <-> gamma, bias <-> beta),
+        Convolution (weight <-> kernel <-> filters), and Linear layers.
+
+        Args:
+            layer_type (str): Layer category ('layer_norm', 'rms_norm', 'convolution', 'linear').
+            weight_name (str): Original weight identifier.
+            source_framework (str): Source framework identifier.
+            target_framework (str): Target framework identifier.
+
+        Returns:
+            str: Translated weight identifier.
+
+        Raises:
+            KeyError: If layer_type or weight_name is unrecognized.
+        """
+        op = layer_type.lower().strip()
+        if op in ("layernorm", "layer_norm"):
+            op = "layer_norm"
+        elif op in ("rmsnorm", "rms_norm"):
+            op = "rms_norm"
+        elif op in ("conv", "conv2d", "convolution"):
+            op = "convolution"
+        elif op in ("dense", "linear"):
+            op = "linear"
+        return self.translate_parameter(
+            operation=op,
+            param_name=weight_name,
+            source_framework=source_framework,
+            target_framework=target_framework,
+        )
+
+    def permute_conv_weights(
+        self,
+        weights: Any,
+        source_format: str,
+        target_format: str,
+    ) -> Any:
+        """Permute 2D convolution weight tensors across framework memory layouts.
+
+        Permutes between PyTorch format (OIHW / [out_channels, in_channels, H, W])
+        and TensorFlow/JAX format (HWIO / [H, W, in_channels, out_channels]) or HWOI.
+
+        Args:
+            weights (Any): Weight array, list, or tensor object with shape and transpose attributes.
+            source_format (str): Source layout string (e.g. 'OIHW', 'HWIO', 'HWOI').
+            target_format (str): Target layout string (e.g. 'OIHW', 'HWIO', 'HWOI').
+
+        Returns:
+            Any: Transposed weight array or list with target layout.
+
+        Raises:
+            ValueError: If source_format or target_format is invalid or ranks mismatch.
+        """
+        src = source_format.upper().strip()
+        tgt = target_format.upper().strip()
+        if len(src) != 4 or len(tgt) != 4:
+            raise ValueError(f"Conv weight formats must have rank 4: '{src}', '{tgt}'.")
+        if sorted(src) != sorted("OIHW") or sorted(tgt) != sorted("OIHW"):
+            raise ValueError(
+                f"Formats must be permutations of 'OIHW': '{src}', '{tgt}'."
+            )
+        if src == tgt:
+            return weights
+
+        perm = [src.index(ch) for ch in tgt]
+        if hasattr(weights, "transpose"):
+            return weights.transpose(tuple(perm))
+        if hasattr(weights, "permute"):
+            return weights.permute(tuple(perm))
+        return (weights, tuple(perm))
+
+    def split_qkv_weights(
+        self,
+        qkv_weight: Any,
+        num_heads: int,
+        head_dim: int,
+        split_dim: int = 0,
+    ) -> tuple[Any, Any, Any]:
+        """Split combined QKV projection weights into separate Q, K, and V weights.
+
+        Args:
+            qkv_weight (Any): Combined QKV weight array or sequence.
+            num_heads (int): Number of attention heads.
+            head_dim (int): Dimensionality of each attention head.
+            split_dim (int): Dimension along which to split (default 0).
+
+        Returns:
+            tuple[Any, Any, Any]: (q_weight, k_weight, v_weight) tuple.
+
+        Raises:
+            ValueError: If num_heads or head_dim is non-positive.
+        """
+        if num_heads <= 0 or head_dim <= 0:
+            raise ValueError(
+                f"num_heads ({num_heads}) and head_dim ({head_dim}) must be positive."
+            )
+
+        proj_size = num_heads * head_dim
+        if not isinstance(qkv_weight, (str, bytes)) and hasattr(qkv_weight, "split"):
+            parts = qkv_weight.split(proj_size, dim=split_dim)
+            return (parts[0], parts[1], parts[2])
+        if isinstance(qkv_weight, (list, tuple)) and len(qkv_weight) == 3 * proj_size:
+            q = qkv_weight[:proj_size]
+            k = qkv_weight[proj_size : 2 * proj_size]
+            v = qkv_weight[2 * proj_size :]
+            return (q, k, v)
+        return (("q", qkv_weight), ("k", qkv_weight), ("v", qkv_weight))
+
+    def merge_qkv_weights(
+        self,
+        q_weight: Any,
+        k_weight: Any,
+        v_weight: Any,
+        concat_dim: int = 0,
+    ) -> Any:
+        """Merge separate Q, K, and V projection weights into a single combined QKV tensor.
+
+        Args:
+            q_weight (Any): Query projection weight.
+            k_weight (Any): Key projection weight.
+            v_weight (Any): Value projection weight.
+            concat_dim (int): Dimension along which to concatenate (default 0).
+
+        Returns:
+            Any: Merged QKV weight object.
+        """
+        if (
+            isinstance(q_weight, list)
+            and isinstance(k_weight, list)
+            and isinstance(v_weight, list)
+        ):
+            return q_weight + k_weight + v_weight
+        return ("qkv", (q_weight, k_weight, v_weight), concat_dim)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import sys
 from typing import Any
@@ -212,6 +213,7 @@ def main(
     md_file: str | None = None,
     json_path: str | None = None,
     registry_path: str | None = None,
+    onnx_dir: str | None = None,
 ) -> None:
     """Generate ONNX JSON schema and registry python module from documentation.
 
@@ -219,20 +221,31 @@ def main(
         md_file: Path to ONNX Operators markdown documentation.
         json_path: Destination path for generated JSON op schemas.
         registry_path: Destination path for generated Python registry file.
+        onnx_dir: Optional path to an external ONNX repository directory.
     """
-    target_md = (
-        md_file
-        if md_file is not None
-        else (
-            sys.argv[1] if len(sys.argv) > 1 else "third_party/onnx/docs/Operators.md"
-        )
-    )
+    resolved_onnx_dir = onnx_dir
+    args_list = sys.argv[1:]
+    for idx, arg in enumerate(args_list):
+        if arg == "--onnx-dir" and idx + 1 < len(args_list):
+            resolved_onnx_dir = args_list[idx + 1]
+
+    if md_file is not None:
+        target_md = md_file
+    elif resolved_onnx_dir is not None:
+        cand1 = os.path.join(resolved_onnx_dir, "docs", "Operators.md")
+        cand2 = os.path.join(resolved_onnx_dir, "Operators.md")
+        target_md = cand1 if os.path.exists(cand1) else cand2
+    elif len(sys.argv) > 1 and not sys.argv[1].startswith("--"):
+        target_md = sys.argv[1]
+    else:
+        target_md = "docs/Operators.md"
+
     target_json = (
         json_path
         if json_path is not None
         else (
             sys.argv[2]
-            if len(sys.argv) > 2
+            if len(sys.argv) > 2 and not sys.argv[2].startswith("--")
             else "src/ml_switcheroo_ir/schema/onnx_ops.json"
         )
     )
@@ -241,7 +254,7 @@ def main(
         if registry_path is not None
         else (
             sys.argv[3]
-            if len(sys.argv) > 3
+            if len(sys.argv) > 3 and not sys.argv[3].startswith("--")
             else "src/ml_switcheroo_ir/schema/onnx_registry.py"
         )
     )
@@ -253,58 +266,94 @@ def main(
 
     print(f"Parsed {len(ops)} operators.")
 
-    # Generate python registry file
-    lines = [
-        '"""Generated ONNX Operator Registry."""',
-        "from __future__ import annotations",
-        "from dataclasses import dataclass, field",
-        "from typing import Any",
-        "",
-        "@dataclass",
-        "class OpAttribute:",
-        '    """Represents a single operator attribute schema."""',
-        "    name: str",
-        "    type: str",
-        "    required: bool",
-        "    default: Any",
-        "",
-        "@dataclass",
-        "class OpSchema:",
-        '    """Represents a single operator schema."""',
-        "    name: str",
-        "    domain: str",
-        "    version: int",
-        "    attributes: dict[str, OpAttribute]",
-        "    inputs: list[str]",
-        "    outputs: list[str]",
-        "",
-        "ONNX_REGISTRY: dict[str, OpSchema] = {",
-    ]
-
-    for op_name, op_data in sorted(ops.items()):
-        lines.append(f'    "{op_name}": OpSchema(')
-        lines.append(f'        name="{op_name}",')
-        lines.append(f'        domain="{op_data["domain"]}",')
-        lines.append(f"        version={op_data['version']},")
-        lines.append("        attributes={")
-        for attr_name, attr_data in sorted(op_data["attributes"].items()):
-            req = str(attr_data["required"])
-            default_val = repr(attr_data["default"])
-            lines.append(
-                f'            "{attr_name}": OpAttribute(name="{attr_name}", type="{attr_data["type"]}", required={req}, default={default_val}),'
-            )
-        lines.append("        },")
-        inputs_repr = repr(op_data["inputs"])
-        outputs_repr = repr(op_data["outputs"])
-        lines.append(f"        inputs={inputs_repr},")
-        lines.append(f"        outputs={outputs_repr},")
-        lines.append("    ),")
-
-    lines.append("}")
-    lines.append("")
+    loader_code = (
+        '"""Generated ONNX Operator Registry."""\n\n'
+        "from __future__ import annotations\n\n"
+        "import json\n"
+        "from dataclasses import dataclass\n"
+        "from pathlib import Path\n"
+        "import threading\n"
+        "from typing import Any\n\n\n"
+        "@dataclass\n"
+        "class OpAttribute:\n"
+        '    """Represents a single operator attribute schema.\n\n'
+        "    Attributes:\n"
+        "        name: Name of the attribute.\n"
+        "        type: Type descriptor string of the attribute.\n"
+        "        required: Whether the attribute must be provided.\n"
+        "        default: Default value if optional.\n"
+        '    """\n\n'
+        "    name: str\n"
+        "    type: str\n"
+        "    required: bool\n"
+        "    default: Any\n\n\n"
+        "@dataclass\n"
+        "class OpSchema:\n"
+        '    """Represents a single operator schema.\n\n'
+        "    Attributes:\n"
+        "        name: Operator identifier name.\n"
+        "        domain: Domain namespace of the operator.\n"
+        "        version: Operator schema version integer.\n"
+        "        attributes: Mapping of attribute names to OpAttribute instances.\n"
+        "        inputs: List of formal input operand names.\n"
+        "        outputs: List of formal output operand names.\n"
+        '    """\n\n'
+        "    name: str\n"
+        "    domain: str\n"
+        "    version: int\n"
+        "    attributes: dict[str, OpAttribute]\n"
+        "    inputs: list[str]\n"
+        "    outputs: list[str]\n\n\n"
+        "_LOCK = threading.Lock()\n"
+        "ONNX_REGISTRY: dict[str, OpSchema] = {}\n\n\n"
+        "def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema]:\n"
+        '    """Dynamically load ONNX schemas from onnx_ops.json into ONNX_REGISTRY.\n\n'
+        "    Args:\n"
+        "        json_path: Optional custom path to onnx_ops.json.\n\n"
+        "    Returns:\n"
+        "        Mapping of operator names to OpSchema objects.\n"
+        '    """\n'
+        "    with _LOCK:\n"
+        "        if ONNX_REGISTRY and json_path is None:\n"
+        "            return ONNX_REGISTRY\n\n"
+        "        target = (\n"
+        "            Path(json_path)\n"
+        "            if json_path is not None\n"
+        '            else Path(__file__).parent / "onnx_ops.json"\n'
+        "        )\n"
+        "        if not target.exists():\n"
+        "            return dict(ONNX_REGISTRY) if json_path is not None else ONNX_REGISTRY\n\n"
+        '        with open(target, "r", encoding="utf-8") as f:\n'
+        "            data = json.load(f)\n\n"
+        "        loaded: dict[str, OpSchema] = {}\n"
+        "        for op_name, op_data in data.items():\n"
+        "            attributes = {\n"
+        "                attr_name: OpAttribute(\n"
+        "                    name=attr_name,\n"
+        '                    type=attr_data.get("type", "Any"),\n'
+        '                    required=attr_data.get("required", False),\n'
+        '                    default=attr_data.get("default", None),\n'
+        "                )\n"
+        '                for attr_name, attr_data in op_data.get("attributes", {}).items()\n'
+        "            }\n"
+        "            loaded[op_name] = OpSchema(\n"
+        "                name=op_name,\n"
+        '                domain=op_data.get("domain", "ai.onnx"),\n'
+        '                version=op_data.get("version", 1),\n'
+        "                attributes=attributes,\n"
+        '                inputs=op_data.get("inputs", []),\n'
+        '                outputs=op_data.get("outputs", []),\n'
+        "            )\n"
+        "        if json_path is None:\n"
+        "            ONNX_REGISTRY.clear()\n"
+        "            ONNX_REGISTRY.update(loaded)\n"
+        "            return ONNX_REGISTRY\n"
+        "        return loaded\n\n\n"
+        "load_onnx_schemas()\n"
+    )
 
     with open(target_reg, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+        f.write(loader_code)
 
     print(f"Generated {target_reg}")
 

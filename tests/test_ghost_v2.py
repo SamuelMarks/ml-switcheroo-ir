@@ -104,6 +104,12 @@ def test_ghost_isa_ref() -> None:
         register_classes={"op0": "R0", "op1": "R1"},
         control_codes={"latency": 4},
         instruction_modifiers=[".SAT", ".FTZ"],
+        operand_signatures=[["vgpr", "vgpr", "sgpr"]],
+        allowed_modifiers=[".SAT", ".FTZ"],
+        execution_latency=4,
+        issue_rate=1.0,
+        scoreboard_barrier_mask=1,
+        vopd_slot="X",
         vopd_profile=None,
     )
     assert ref.domain_type == "isa"
@@ -111,6 +117,12 @@ def test_ghost_isa_ref() -> None:
     assert ref.register_classes == {"op0": "R0", "op1": "R1"}
     assert ref.control_codes == {"latency": 4}
     assert ref.instruction_modifiers == [".SAT", ".FTZ"]
+    assert ref.operand_signatures == [["vgpr", "vgpr", "sgpr"]]
+    assert ref.allowed_modifiers == [".SAT", ".FTZ"]
+    assert ref.execution_latency == 4
+    assert ref.issue_rate == 1.0
+    assert ref.scoreboard_barrier_mask == 1
+    assert ref.vopd_slot == "X"
 
 
 def test_ghost_mlir_ref() -> None:
@@ -668,3 +680,42 @@ def test_ghost_v2_c_extension_and_accepted_kwargs() -> None:
     roundtrip_v2 = migrate_ghost_ref_v2(v2_dump)
     assert roundtrip_v2.is_c_extension is True
     assert roundtrip_v2.accepted_kwargs == ["alpha", "out"]
+
+
+def test_grounding_diagnostic_and_report_models() -> None:
+    """Test DiagnosticSeverity, GroundingDiagnostic, and GroundingReport models."""
+    from ml_switcheroo_ir import (
+        DiagnosticSeverity,
+        GroundingDiagnostic,
+        GroundingReport,
+    )
+
+    diag = GroundingDiagnostic(
+        field="operands",
+        message="Invalid operand count",
+        severity=DiagnosticSeverity.ERROR,
+        suggested_fix="add",
+    )
+    assert diag.field == "operands"
+    assert diag.severity == DiagnosticSeverity.ERROR
+    assert diag.suggested_fix == "add"
+
+    report = GroundingReport(
+        is_grounded=True,
+        target="stablehlo",
+        symbol="stablehlo.add",
+    )
+    assert not report.has_errors
+    assert report.is_grounded
+
+    report.add_diagnostic("info_field", "Informational note", DiagnosticSeverity.INFO)
+    assert not report.has_errors
+    assert report.is_grounded
+
+    report.add_diagnostic("warn_field", "Warning message", DiagnosticSeverity.WARNING)
+    assert not report.has_errors
+    assert report.is_grounded
+
+    report.add_diagnostic("err_field", "Error message", DiagnosticSeverity.ERROR)
+    assert report.has_errors
+    assert not report.is_grounded

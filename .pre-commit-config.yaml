@@ -38,7 +38,7 @@ repos:
 
       - id: verify-grounding
         name: Verify Grounding
-        entry: python3 scripts/verify_grounding.py
+        entry: python3 scripts/verify_grounding.py --strict
         language: system
         types: [python]
         pass_filenames: false
