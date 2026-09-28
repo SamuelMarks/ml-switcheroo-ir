@@ -33,6 +33,7 @@ from scripts.update_badges import (
     enforce_coverage_shields,
     format_cov,
     get_color,
+    get_coverage_metrics,
     get_doc_coverage,
     get_test_coverage,
     parse_args,
@@ -103,6 +104,10 @@ def test_get_doc_coverage() -> None:
     with patch("subprocess.run") as mock_run:
         mock_run.return_value.stdout = "actual: 97.4%\n"
         assert get_doc_coverage() == 97.4
+
+    with patch("subprocess.run") as mock_run_no_match:
+        mock_run_no_match.return_value.stdout = "no match in output\n"
+        assert get_doc_coverage() == 100.0
 
     with patch("subprocess.run", side_effect=Exception("Failed")):
         assert get_doc_coverage() == 100.0
@@ -208,6 +213,109 @@ def test_get_test_coverage_failure() -> None:
     with patch("subprocess.run", side_effect=Exception("Failed")):
         val = get_test_coverage(coverage_json_path="/nonexistent/path/coverage.json")
         assert val == 0.0
+
+
+def test_get_coverage_metrics_temp_file_handling() -> None:
+    """Test get_coverage_metrics temporary file generation and cleanup."""
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> Any:
+        """Fake coverage json execution by dumping valid json.
+
+        Args:
+            cmd: Command list.
+            **kwargs: Extra arguments.
+
+        Returns:
+            Mock subprocess completed process.
+        """
+        del kwargs
+        if "-o" in cmd:
+            out_idx = cmd.index("-o") + 1
+            out_path = cmd[out_idx]
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "totals": {
+                            "percent_covered": 100.0,
+                            "num_statements": 10,
+                            "covered_lines": 10,
+                            "num_branches": 2,
+                            "covered_branches": 2,
+                        }
+                    },
+                    f,
+                )
+            return MagicMock(returncode=0)
+        return MagicMock(returncode=0, stdout="actual: 100.0%\n")
+
+    with patch("subprocess.run", side_effect=fake_subprocess_run):
+        overall, stmt, branch = get_coverage_metrics(None)
+        assert overall == 100.0
+        assert stmt == 100.0
+        assert branch == 100.0
+
+    def fail_remove(p: str) -> None:
+        """Raise OSError on remove.
+
+        Args:
+            p: Path to remove.
+        """
+        del p
+        raise OSError("Permission denied")
+
+    with patch("subprocess.run", side_effect=fake_subprocess_run), patch(
+        "os.remove", side_effect=fail_remove
+    ):
+        overall, _, _ = get_coverage_metrics(None)
+        assert overall == 100.0
+
+
+def test_update_readme_without_coverage_path_or_sibling() -> None:
+    """Test update_readme when coverage_json_path is None and sibling coverage.json does not exist."""
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> Any:
+        """Fake coverage json execution.
+
+        Args:
+            cmd: Command list.
+            **kwargs: Extra arguments.
+
+        Returns:
+            Mock subprocess completed process.
+        """
+        del kwargs
+        if "-o" in cmd:
+            out_idx = cmd.index("-o") + 1
+            out_path = cmd[out_idx]
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "totals": {
+                            "percent_covered": 100.0,
+                            "num_statements": 5,
+                            "covered_lines": 5,
+                            "num_branches": 0,
+                            "covered_branches": 0,
+                        }
+                    },
+                    f,
+                )
+            return MagicMock(returncode=0)
+        return MagicMock(returncode=0, stdout="actual: 100.0%\n")
+
+    with TemporaryDirectory() as tmpdir:
+        readme_file = os.path.join(tmpdir, "README.md")
+        with open(readme_file, "w", encoding="utf-8") as f:
+            f.write(
+                "# Title\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
+            )
+        with patch("subprocess.run", side_effect=fake_subprocess_run):
+            update_readme(readme_path=readme_file, coverage_json_path=None)
+        with open(readme_file, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "test_coverage-100%25" in content
 
 
 def test_update_readme_missing_file() -> None:

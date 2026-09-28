@@ -143,7 +143,7 @@ graph TD
 
 `ml-switcheroo-ir` acts as the strict contract between ingestion frontends and synthesis backends. It is designed around modularity, mathematical rigor, and anti-hallucination validation.
 
-All dialect registries (`ai.onnx`, `stablehlo`, `mlir`, modern custom ops, WGSL) are packaged as lightweight JSON manifests (`onnx_ops.json`, `stablehlo_ops.json`, `mlir_ops.json`, `wgsl_ops.json`) loaded dynamically with thread-safe memoization at runtime. Schema generation from upstream documentation or source definitions is strictly an offline build/tooling step executed via `scripts/generate_registry.py --onnx-dir <path>`, eliminating external runtime dependencies and git submodules.
+All dialect registries (`ai.onnx`, `stablehlo`, `mlir`, modern custom ops, WGSL) and parameter concept mappings are defined in upstream `ml-ecosystem-snapshots` manifests, with canonical fallback operator schemas embedded directly in typed Python registries within `ml-switcheroo-ir`. No `.json` snapshot manifests are bundled within `ml-switcheroo-ir`; snapshot JSON files reside strictly in `ml-ecosystem-snapshots`. Schema generation from upstream documentation or source definitions is strictly an offline build/tooling step executed via `scripts/generate_registry.py --onnx-dir <path>`, eliminating external runtime dependencies and git submodules.
 
 ```mermaid
 classDiagram

@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 TEST_BADGE_RE: re.Pattern[str] = re.compile(
     r"\[?\!\[(?:Test\s+)?Coverage\]\(https://img\.shields\.io/badge/(?:test_)?coverage-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?",
@@ -61,22 +62,28 @@ def format_cov(cov: float) -> str:
 
 
 def get_coverage_metrics(
-    coverage_json_path: str = "coverage.json",
+    coverage_json_path: str | None = None,
 ) -> tuple[float, float, float]:
     """Extract overall, statement, and branch coverage percentages from coverage.json.
 
     Args:
-        coverage_json_path: Path to the JSON coverage file to inspect or generate.
+        coverage_json_path: Optional path to the JSON coverage file to inspect or generate.
 
     Returns:
         Tuple[float, float, float]: (overall_pct, statement_pct, branch_pct).
     """
+    actual_path = coverage_json_path
+    is_temp = False
+    if actual_path is None:
+        fd, actual_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        is_temp = True
     try:
         subprocess.run(
-            [sys.executable, "-m", "coverage", "json", "-o", coverage_json_path],
+            [sys.executable, "-m", "coverage", "json", "-o", actual_path],
             check=False,
         )
-        with open(coverage_json_path, "r", encoding="utf-8") as f:
+        with open(actual_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             totals = data.get("totals", {})
             overall = float(totals.get("percent_covered", 0.0))
@@ -92,13 +99,19 @@ def get_coverage_metrics(
             return overall, stmt_cov, branch_cov
     except Exception:  # noqa: BLE001
         return 0.0, 0.0, 0.0
+    finally:
+        if is_temp and os.path.exists(actual_path):
+            try:
+                os.remove(actual_path)
+            except OSError:
+                pass
 
 
-def get_test_coverage(coverage_json_path: str = "coverage.json") -> float:
+def get_test_coverage(coverage_json_path: str | None = None) -> float:
     """Extract total test coverage percentage from coverage.json or run coverage tool.
 
     Args:
-        coverage_json_path: Path to the JSON coverage file to inspect or generate.
+        coverage_json_path: Optional path to the JSON coverage file to inspect or generate.
 
     Returns:
         Total coverage percentage as a float.
@@ -206,13 +219,13 @@ def parse_args(args: list[str]) -> tuple[bool, str]:
 
 
 def update_readme(
-    readme_path: str | None = None, coverage_json_path: str = "coverage.json"
+    readme_path: str | None = None, coverage_json_path: str | None = None
 ) -> None:
     """Update test and doc coverage shields in README.md, enforcing exactly one of each.
 
     Args:
         readme_path: Path to the README.md file to update.
-        coverage_json_path: Path to the coverage.json file to inspect.
+        coverage_json_path: Optional path to the coverage.json file to inspect.
 
     Raises:
         ValueError: If shield enforcement fails after generation.
@@ -229,7 +242,13 @@ def update_readme(
     if not os.path.exists(target_readme):
         return
 
-    test_cov = get_test_coverage(coverage_json_path=coverage_json_path)
+    actual_cov_path = coverage_json_path
+    if actual_cov_path is None:
+        sibling_cov = os.path.join(os.path.dirname(target_readme), "coverage.json")
+        if os.path.isfile(sibling_cov):
+            actual_cov_path = sibling_cov
+
+    test_cov = get_test_coverage(coverage_json_path=actual_cov_path)
     doc_cov = get_doc_coverage()
 
     test_str = format_cov(test_cov)
