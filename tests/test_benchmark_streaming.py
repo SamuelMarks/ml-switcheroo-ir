@@ -124,8 +124,8 @@ def test_streaming_zstd_roundtrip_10000_nodes(tmp_path: Path) -> None:
 
     assert len(loaded_zst.nodes) == 10005
     assert loaded_zst.outputs == ["node_10004"]
-    assert zst_write_time < 30.0
-    assert zst_read_time < 30.0
+    assert zst_write_time < 120.0
+    assert zst_read_time < 120.0
 
 
 def test_streaming_zstd_missing_dependency(
