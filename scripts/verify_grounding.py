@@ -155,13 +155,23 @@ def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: List of error diagnostic messages for any ungrounded symbols.
     """
-    stablehlo_file = snapshots_dir / "stablehlo_v1.0.0.json"
-    if not stablehlo_file.is_file():
-        candidates = sorted(snapshots_dir.glob("stablehlo*.json"))
-        if candidates:
-            stablehlo_file = candidates[-1]
+    exhaustive_candidate = snapshots_dir / "stablehlo_exhaustive.json"
+    if exhaustive_candidate.is_file():
+        stablehlo_file = exhaustive_candidate
+    else:
+        fw_exhaustive = (
+            snapshots_dir.parent / "frameworks" / "stablehlo_exhaustive.json"
+        )
+        if fw_exhaustive.is_file():
+            stablehlo_file = fw_exhaustive
         else:
-            return [f"StableHLO snapshot file not found: {stablehlo_file}"]
+            candidates = sorted(snapshots_dir.glob("stablehlo*.json"))
+            if candidates:
+                stablehlo_file = candidates[-1]
+            else:
+                return [
+                    f"StableHLO snapshot file not found: {snapshots_dir / 'stablehlo_v1.0.0.json'}"
+                ]
 
     gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
     errors: list[str] = []

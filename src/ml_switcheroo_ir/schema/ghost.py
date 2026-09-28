@@ -1,7 +1,7 @@
 """Shared Data Models for ML Framework Snapshot introspection.
 
 Provides the Ghost Protocol (GhostRef, GhostParam) schemas used to communicate
-API structures between the ml-framework-snapshots scraper and the ml-switcheroo compiler.
+API structures between the ml-ecosystem-snapshots scraper and the ml-switcheroo compiler.
 """
 
 from __future__ import annotations

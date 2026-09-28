@@ -12,16 +12,16 @@ _CANONICAL_FALLBACK_TRANSLATIONS: dict[str, Any] = {
     "matmul": {
         "roles": {
             "lhs": {
-                "torch": ["input", "a"],
-                "jax": ["lhs", "x"],
+                "torch": ["input", "mat1", "a"],
+                "jax": ["a", "lhs", "x"],
                 "tf": ["a", "x"],
                 "tensorflow": ["a", "x"],
                 "stablehlo": ["lhs"],
                 "numpy": ["a", "x1"],
             },
             "rhs": {
-                "torch": ["other", "b"],
-                "jax": ["rhs", "y"],
+                "torch": ["other", "mat2", "b"],
+                "jax": ["b", "rhs", "y"],
                 "tf": ["b", "y"],
                 "tensorflow": ["b", "y"],
                 "stablehlo": ["rhs"],
@@ -68,6 +68,63 @@ _CANONICAL_FALLBACK_TRANSLATIONS: dict[str, Any] = {
             },
         }
     },
+    "layer_norm": {
+        "roles": {
+            "weight": {
+                "torch": ["weight"],
+                "jax": ["scale"],
+                "keras3": ["gamma"],
+                "tensorflow": ["gamma"],
+                "tf": ["gamma"],
+                "mlx": ["weight"],
+                "onnx": ["scale"],
+            },
+            "bias": {
+                "torch": ["bias"],
+                "jax": ["bias"],
+                "keras3": ["beta"],
+                "tensorflow": ["beta"],
+                "tf": ["beta"],
+                "mlx": ["bias"],
+                "onnx": ["bias"],
+            },
+        }
+    },
+    "rms_norm": {
+        "roles": {
+            "weight": {
+                "torch": ["weight"],
+                "jax": ["scale"],
+                "keras3": ["gamma"],
+                "tensorflow": ["gamma"],
+                "tf": ["gamma"],
+                "mlx": ["weight"],
+                "onnx": ["scale"],
+            },
+        }
+    },
+    "linear": {
+        "roles": {
+            "weight": {
+                "torch": ["weight"],
+                "jax": ["kernel"],
+                "keras3": ["kernel"],
+                "tensorflow": ["kernel"],
+                "tf": ["kernel"],
+                "mlx": ["weight"],
+                "onnx": ["weight"],
+            },
+            "bias": {
+                "torch": ["bias"],
+                "jax": ["bias"],
+                "keras3": ["bias"],
+                "tensorflow": ["bias"],
+                "tf": ["bias"],
+                "mlx": ["bias"],
+                "onnx": ["bias"],
+            },
+        }
+    },
     "reduction": {
         "roles": {
             "axis": {
@@ -90,6 +147,15 @@ _CANONICAL_FALLBACK_TRANSLATIONS: dict[str, Any] = {
     },
     "convolution": {
         "roles": {
+            "weight": {
+                "torch": ["weight"],
+                "jax": ["rhs", "kernel"],
+                "keras3": ["kernel"],
+                "tensorflow": ["filters", "kernel"],
+                "tf": ["filters", "kernel"],
+                "mlx": ["weight"],
+                "onnx": ["W"],
+            },
             "stride": {
                 "torch": ["stride"],
                 "jax": ["strides"],
@@ -165,8 +231,24 @@ class ParameterTranslationEngine:
                         break
                 except (json.JSONDecodeError, OSError):
                     pass
-        if not self.translations and path is None:
-            self.translations.update(_CANONICAL_FALLBACK_TRANSLATIONS)
+        if path is None:
+            for op, op_dict in _CANONICAL_FALLBACK_TRANSLATIONS.items():
+                if op not in self.translations:
+                    self.translations[op] = op_dict
+                else:
+                    roles = self.translations[op].setdefault("roles", {})
+                    fb_roles = op_dict.get("roles", {})
+                    for r_name, r_map in fb_roles.items():
+                        if r_name not in roles:
+                            roles[r_name] = r_map
+                        else:
+                            for fw, fw_params in r_map.items():
+                                if fw not in roles[r_name]:
+                                    roles[r_name][fw] = list(fw_params)
+                                else:
+                                    for p in fw_params:
+                                        if p not in roles[r_name][fw]:
+                                            roles[r_name][fw].append(p)
 
     def translate_parameter(
         self,

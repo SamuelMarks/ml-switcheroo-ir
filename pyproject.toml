@@ -65,8 +65,6 @@ disable_error_code = ["import-untyped"]
 module = [
     "tabulate",
     "tabulate.*",
-    "ml_framework_snapshots",
-    "ml_framework_snapshots.*",
     "ml_ecosystem_snapshots",
     "ml_ecosystem_snapshots.*",
     "onnx",

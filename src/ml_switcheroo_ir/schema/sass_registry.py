@@ -47,6 +47,28 @@ def _load_sass_schemas(json_path: Path | str | None = None) -> None:
                 outputs=op_data.get("outputs", []),
             )
             SASS_REGISTRY[schema.name] = schema.to_op_schema()
+    elif json_path is None:
+        from ml_switcheroo_ir.schema.ghost import (
+            SASS_INSTRUCTION_PRIMITIVES as GHOST_PRIMITIVES,
+        )
+        from ml_switcheroo_ir.schema.ghost import (
+            SASS_PIPELINE_LATENCIES as GHOST_LATENCIES,
+        )
+
+        SASS_PIPELINE_LATENCIES.update(GHOST_LATENCIES)
+
+        for op_name, op_info in GHOST_PRIMITIVES.items():
+            operands = op_info.get("operands", [])
+            inputs = [op for op in operands if op != "dst"]
+            outputs = ["dst"] if "dst" in operands else []
+            schema = CustomOpSchema(
+                name=op_name,
+                domain="nvidia_sass",
+                attributes=[],
+                inputs=inputs,
+                outputs=outputs,
+            )
+            SASS_REGISTRY[op_name] = schema.to_op_schema()
 
 
 _load_sass_schemas()

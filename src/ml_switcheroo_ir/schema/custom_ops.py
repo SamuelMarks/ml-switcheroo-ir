@@ -693,6 +693,59 @@ CUSTOM_OPS_REGISTRY: dict[str, OpSchema] = {
 
 STATE_OPS_REGISTRY: dict[str, OpSchema] = {}
 
+_CANONICAL_STATE_OPS: list[CustomOpSchema] = [
+    CustomOpSchema(
+        name="ReadVariable",
+        domain="ml.switcheroo.state",
+        attributes=[
+            CustomAttributeSchema(
+                name="variable_name",
+                type="str",
+                required=True,
+            ),
+            CustomAttributeSchema(
+                name="dtype",
+                type="str",
+                required=False,
+            ),
+        ],
+        inputs=[],
+        outputs=["w_val"],
+    ),
+    CustomOpSchema(
+        name="AssignVariable",
+        domain="ml.switcheroo.state",
+        attributes=[
+            CustomAttributeSchema(
+                name="variable_name",
+                type="str",
+                required=True,
+            ),
+        ],
+        inputs=["w_val"],
+        outputs=["w_updated"],
+    ),
+    CustomOpSchema(
+        name="ScatterUpdate",
+        domain="ml.switcheroo.state",
+        attributes=[
+            CustomAttributeSchema(
+                name="variable_name",
+                type="str",
+                required=False,
+            ),
+            CustomAttributeSchema(
+                name="axis",
+                type="int",
+                required=False,
+                default=0,
+            ),
+        ],
+        inputs=["w_val", "indices", "updates"],
+        outputs=["w_scattered"],
+    ),
+]
+
 
 def _load_state_schemas(json_path: Path | str | None = None) -> None:
     """Load state mutation schemas from state_ops.json into STATE_OPS_REGISTRY.
@@ -704,6 +757,9 @@ def _load_state_schemas(json_path: Path | str | None = None) -> None:
 
     path = find_schema_file("state_ops.json", override_path=json_path)
     if path is None or not path.is_file():
+        if json_path is None:
+            for s in _CANONICAL_STATE_OPS:
+                STATE_OPS_REGISTRY[s.name] = s.to_op_schema()
         return
 
     with open(path, "r", encoding="utf-8") as f:

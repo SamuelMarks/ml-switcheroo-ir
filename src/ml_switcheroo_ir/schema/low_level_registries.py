@@ -16,6 +16,105 @@ WASM_REGISTRY: dict[str, OpSchema] = {}
 WEBGL_REGISTRY: dict[str, OpSchema] = {}
 WGSL_REGISTRY: dict[str, OpSchema] = {}
 
+_CANONICAL_PTX_OPS: list[CustomOpSchema] = [
+    CustomOpSchema(
+        name="add",
+        domain="nvidia_ptx",
+        attributes=[],
+        inputs=["a", "b"],
+        outputs=["d"],
+    ),
+    CustomOpSchema(
+        name="sub",
+        domain="nvidia_ptx",
+        attributes=[],
+        inputs=["a", "b"],
+        outputs=["d"],
+    ),
+    CustomOpSchema(
+        name="mul",
+        domain="nvidia_ptx",
+        attributes=[],
+        inputs=["a", "b"],
+        outputs=["d"],
+    ),
+    CustomOpSchema(
+        name="fma",
+        domain="nvidia_ptx",
+        attributes=[],
+        inputs=["a", "b", "c"],
+        outputs=["d"],
+    ),
+]
+
+_CANONICAL_METAL_OPS: list[CustomOpSchema] = [
+    CustomOpSchema(
+        name="simdgroup_multiply_accumulate",
+        domain="metal_msl",
+        attributes=[],
+        inputs=["dest", "a", "b", "c"],
+        outputs=["res"],
+    ),
+]
+
+_CANONICAL_WASM_OPS: list[CustomOpSchema] = [
+    CustomOpSchema(
+        name="f32x4.add",
+        domain="wasm_simd",
+        attributes=[],
+        inputs=["lhs", "rhs"],
+        outputs=["val"],
+    ),
+    CustomOpSchema(
+        name="f32x4.mul",
+        domain="wasm_simd",
+        attributes=[],
+        inputs=["lhs", "rhs"],
+        outputs=["val"],
+    ),
+]
+
+_CANONICAL_WEBGL_OPS: list[CustomOpSchema] = [
+    CustomOpSchema(
+        name="texelFetch",
+        domain="webgl",
+        attributes=[],
+        inputs=["sampler", "P", "lod"],
+        outputs=["rgba"],
+    ),
+]
+
+_CANONICAL_WGSL_OPS: list[CustomOpSchema] = [
+    CustomOpSchema(
+        name="storageStore",
+        domain="wgsl",
+        attributes=[],
+        inputs=["buffer", "index", "value"],
+        outputs=[],
+    ),
+    CustomOpSchema(
+        name="workgroupBarrier",
+        domain="wgsl",
+        attributes=[],
+        inputs=[],
+        outputs=[],
+    ),
+    CustomOpSchema(
+        name="storageBarrier",
+        domain="wgsl",
+        attributes=[],
+        inputs=[],
+        outputs=[],
+    ),
+    CustomOpSchema(
+        name="atomicAdd",
+        domain="wgsl",
+        attributes=[],
+        inputs=["atomic_ptr", "value"],
+        outputs=["old_value"],
+    ),
+]
+
 
 def _load_schema_file(
     filename: str, domain_default: str, json_path: Path | str | None = None
@@ -60,11 +159,35 @@ def _load_schema_file(
 
 def _initialize_low_level_registries() -> None:
     """Initialize all low-level hardware and shader registries."""
-    PTX_REGISTRY.update(_load_schema_file("ptx_ops.json", "nvidia_ptx"))
-    METAL_REGISTRY.update(_load_schema_file("metal_ops.json", "metal_msl"))
-    WASM_REGISTRY.update(_load_schema_file("wasm_ops.json", "wasm_simd"))
-    WEBGL_REGISTRY.update(_load_schema_file("webgl_ops.json", "webgl"))
-    WGSL_REGISTRY.update(_load_schema_file("wgsl_ops.json", "wgsl"))
+    loaded_ptx = _load_schema_file("ptx_ops.json", "nvidia_ptx")
+    if not loaded_ptx:
+        for s in _CANONICAL_PTX_OPS:
+            loaded_ptx[s.name] = s.to_op_schema()
+    PTX_REGISTRY.update(loaded_ptx)
+
+    loaded_metal = _load_schema_file("metal_ops.json", "metal_msl")
+    if not loaded_metal:
+        for s in _CANONICAL_METAL_OPS:
+            loaded_metal[s.name] = s.to_op_schema()
+    METAL_REGISTRY.update(loaded_metal)
+
+    loaded_wasm = _load_schema_file("wasm_ops.json", "wasm_simd")
+    if not loaded_wasm:
+        for s in _CANONICAL_WASM_OPS:
+            loaded_wasm[s.name] = s.to_op_schema()
+    WASM_REGISTRY.update(loaded_wasm)
+
+    loaded_webgl = _load_schema_file("webgl_ops.json", "webgl")
+    if not loaded_webgl:
+        for s in _CANONICAL_WEBGL_OPS:
+            loaded_webgl[s.name] = s.to_op_schema()
+    WEBGL_REGISTRY.update(loaded_webgl)
+
+    loaded_wgsl = _load_schema_file("wgsl_ops.json", "wgsl")
+    if not loaded_wgsl:
+        for s in _CANONICAL_WGSL_OPS:
+            loaded_wgsl[s.name] = s.to_op_schema()
+    WGSL_REGISTRY.update(loaded_wgsl)
 
 
 _initialize_low_level_registries()

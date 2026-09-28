@@ -151,6 +151,10 @@ def find_schema_file(
     if candidate.is_file():
         return candidate
 
+    parent_candidate = Path(DEFAULT_SNAPSHOT_DIR).parent / filename
+    if parent_candidate.is_file():
+        return parent_candidate
+
     sibling_schema = Path(__file__).parent / "schema" / filename
     if sibling_schema.is_file():
         return sibling_schema
