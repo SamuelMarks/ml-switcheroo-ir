@@ -24,9 +24,20 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    - name: Checkout ml-ecosystem-snapshots
+      uses: actions/checkout@v7
+      with:
+        repository: SamuelMarks/ml-ecosystem-snapshots
+        path: ml-ecosystem-snapshots
+        persist-credentials: false
+
+    - name: Move ml-ecosystem-snapshots to sibling directory
+      run: mv ml-ecosystem-snapshots ../ml-ecosystem-snapshots
+
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install --no-deps -e ../ml-ecosystem-snapshots
         pip install .[test]
 
     - name: Check Code Formatting (Ruff)
