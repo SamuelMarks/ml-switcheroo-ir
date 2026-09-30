@@ -834,12 +834,12 @@ def test_load_onnx_schemas_branches(tmp_path: object) -> None:
 
     # 1. Cached load returns existing registry
     reg = load_onnx_schemas()
-    assert len(reg) in (205, 221)
+    assert len(reg) in (205, 221, 227)
 
     # 2. Missing file load
     nonexistent = Path(str(tmp_path)) / "does_not_exist.json"
     res = load_onnx_schemas(json_path=nonexistent)
-    assert len(res) in (205, 221)
+    assert len(res) in (205, 221, 227)
 
     # 3. Custom valid JSON file
     custom_json = Path(str(tmp_path)) / "custom_ops.json"

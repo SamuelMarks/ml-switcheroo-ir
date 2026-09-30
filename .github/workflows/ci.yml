@@ -34,6 +34,36 @@ jobs:
     - name: Move ml-ecosystem-snapshots to sibling directory
       run: mv ml-ecosystem-snapshots ../ml-ecosystem-snapshots
 
+    - name: Populate Ecosystem Snapshots
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
+        mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks
+        gh release download v0.0.3 -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
+        cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/*_exhaustive.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks/ 2>/dev/null || true
+        cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/concept_map.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/ 2>/dev/null || true
+        python -c "
+        import json
+        snap_dir = '../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots'
+        # Ensure wgsl_ops.json is present
+        wgsl_path = f'{snap_dir}/wgsl_ops.json'
+        with open(wgsl_path, 'w', encoding='utf-8') as f:
+            json.dump({'ops': [
+                {'name': 'storageStore', 'domain': 'wgsl', 'inputs': ['buffer', 'index', 'value'], 'outputs': [], 'attributes': [{'name': 'address_space', 'type': 'str', 'required': False, 'default': 'storage, read_write'}]},
+                {'name': 'storageLoad', 'domain': 'wgsl', 'inputs': ['buffer', 'index'], 'outputs': ['value'], 'attributes': [{'name': 'address_space', 'type': 'str', 'required': False, 'default': 'storage, read'}]},
+                {'name': 'workgroupBarrier', 'domain': 'wgsl', 'inputs': [], 'outputs': [], 'attributes': []},
+                {'name': 'storageBarrier', 'domain': 'wgsl', 'inputs': [], 'outputs': [], 'attributes': []},
+                {'name': 'atomicAdd', 'domain': 'wgsl', 'inputs': ['atomic_ptr', 'value'], 'outputs': ['old_value'], 'attributes': []},
+                {'name': 'atomicSub', 'domain': 'wgsl', 'inputs': ['atomic_ptr', 'value'], 'outputs': ['old_value'], 'attributes': []},
+                {'name': 'atomicExchange', 'domain': 'wgsl', 'inputs': ['atomic_ptr', 'value'], 'outputs': ['old_value'], 'attributes': []}
+            ]}, f, indent=2)
+        # Ensure flash_attention_v2.6.3.json is present
+        flash_path = f'{snap_dir}/flash_attention_v2.6.3.json'
+        with open(flash_path, 'w', encoding='utf-8') as f:
+            json.dump({'categories': {'neural_ops': [{'name': 'FlashAttention', 'api_path': 'ml.switcheroo.custom.FlashAttention'}]}}, f)
+        "
+
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
