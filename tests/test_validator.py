@@ -154,6 +154,17 @@ def test_validator_default_registry() -> None:
     assert v.registry is not None
     assert "Add" in v.registry
 
+    # Test that a custom primary registry overriding a stablehlo op is respected
+    from ml_switcheroo_ir import LogicalNode
+    from ml_switcheroo_ir.schema.custom_ops import CustomOpSchema
+
+    s = CustomOpSchema(
+        name="dot_general", domain="stablehlo", attributes=[], inputs=[], outputs=[]
+    )
+    v_custom = Validator(registry={"dot_general": s.to_op_schema()})
+    n = LogicalNode(id="x", op_type="dot_general", domain="stablehlo")
+    assert v_custom._get_schema(n) is not None
+
 
 def test_validator_list_type_check_errors(validator: Validator) -> None:
     """Test invalid list items."""

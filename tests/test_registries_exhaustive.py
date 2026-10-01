@@ -334,7 +334,18 @@ def test_stablehlo_schemas_loader_with_custom_json(tmp_path: Path) -> None:
 
 def test_stablehlo_loader_error_and_malformed_entries() -> None:
     """Verify _load_stablehlo_schemas error branch and malformed entry skips."""
-    with mock.patch("builtins.open", side_effect=OSError("Read error")):
+    from pathlib import Path
+
+    with mock.patch("builtins.open", side_effect=OSError("Read error")), mock.patch(
+        "ml_switcheroo_ir.schema.stablehlo.find_schema_file",
+        return_value=Path("/dummy/stablehlo_ops.json"),
+    ), mock.patch("pathlib.Path.exists", return_value=True):
+        stablehlo._load_stablehlo_schemas()
+
+    # Hit the fallback branch exception
+    with mock.patch("builtins.open", side_effect=OSError("Read error")), mock.patch(
+        "ml_switcheroo_ir.schema.stablehlo.find_schema_file", return_value=None
+    ), mock.patch("pathlib.Path.exists", return_value=True):
         stablehlo._load_stablehlo_schemas()
 
     malformed_data = {

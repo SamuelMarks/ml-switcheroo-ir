@@ -1367,8 +1367,9 @@ def test_verify_grounding_wgsl() -> None:
             ]
         }
         with patch("builtins.open", mock_open(read_data=json.dumps(fake_data))):
-            errs = verify_wgsl_grounding(tmppath)
-            assert len(errs) == 2
+            with patch("pathlib.Path.is_file", return_value=True):
+                errs = verify_wgsl_grounding(tmppath)
+                assert len(errs) == 2
             assert "missing name" in errs[0]
             assert "invalid domain" in errs[1]
 

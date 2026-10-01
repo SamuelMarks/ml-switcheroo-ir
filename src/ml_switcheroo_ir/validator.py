@@ -616,15 +616,20 @@ class Validator:
             Optional[OpSchema]: The schema if found, or None.
         """
         if node.domain == "ai.onnx":
-            return self.registry.get(node.op_type)
+            s = self.registry.get(node.op_type)
+            if s and s.domain in ("ai.onnx", ""):
+                return s
+            return s
         if node.domain == "ml.switcheroo.custom":
-            return self.registry.get(node.op_type) or self.custom_registry.get(
-                node.op_type
-            )
+            s = self.registry.get(node.op_type)
+            if s and s.domain == node.domain:
+                return s
+            return self.custom_registry.get(node.op_type)
         if node.domain == "stablehlo":
-            return self.registry.get(node.op_type) or self.stablehlo_registry.get(
-                node.op_type
-            )
+            s = self.registry.get(node.op_type)
+            if s and s.domain == node.domain:
+                return s
+            return self.stablehlo_registry.get(node.op_type)
         if node.domain in (
             "mlir",
             "mlir.arith",

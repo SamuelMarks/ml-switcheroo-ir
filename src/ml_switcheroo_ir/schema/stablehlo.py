@@ -20,26 +20,29 @@ def _load_stablehlo_schemas(json_path: Path | str | None = None) -> None:
     """
     target = find_schema_file("stablehlo_ops.json", override_path=json_path)
     if target and target.exists():
-        with open(target, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        for op_data in data.get("ops", []):
-            attrs = [
-                CustomAttributeSchema(
-                    name=a["name"],
-                    type=a.get("type", "str"),
-                    required=a.get("required", False),
-                    default=a.get("default", None),
+        try:
+            with open(target, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for op_data in data.get("ops", []):
+                attrs = [
+                    CustomAttributeSchema(
+                        name=a["name"],
+                        type=a.get("type", "str"),
+                        required=a.get("required", False),
+                        default=a.get("default", None),
+                    )
+                    for a in op_data.get("attributes", [])
+                ]
+                schema = CustomOpSchema(
+                    name=op_data["name"],
+                    domain=op_data.get("domain", "stablehlo"),
+                    attributes=attrs,
+                    inputs=op_data.get("inputs", []),
+                    outputs=op_data.get("outputs", []),
                 )
-                for a in op_data.get("attributes", [])
-            ]
-            schema = CustomOpSchema(
-                name=op_data["name"],
-                domain=op_data.get("domain", "stablehlo"),
-                attributes=attrs,
-                inputs=op_data.get("inputs", []),
-                outputs=op_data.get("outputs", []),
-            )
-            STABLEHLO_REGISTRY[schema.name] = schema.to_op_schema()
+                STABLEHLO_REGISTRY[schema.name] = schema.to_op_schema()
+        except OSError:
+            pass
     elif json_path is None:
         try:
             from ml_ecosystem_snapshots.frameworks import (

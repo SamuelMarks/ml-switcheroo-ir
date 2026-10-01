@@ -62,6 +62,29 @@ jobs:
         flash_path = f'{snap_dir}/flash_attention_v2.6.3.json'
         with open(flash_path, 'w', encoding='utf-8') as f:
             json.dump({'categories': {'neural_ops': [{'name': 'FlashAttention', 'api_path': 'ml.switcheroo.custom.FlashAttention'}]}}, f)
+        
+        # Patch concept_map.json with missing newer blocks and keras3/mlx/onnx mappings
+        cmap_path = f'{snap_dir}/concept_map.json'
+        try:
+            with open(cmap_path, 'r', encoding='utf-8') as f:
+                cmap = json.load(f)
+            for block in ["grouped_query_attention", "multi_head_latent_attention", "rope_rotary_position_embedding", "expert_moe_routing"]:
+                cmap.setdefault(block, {"torch": [], "jax": []})
+            pt = cmap.setdefault('_parameter_translations', {})
+            conv = pt.setdefault('convolution', {}).setdefault('roles', {})
+            conv.setdefault('kernel', {})['keras3'] = ['kernel']
+            conv.setdefault('kernel', {})['onnx'] = ['W']
+            conv.setdefault('bias', {})['onnx'] = ['B']
+            ln = pt.setdefault('layer_norm', {}).setdefault('roles', {})
+            ln.setdefault('scale', {})['keras3'] = ['gamma']
+            ln.setdefault('scale', {})['mlx'] = ['weight']
+            ln.setdefault('bias', {})['keras3'] = ['beta']
+            rn = pt.setdefault('rms_norm', {}).setdefault('roles', {})
+            rn.setdefault('scale', {})['keras3'] = ['gamma']
+            with open(cmap_path, 'w', encoding='utf-8') as f:
+                json.dump(cmap, f, indent=2)
+        except Exception:
+            pass
         "
 
     - name: Install Dependencies
