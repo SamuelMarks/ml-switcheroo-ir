@@ -68,8 +68,8 @@ jobs:
         try:
             with open(cmap_path, 'r', encoding='utf-8') as f:
                 cmap = json.load(f)
-            for block in ["grouped_query_attention", "multi_head_latent_attention", "rope_rotary_position_embedding", "expert_moe_routing"]:
-                cmap.setdefault(block, {"torch": [], "jax": []})
+            for block in ['grouped_query_attention', 'multi_head_latent_attention', 'rope_rotary_position_embedding', 'expert_moe_routing']:
+                cmap.setdefault(block, {'torch': [], 'jax': []})
             pt = cmap.setdefault('_parameter_translations', {})
             conv = pt.setdefault('convolution', {}).setdefault('roles', {})
             conv.setdefault('kernel', {})['keras3'] = ['kernel']
