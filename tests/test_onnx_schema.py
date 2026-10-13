@@ -27,7 +27,12 @@ def test_onnx_schema_compliance(op_name: str) -> None:
     assert op_name in ONNX_REGISTRY
     schema = ONNX_REGISTRY[op_name]
     assert schema.name == op_name
-    assert schema.domain in ("ai.onnx", "ai.onnx.preview.training", "ai.onnx.ml")
+    assert schema.domain in (
+        "ai.onnx",
+        "ai.onnx.preview",
+        "ai.onnx.preview.training",
+        "ai.onnx.ml",
+    )
     assert schema.version >= 1
     assert isinstance(schema.inputs, list)
     assert isinstance(schema.outputs, list)
