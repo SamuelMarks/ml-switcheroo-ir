@@ -15,9 +15,20 @@ def test_cli_compliance_no_targets(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_cli_compliance_empty_targets(capsys: pytest.CaptureFixture[str]) -> None:
-    """Test."""
+    """Test run_compliance_check exit behavior with warn=False and deprecation warning with warn=True.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     with pytest.raises(SystemExit):
         run_compliance_check([], warn=False)
+
+    with pytest.warns(
+        DeprecationWarning, match="ml_switcheroo_ir.compliance is deprecated"
+    ), pytest.raises(SystemExit):
+        run_compliance_check([], warn=True)
+    captured = capsys.readouterr()
+    assert "Error: No targets provided." in captured.out
 
 
 def test_cli_compliance_invalid_json(

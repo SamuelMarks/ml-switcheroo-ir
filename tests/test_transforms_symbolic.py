@@ -256,25 +256,28 @@ def test_nanogpt_symbolic_shape_propagation() -> None:
     assert evaluated.nodes["q_act"].shape_metadata == (si_b, 12, si_t, 64)
 
 
-def test_transforms_helper_branches_and_edge_cases() -> None:
-    """Test helper edge branches in shape propagation when inputs are empty or special attributes are passed."""
+def test_propagate_gemm_and_missing_inputs_branches() -> None:
+    """Test helper edge branches in shape propagation for empty inputs and Gemm operations."""
     from ml_switcheroo_ir.shapes import SymbolicConstraintTracker
     from ml_switcheroo_ir.transforms import (
         _propagate_binary_op,
+        _propagate_broadcast_in_dim_op,
         _propagate_concat_op,
         _propagate_flatten_op,
         _propagate_gemm_op,
         _propagate_matmul_op,
+        _propagate_reshape_op,
+        _propagate_shape_op,
         _propagate_slice_op,
         _propagate_split_op,
         _propagate_squeeze_op,
+        _propagate_transpose_op,
         _propagate_unary_op,
         _propagate_unsqueeze_op,
     )
 
     tracker = SymbolicConstraintTracker()
 
-    # Empty inputs across helpers
     empty_node = LogicalNode(id="empty", op_type="Custom", inputs=[])
     assert _propagate_unary_op(empty_node, {}) is None
     assert _propagate_binary_op(empty_node, {}, tracker) is None
@@ -286,8 +289,11 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
     assert _propagate_concat_op(empty_node, {}) is None
     assert _propagate_split_op(empty_node, {}) is None
     assert _propagate_slice_op(empty_node, {}) is None
+    assert _propagate_shape_op(empty_node, {}) is None
+    assert _propagate_reshape_op(empty_node, {}) is None
+    assert _propagate_transpose_op(empty_node, {}) is None
+    assert _propagate_broadcast_in_dim_op(empty_node, {}) is None
 
-    # Gemm with transA=1 and transB=0
     n_a = LogicalNode(id="ga", op_type="Placeholder", shape_metadata=(32, 16))
     n_b = LogicalNode(id="gb", op_type="Placeholder", shape_metadata=(32, 64))
     n_gemm = LogicalNode(
@@ -299,20 +305,17 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
     processed = {"ga": n_a, "gb": n_b}
     assert _propagate_gemm_op(n_gemm, processed, tracker) == (16, 64)
 
-    # Missing inputs in new_nodes
     n_miss = LogicalNode(id="miss", op_type="Custom", inputs=["missing1", "missing2"])
     assert _propagate_binary_op(n_miss, {}, tracker) is None
     assert _propagate_matmul_op(n_miss, {}) is None
     assert _propagate_gemm_op(n_miss, {}, tracker) is None
 
-    # Gemm with rank != 2 inputs
     n_1d = LogicalNode(id="n1d", op_type="Placeholder", shape_metadata=(16,))
     n_gemm_bad_rank = LogicalNode(id="gbr", op_type="Gemm", inputs=["n1d", "gb"])
     assert (
         _propagate_gemm_op(n_gemm_bad_rank, {"n1d": n_1d, "gb": n_b}, tracker) is None
     )
 
-    # Gemm without bias C and with unshaped C
     assert _propagate_gemm_op(n_gemm, {"ga": n_a, "gb": n_b}, tracker) == (16, 64)
     n_gc_unshaped = LogicalNode(id="gc_un", op_type="Placeholder", shape_metadata=None)
     n_gemm_unshaped_c = LogicalNode(
@@ -327,14 +330,20 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
         tracker,
     ) == (16, 64)
 
-    # Squeeze with axes passed as second input node
+
+def test_propagate_squeeze_and_unsqueeze_branches() -> None:
+    """Test helper branches for Squeeze and Unsqueeze shape propagation."""
+    from ml_switcheroo_ir.transforms import (
+        _propagate_squeeze_op,
+        _propagate_unsqueeze_op,
+    )
+
     n_x = LogicalNode(id="x", op_type="Placeholder", shape_metadata=(2, 1, 4))
     n_axes_const = LogicalNode(id="ax", op_type="Constant", attributes={"value": [1]})
     n_sq_inp = LogicalNode(id="sq", op_type="Squeeze", inputs=["x", "ax"])
     processed_sq = {"x": n_x, "ax": n_axes_const}
     assert _propagate_squeeze_op(n_sq_inp, processed_sq) == (2, 4)
 
-    # Squeeze with second input node lacking value attribute
     n_ax_empty = LogicalNode(id="ax_emp", op_type="Constant", attributes={})
     n_sq_ax_emp = LogicalNode(id="sq_emp", op_type="Squeeze", inputs=["x", "ax_emp"])
     assert _propagate_squeeze_op(n_sq_ax_emp, {"x": n_x, "ax_emp": n_ax_empty}) == (
@@ -342,21 +351,17 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
         4,
     )
 
-    # Squeeze with single int axis
     n_sq_int = LogicalNode(
         id="sq_int", op_type="Squeeze", inputs=["x"], attributes={"axes": 1}
     )
     assert _propagate_squeeze_op(n_sq_int, {"x": n_x}) == (2, 4)
 
-    # Squeeze without axes (squeezes all 1s)
     n_sq_no_ax = LogicalNode(id="sq_no_ax", op_type="Squeeze", inputs=["x"])
     assert _propagate_squeeze_op(n_sq_no_ax, {"x": n_x}) == (2, 4)
 
-    # Unsqueeze with axes passed as second input node
     n_unsq_inp = LogicalNode(id="unsq", op_type="Unsqueeze", inputs=["x", "ax"])
     assert _propagate_unsqueeze_op(n_unsq_inp, processed_sq) == (2, 1, 1, 4)
 
-    # Unsqueeze with second input node lacking value attribute
     n_unsq_ax_emp = LogicalNode(
         id="unsq_emp", op_type="Unsqueeze", inputs=["x", "ax_emp"]
     )
@@ -366,21 +371,28 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
         4,
     )
 
-    # Unsqueeze with single int axis
     n_unsq_int = LogicalNode(
         id="unsq_int", op_type="Unsqueeze", inputs=["x"], attributes={"axes": 0}
     )
     assert _propagate_unsqueeze_op(n_unsq_int, {"x": n_x}) == (1, 2, 1, 4)
 
-    # Unsqueeze without axes (returns original shape tuple)
     n_unsq_no_ax = LogicalNode(id="unsq_no_ax", op_type="Unsqueeze", inputs=["x"])
     assert _propagate_unsqueeze_op(n_unsq_no_ax, {"x": n_x}) == (2, 1, 4)
 
-    # Slice without starts (returns None)
+
+def test_propagate_slice_split_flatten_concat_branches() -> None:
+    """Test helper branches for Slice, Split, Flatten, and Concat shape propagation."""
+    from ml_switcheroo_ir.transforms import (
+        _propagate_concat_op,
+        _propagate_flatten_op,
+        _propagate_slice_op,
+        _propagate_split_op,
+    )
+
+    n_x = LogicalNode(id="x", op_type="Placeholder", shape_metadata=(2, 1, 4))
     n_sl_no_starts = LogicalNode(id="sl_ns", op_type="Slice", inputs=["x"])
     assert _propagate_slice_op(n_sl_no_starts, {"x": n_x}) is None
 
-    # Slice with negative step on concrete shape
     n_sl_step_neg = LogicalNode(
         id="sl_sn",
         op_type="Slice",
@@ -389,7 +401,6 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
     )
     assert _propagate_slice_op(n_sl_step_neg, {"x": n_x}) == (0, 1, 4)
 
-    # Slice with negative start and end bounds on concrete shape
     n_sl_neg_idx = LogicalNode(
         id="sl_ni",
         op_type="Slice",
@@ -398,7 +409,6 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
     )
     assert _propagate_slice_op(n_sl_neg_idx, {"x": n_x}) == (1, 1, 4)
 
-    # Slice with non-integer starts and ends (skips calculation)
     n_sl_str = LogicalNode(
         id="sl_str",
         op_type="Slice",
@@ -407,7 +417,6 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
     )
     assert _propagate_slice_op(n_sl_str, {"x": n_x}) == (2, 1, 4)
 
-    # Split with symbolic dimension
     si_n = SymInt("N")
     n_sym = LogicalNode(id="sym_in", op_type="Placeholder", shape_metadata=(si_n, 64))
     n_split_sym = LogicalNode(
@@ -420,7 +429,6 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
     assert res_split is not None
     assert str(res_split[0]) == "(N // 2)"
 
-    # Slice with symbolic dimension and negative bounds
     si_t = SymInt("T")
     n_sym_t = LogicalNode(id="sym_t", op_type="Placeholder", shape_metadata=(si_t,))
     n_sl_sym = LogicalNode(
@@ -432,7 +440,6 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
     res_sl = _propagate_slice_op(n_sl_sym, {"sym_t": n_sym_t})
     assert res_sl == (10,)
 
-    # Flatten with symbolic dimension
     n_fl_sym = LogicalNode(
         id="fl_sym",
         op_type="Flatten",
@@ -442,7 +449,6 @@ def test_transforms_helper_branches_and_edge_cases() -> None:
     res_fl = _propagate_flatten_op(n_fl_sym, {"sym_in": n_sym})
     assert res_fl == (SymVar("N"), 64)
 
-    # Concat along symbolic dimension
     n_cat_s1 = LogicalNode(
         id="cat_s1", op_type="Placeholder", shape_metadata=(si_n, 32)
     )

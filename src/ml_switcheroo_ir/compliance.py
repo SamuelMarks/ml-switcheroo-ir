@@ -9,10 +9,12 @@ import sys
 import warnings
 from typing import Any
 
+from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+
 
 def _warn_deprecation() -> None:
     """Emit a standard deprecation warning."""
-    warnings.warn(  # pragma: no cover
+    warnings.warn(
         "ml_switcheroo_ir.compliance is deprecated and will be removed in version 0.1.0; "
         "use ml_ecosystem_snapshots.compliance instead.",
         DeprecationWarning,
@@ -54,9 +56,6 @@ except ImportError:
         for row in tabular_data:
             res += " | ".join(str(c) for c in row) + "\n"
         return res
-
-
-from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 
 
 def collect_files(targets: list[str]) -> list[str]:
@@ -177,6 +176,113 @@ def extract_dynamic_definitions(
     return implemented
 
 
+def _extract_ast_dialect_ops(tree: ast.AST, dialect_ops: set[str]) -> set[str]:
+    """Scan an AST for function/class definitions, @register_op decorators, and dict keys matching dialect ops.
+
+    Args:
+        tree (ast.AST): Parsed Python AST.
+        dialect_ops (set[str]): Set of canonical dialect operator names.
+
+    Returns:
+        set[str]: Implemented operator names discovered in the AST.
+    """
+    implemented: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name in dialect_ops:
+                implemented.add(node.name)
+
+            for dec in node.decorator_list:
+                if (
+                    isinstance(dec, ast.Call)
+                    and getattr(dec.func, "id", "") == "register_op"
+                    and len(dec.args) >= 2
+                    and isinstance(dec.args[1], ast.Constant)
+                ):
+                    op_name = str(dec.args[1].value)
+                    if op_name in dialect_ops:
+                        implemented.add(op_name)
+                    elif op_name.capitalize() in dialect_ops:
+                        implemented.add(op_name.capitalize())
+
+        if isinstance(node, ast.Dict):
+            for key in node.keys:
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and key.value in dialect_ops
+                ):
+                    implemented.add(key.value)
+    return implemented
+
+
+def _score_ir_classes(tree: ast.AST) -> tuple[bool, tuple[int, int]]:
+    """Detect CompilerBackend/GraphFrontend subclasses and compute their IR compliance score.
+
+    Args:
+        tree (ast.AST): Parsed Python AST.
+
+    Returns:
+        tuple[bool, tuple[int, int]]: (is_ir, (met_requirements, total_requirements)).
+    """
+    is_ir = False
+    best_req_met = 2
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            is_backend = any(
+                getattr(b, "id", "") == "CompilerBackend" for b in node.bases
+            )
+            is_frontend = any(
+                getattr(b, "id", "") == "GraphFrontend" for b in node.bases
+            )
+            if is_backend or is_frontend:
+                is_ir = True
+                current_met = 3
+                target_method = "compile" if is_backend else "parse_to_graph"
+                target_arg = "graph" if is_backend else "code"
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name == target_method:
+                        current_met += 1
+                        arg_names = [arg.arg for arg in item.args.args]
+                        if target_arg in arg_names:
+                            current_met += 1
+                        break
+                best_req_met = max(best_req_met, current_met)
+    return is_ir, ((best_req_met, 5) if is_ir else (0, 5))
+
+
+def _score_fw_adapters(tree: ast.AST) -> tuple[bool, tuple[int, int]]:
+    """Detect FrameworkAdapter/Importer classes and compute their compliance score.
+
+    Args:
+        tree (ast.AST): Parsed Python AST.
+
+    Returns:
+        tuple[bool, tuple[int, int]]: (is_fw, (met_requirements, total_requirements)).
+    """
+    is_fw = False
+    best_req_met = 2
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and (
+            "Adapter" in node.name
+            or "Importer" in node.name
+            or any(
+                isinstance(d, ast.Call)
+                and getattr(d.func, "id", "") == "register_framework"
+                for d in node.decorator_list
+            )
+        ):
+            is_fw = True
+            current_met = 2
+            methods = [n.name for n in node.body if isinstance(n, ast.FunctionDef)]
+            if "convert" in methods or "import_func" in methods or "parse" in methods:
+                current_met += 1
+            if "definitions" in methods or "import_jaxpr" in methods:
+                current_met += 1
+            best_req_met = max(best_req_met, current_met)
+    return is_fw, ((best_req_met, 4) if is_fw else (0, 4))
+
+
 def analyze_python_file(filepath: str, dialect_ops: set[str]) -> dict[str, Any]:
     """Analyze a python file for IR, FrameworkAdapter, and Dialect compliance.
 
@@ -202,116 +308,131 @@ def analyze_python_file(filepath: str, dialect_ops: set[str]) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         return result
 
-    # Check for IR
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            for base in node.bases:
-                if getattr(base, "id", "") in ("CompilerBackend", "GraphFrontend"):
-                    result["is_ir"] = True
-                    break
+    is_ir, ir_score = _score_ir_classes(tree)
+    is_fw, fw_score = _score_fw_adapters(tree)
+    implemented = _extract_ast_dialect_ops(tree, dialect_ops)
+    implemented.update(extract_dynamic_definitions(tree, filepath, dialect_ops))
 
-    # Check for FrameworkAdapter
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            is_adapter_by_name = "Adapter" in node.name or "Importer" in node.name
-            is_adapter_by_decorator = any(
-                isinstance(dec, ast.Call)
-                and getattr(dec.func, "id", "") == "register_framework"
-                for dec in node.decorator_list
-            )
-            if is_adapter_by_name or is_adapter_by_decorator:
-                result["is_fw"] = True
-                break
-
-    # Check for Dialect
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            if node.name in dialect_ops:
-                result["implemented_ops"].add(node.name)
-
-            # Check for @register_op("framework", "op_name")
-            for dec in node.decorator_list:
-                if (
-                    (
-                        isinstance(dec, ast.Call)
-                        and getattr(dec.func, "id", "") == "register_op"
-                    )
-                    and len(dec.args) >= 2
-                    and isinstance(dec.args[1], ast.Constant)
-                ):
-                    op_name = dec.args[1].value
-                    # Try exact match or capitalized match
-                    if op_name in dialect_ops:
-                        result["implemented_ops"].add(op_name)
-                    elif str(op_name).capitalize() in dialect_ops:
-                        result["implemented_ops"].add(str(op_name).capitalize())
-
-        if isinstance(node, ast.Dict):
-            for key in node.keys:
-                if (
-                    isinstance(key, ast.Constant)
-                    and isinstance(key.value, str)
-                    and key.value in dialect_ops
-                ):
-                    result["implemented_ops"].add(key.value)
-
-    result["implemented_ops"].update(
-        extract_dynamic_definitions(tree, filepath, dialect_ops)
-    )
-
-    if result["is_ir"]:
-        best_req_met = 2
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                is_backend = any(
-                    getattr(b, "id", "") == "CompilerBackend" for b in node.bases
-                )
-                is_frontend = any(
-                    getattr(b, "id", "") == "GraphFrontend" for b in node.bases
-                )
-                if is_backend or is_frontend:
-                    current_met = 3
-                    target_method = "compile" if is_backend else "parse_to_graph"
-                    target_arg = "graph" if is_backend else "code"
-                    for item in node.body:
-                        if (
-                            isinstance(item, ast.FunctionDef)
-                            and item.name == target_method
-                        ):
-                            current_met += 1
-                            arg_names = [arg.arg for arg in item.args.args]
-                            if target_arg in arg_names:
-                                current_met += 1
-                            break
-                    best_req_met = max(best_req_met, current_met)
-        result["ir_score"] = (best_req_met, 5)
-
-    if result["is_fw"]:
-        best_req_met = 2
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and (
-                "Adapter" in node.name
-                or "Importer" in node.name
-                or any(
-                    isinstance(d, ast.Call)
-                    and getattr(d.func, "id", "") == "register_framework"
-                    for d in node.decorator_list
-                )
-            ):
-                current_met = 2
-                methods = [n.name for n in node.body if isinstance(n, ast.FunctionDef)]
-                if (
-                    "convert" in methods
-                    or "import_func" in methods
-                    or "parse" in methods
-                ):
-                    current_met += 1
-                if "definitions" in methods or "import_jaxpr" in methods:
-                    current_met += 1
-                best_req_met = max(best_req_met, current_met)
-        result["fw_score"] = (best_req_met, 4)
-
+    result["is_ir"] = is_ir
+    result["ir_score"] = ir_score
+    result["is_fw"] = is_fw
+    result["fw_score"] = fw_score
+    result["implemented_ops"] = implemented
     return result
+
+
+def _render_verbose_missing_report(
+    target_label: str,
+    missing_ops_list: list[str],
+    mapping_file: str | None,
+) -> None:
+    """Print the verbose missing operations report in Markdown or GitHub table format.
+
+    Args:
+        target_label (str): Display label for the audited target.
+        missing_ops_list (list[str]): Sorted list of missing operator names.
+        mapping_file (Optional[str]): Optional path to framework mapping JSON file.
+    """
+    print("\nVerbose Missing Operations Report")
+    print("=================================")
+
+    dialect_ops_map = {k.split(".")[-1]: v for k, v in ONNX_REGISTRY.items()}
+
+    if mapping_file and os.path.exists(mapping_file):
+        import importlib
+        import inspect
+
+        with open(mapping_file, "r", encoding="utf-8") as f:
+            mapping_data = json.load(f)
+
+        table_data = []
+        for op in missing_ops_list:
+            if op in mapping_data and "api" in mapping_data[op]:
+                api_path = mapping_data[op]["api"]
+
+                if api_path.startswith("jnp."):
+                    api_path = api_path.replace("jnp.", "jax.numpy.", 1)
+                elif api_path.startswith("tf."):
+                    api_path = api_path.replace("tf.", "tensorflow.", 1)
+
+                parts = api_path.split(".")
+                framework = parts[0]
+                symbol = parts[-1]
+                namespace = ".".join(parts[:-1]) if len(parts) > 1 else framework
+                fqn = api_path
+
+                signature = "Unknown"
+                docstring = "No docstring available."
+
+                try:
+                    module = importlib.import_module(namespace)
+                    obj = getattr(module, symbol)
+
+                    try:
+                        sig = inspect.signature(obj)
+                        signature = str(sig)
+                    except (ValueError, TypeError):
+                        signature = (
+                            "Class/Type"
+                            if isinstance(obj, type)
+                            else "Built-in / No signature"
+                        )
+
+                    doc = inspect.getdoc(obj)
+                    if doc:
+                        docstring = doc.strip().split("\n\n")[0].replace("\n", " ")
+                        if len(docstring) > 150:
+                            docstring = docstring[:147] + "..."
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+                table_data.append(
+                    ["[ ]", framework, namespace, symbol, fqn, signature, docstring]
+                )
+
+        if table_data:
+            print(f"\n### {target_label} (Mapped API targets)")
+            print(
+                tabulate(
+                    table_data,
+                    headers=[
+                        "Implemented",
+                        "Framework",
+                        "Namespace",
+                        "Symbol",
+                        "FQN",
+                        "Signature",
+                        "Docstring",
+                    ],
+                    tablefmt="github",
+                )
+            )
+        else:
+            print(f"\n### {target_label} (No mappings found in {mapping_file})")
+    else:
+        print(f"\n### {target_label}")
+        for op in missing_ops_list:
+            if op in dialect_ops_map:
+                schema = dialect_ops_map[op]
+                schema_dict = {
+                    "domain": schema.domain,
+                    "version": schema.version,
+                    "inputs": schema.inputs,
+                    "outputs": schema.outputs,
+                    "attributes": {
+                        name: {
+                            "type": attr.type,
+                            "required": attr.required,
+                            "default": attr.default,
+                        }
+                        for name, attr in schema.attributes.items()
+                    },
+                }
+                print(f"- [ ] **{op}**")
+                print("  ```json")
+                for line in json.dumps(schema_dict, indent=2).splitlines():
+                    print(f"  {line}")
+                print("  ```")
 
 
 def run_compliance_check(
@@ -326,9 +447,10 @@ def run_compliance_check(
         targets: List of file or directory paths to check.
         verbose: Whether to print detailed missing operation schemas.
         mapping_file: Optional path to a mapping JSON file to report implemented APIs.
+        warn: Whether to emit a deprecation warning.
     """
     if warn:
-        _warn_deprecation()  # pragma: no cover
+        _warn_deprecation()
     if not targets:
         print("Error: No targets provided.")
         sys.exit(1)
@@ -336,7 +458,6 @@ def run_compliance_check(
     files = collect_files(targets)
     if not files:
         print("No Python or JSON files found in the specified targets.")
-        # sys.exit(1) - we allow it to continue to print empty report
 
     dialect_ops = get_dialect_ops()
     total_dialect_ops = len(dialect_ops)
@@ -346,7 +467,7 @@ def run_compliance_check(
     found_any_ir = False
     found_any_fw = False
 
-    aggregated_dialect_ops = set()
+    aggregated_dialect_ops: set[str] = set()
     found_any_dialect_targets = False
 
     for filepath in files:
@@ -385,7 +506,6 @@ def run_compliance_check(
     print("\nCompliance Report")
     print("=================")
 
-    # Determine aggregate label
     if len(targets) == 1 and os.path.isfile(targets[0]):
         target_label = os.path.basename(targets[0])
     elif len(targets) == 1:
@@ -459,106 +579,5 @@ def run_compliance_check(
         )
 
     if verbose and found_any_dialect_targets:
-        print("\nVerbose Missing Operations Report")
-        print("=================================")
-
         missing_ops_list = sorted(dialect_ops - aggregated_dialect_ops)
-        dialect_ops_map = {k.split(".")[-1]: v for k, v in ONNX_REGISTRY.items()}
-
-        if mapping_file and os.path.exists(mapping_file):
-            import importlib
-            import inspect
-
-            with open(mapping_file, "r", encoding="utf-8") as f:
-                mapping_data = json.load(f)
-
-            table_data = []
-            for op in missing_ops_list:
-                if op in mapping_data and "api" in mapping_data[op]:
-                    api_path = mapping_data[op]["api"]
-
-                    if api_path.startswith("jnp."):
-                        api_path = api_path.replace("jnp.", "jax.numpy.", 1)
-                    elif api_path.startswith("tf."):
-                        api_path = api_path.replace("tf.", "tensorflow.", 1)
-
-                    parts = api_path.split(".")
-                    framework = parts[0]
-                    symbol = parts[-1]
-                    namespace = ".".join(parts[:-1]) if len(parts) > 1 else framework
-                    fqn = api_path
-
-                    signature = "Unknown"
-                    docstring = "No docstring available."
-
-                    try:
-                        module = importlib.import_module(namespace)
-                        obj = getattr(module, symbol)
-
-                        try:
-                            sig = inspect.signature(obj)
-                            signature = str(sig)
-                        except (ValueError, TypeError):
-                            if isinstance(obj, type):
-                                signature = "Class/Type"
-                            else:
-                                signature = "Built-in / No signature"
-
-                        doc = inspect.getdoc(obj)
-                        if doc:
-                            docstring = doc.strip().split("\n\n")[0]
-                            docstring = docstring.replace("\n", " ")
-                            if len(docstring) > 150:
-                                docstring = docstring[:147] + "..."
-                    except Exception:  # noqa: BLE001, S110
-                        pass
-
-                    table_data.append(
-                        ["[ ]", framework, namespace, symbol, fqn, signature, docstring]
-                    )
-
-            if table_data:
-                print(f"\n### {target_label} (Mapped API targets)")
-                print(
-                    tabulate(
-                        table_data,
-                        headers=[
-                            "Implemented",
-                            "Framework",
-                            "Namespace",
-                            "Symbol",
-                            "FQN",
-                            "Signature",
-                            "Docstring",
-                        ],
-                        tablefmt="github",
-                    )
-                )
-            else:
-                print(f"\n### {target_label} (No mappings found in {mapping_file})")
-
-        else:
-            print(f"\n### {target_label}")
-            for op in missing_ops_list:
-                if op in dialect_ops_map:
-                    schema = dialect_ops_map[op]
-                    schema_dict = {
-                        "domain": schema.domain,
-                        "version": schema.version,
-                        "inputs": schema.inputs,
-                        "outputs": schema.outputs,
-                        "attributes": {
-                            name: {
-                                "type": attr.type,
-                                "required": attr.required,
-                                "default": attr.default,
-                            }
-                            for name, attr in schema.attributes.items()
-                        },
-                    }
-                    print(f"- [ ] **{op}**")
-                    print("  ```json")
-                    json_str = json.dumps(schema_dict, indent=2)
-                    for line in json_str.splitlines():
-                        print(f"  {line}")
-                    print("  ```")
+        _render_verbose_missing_report(target_label, missing_ops_list, mapping_file)

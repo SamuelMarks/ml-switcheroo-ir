@@ -28,11 +28,25 @@ from ml_switcheroo_ir.validator import (
 )
 
 
+def _resolve_override_snapshots_path(override_path: str) -> Path | None:
+    """Resolve an explicit snapshots directory override, supporting repo-root and sibling layouts.
+
+    Args:
+        override_path (str): Explicit path provided via CLI flag or config.
+
+    Returns:
+        Optional[Path]: Resolved snapshots directory path if found, or None.
+    """
+    from ml_switcheroo_ir.snapshots import resolve_snapshots_path
+
+    return resolve_snapshots_path(override_path)
+
+
 def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     """Locate the ground-truth snapshots directory.
 
     Checks:
-        1. Explicit override_path argument.
+        1. Explicit override_path argument (including ../ml-framework-snapshots resolution).
         2. ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable.
         3. ML_FRAMEWORK_SNAPSHOTS_DIR environment variable.
         4. DEFAULT_SNAPSHOT_DIR from validator.
@@ -50,10 +64,7 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
         Optional[Path]: Path to snapshots directory if found, or None.
     """
     if override_path:
-        p = Path(override_path).resolve()
-        if p.is_dir():
-            return p
-        return None
+        return _resolve_override_snapshots_path(override_path)
 
     env_eco = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
     if env_eco:
@@ -115,10 +126,76 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     if fixtures_dir.is_dir():
         return fixtures_dir
 
-    if default_path.is_dir():
-        return default_path
-
     return None
+
+
+def _load_snapshot_symbol_map(snapshot_file: Path) -> dict[str, Any]:
+    """Load a snapshot JSON file and index its category entries by name and api_path.
+
+    Args:
+        snapshot_file (Path): Path to the JSON snapshot file.
+
+    Returns:
+        dict[str, Any]: Mapping from symbol name / api_path to its snapshot record.
+    """
+    with open(snapshot_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    snap_symbols: dict[str, Any] = {}
+    for cat_items in data.get("categories", {}).values():
+        if isinstance(cat_items, list):
+            for item in cat_items:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                    api_path = item.get("api_path")
+                    if name:
+                        snap_symbols[name] = item
+                    if api_path:
+                        snap_symbols[api_path] = item
+                        snap_symbols[api_path.split(".")[-1]] = item
+    return snap_symbols
+
+
+def _verify_category_items_have_identifiers(
+    snapshots_dir: Path,
+    glob_pattern: str,
+    label: str,
+    allow_mnemonic: bool = False,
+) -> list[str]:
+    """Verify that all category items in a matching snapshot file define a valid identifier.
+
+    Args:
+        snapshots_dir (Path): Directory containing snapshots.
+        glob_pattern (str): Glob pattern to locate the snapshot file.
+        label (str): Dialect label for error messages (e.g. 'PTX', 'Metal', 'WASM').
+        allow_mnemonic (bool): Whether 'mnemonic' is accepted as an identifier key.
+
+    Returns:
+        list[str]: Diagnostic error messages for items missing identifiers.
+    """
+    candidates = sorted(snapshots_dir.glob(glob_pattern))
+    if not candidates:
+        return []
+
+    errors: list[str] = []
+    target_file = candidates[-1]
+    with open(target_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    for cat_items in data.get("categories", {}).values():
+        if isinstance(cat_items, list):
+            for item in cat_items:
+                if isinstance(item, dict):
+                    has_id = bool(
+                        item.get("api_path")
+                        or item.get("name")
+                        or (allow_mnemonic and item.get("mnemonic"))
+                    )
+                    if not has_id:
+                        errors.append(
+                            f"{label} item missing identifier in {target_file.name}."
+                        )
+    return errors
 
 
 def _extract_known_attributes(sym_record: dict[str, Any]) -> set[str]:
@@ -228,21 +305,7 @@ def verify_custom_ops_grounding(snapshots_dir: Path | None = None) -> list[str]:
         if flash_candidates:
             flash_file = flash_candidates[-1]
             try:
-                with open(flash_file, "r", encoding="utf-8") as f:
-                    flash_data = json.load(f)
-                snap_symbols: dict[str, Any] = {}
-                for cat_items in flash_data.get("categories", {}).values():
-                    if isinstance(cat_items, list):
-                        for item in cat_items:
-                            if isinstance(item, dict):
-                                name = item.get("name")
-                                api_path = item.get("api_path")
-                                if name:
-                                    snap_symbols[name] = item
-                                if api_path:
-                                    snap_symbols[api_path] = item
-                                    snap_symbols[api_path.split(".")[-1]] = item
-
+                _load_snapshot_symbol_map(flash_file)
                 attention_ops = {
                     "FlashAttention": ["Q", "K", "V"],
                     "PagedAttention": [
@@ -300,21 +363,7 @@ def verify_array_api_grounding(snapshots_dir: Path) -> list[str]:
 
     errors: list[str] = []
     array_api_file = candidates[-1]
-    with open(array_api_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    snap_symbols: dict[str, Any] = {}
-    for cat_items in data.get("categories", {}).values():
-        if isinstance(cat_items, list):
-            for item in cat_items:
-                if isinstance(item, dict):
-                    name = item.get("name")
-                    api_path = item.get("api_path")
-                    if name:
-                        snap_symbols[name] = item
-                    if api_path:
-                        snap_symbols[api_path] = item
-                        snap_symbols[api_path.split(".")[-1]] = item
+    snap_symbols = _load_snapshot_symbol_map(array_api_file)
 
     for op_name, schema in ARRAY_API_REGISTRY.items():
         if op_name not in snap_symbols and f"array_api.{op_name}" not in snap_symbols:
@@ -371,21 +420,7 @@ def verify_aten_grounding(snapshots_dir: Path) -> list[str]:
 
     errors: list[str] = []
     aten_file = candidates[-1]
-    with open(aten_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    snap_symbols: dict[str, Any] = {}
-    for cat_items in data.get("categories", {}).values():
-        if isinstance(cat_items, list):
-            for item in cat_items:
-                if isinstance(item, dict):
-                    name = item.get("name")
-                    api_path = item.get("api_path")
-                    if name:
-                        snap_symbols[name] = item
-                    if api_path:
-                        snap_symbols[api_path] = item
-                        snap_symbols[api_path.split(".")[-1]] = item
+    snap_symbols = _load_snapshot_symbol_map(aten_file)
 
     for op_name, schema in ATEN_REGISTRY.items():
         if op_name not in snap_symbols and f"aten.{op_name}" not in snap_symbols:
@@ -424,21 +459,7 @@ def verify_collectives_grounding(snapshots_dir: Path) -> list[str]:
 
     errors: list[str] = []
     nccl_file = candidates[-1]
-    with open(nccl_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    snap_symbols: dict[str, Any] = {}
-    for cat_items in data.get("categories", {}).values():
-        if isinstance(cat_items, list):
-            for item in cat_items:
-                if isinstance(item, dict):
-                    name = item.get("name")
-                    api_path = item.get("api_path")
-                    if name:
-                        snap_symbols[name] = item
-                    if api_path:
-                        snap_symbols[api_path] = item
-                        snap_symbols[api_path.split(".")[-1]] = item
+    snap_symbols = _load_snapshot_symbol_map(nccl_file)
 
     core_collectives = ["all_reduce", "all_gather", "reduce_scatter", "all_to_all"]
     for coll_name in core_collectives:
@@ -714,23 +735,9 @@ def verify_ptx_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: Diagnostic error messages for ungrounded PTX operations.
     """
-    candidates = sorted(snapshots_dir.glob("*ptx*.json"))
-    if not candidates:
-        return []
-
-    errors: list[str] = []
-    ptx_file = candidates[-1]
-    with open(ptx_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    for cat_items in data.get("categories", {}).values():
-        if isinstance(cat_items, list):
-            for item in cat_items:
-                if isinstance(item, dict) and not (
-                    item.get("api_path") or item.get("name") or item.get("mnemonic")
-                ):
-                    errors.append(f"PTX item missing identifier in {ptx_file.name}.")
-    return errors
+    return _verify_category_items_have_identifiers(
+        snapshots_dir, "*ptx*.json", "PTX", allow_mnemonic=True
+    )
 
 
 def verify_metal_grounding(snapshots_dir: Path) -> list[str]:
@@ -742,25 +749,9 @@ def verify_metal_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: Diagnostic error messages for ungrounded Metal operations.
     """
-    candidates = sorted(snapshots_dir.glob("*metal*.json"))
-    if not candidates:
-        return []
-
-    errors: list[str] = []
-    metal_file = candidates[-1]
-    with open(metal_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    for cat_items in data.get("categories", {}).values():
-        if isinstance(cat_items, list):
-            for item in cat_items:
-                if isinstance(item, dict) and not (
-                    item.get("api_path") or item.get("name")
-                ):
-                    errors.append(
-                        f"Metal item missing identifier in {metal_file.name}."
-                    )
-    return errors
+    return _verify_category_items_have_identifiers(
+        snapshots_dir, "*metal*.json", "Metal", allow_mnemonic=False
+    )
 
 
 def verify_wasm_grounding(snapshots_dir: Path) -> list[str]:
@@ -772,23 +763,9 @@ def verify_wasm_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: Diagnostic error messages for ungrounded WASM operations.
     """
-    candidates = sorted(snapshots_dir.glob("*wasm*.json"))
-    if not candidates:
-        return []
-
-    errors: list[str] = []
-    wasm_file = candidates[-1]
-    with open(wasm_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    for cat_items in data.get("categories", {}).values():
-        if isinstance(cat_items, list):
-            for item in cat_items:
-                if isinstance(item, dict) and not (
-                    item.get("api_path") or item.get("name")
-                ):
-                    errors.append(f"WASM item missing identifier in {wasm_file.name}.")
-    return errors
+    return _verify_category_items_have_identifiers(
+        snapshots_dir, "*wasm*.json", "WASM", allow_mnemonic=False
+    )
 
 
 def _verify_local_schemas_only() -> int:

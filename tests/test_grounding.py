@@ -163,12 +163,8 @@ def test_compute_levenshtein() -> None:
     assert compute_levenshtein("same", "same") == 0
 
 
-def test_grounding_validator_multi_format_and_directory(tmp_path: Path) -> None:
-    """Test GroundingValidator ingesting top-level lists, gzip files, and directories."""
-    import gzip
-    import json
-
-    # 1. Top-level list of dicts
+def test_grounding_validator_list_manifest() -> None:
+    """Test GroundingValidator ingesting top-level list manifests and unnamed attribute/operand entries."""
     list_manifest = [
         {
             "name": "dot_general",
@@ -181,7 +177,7 @@ def test_grounding_validator_multi_format_and_directory(tmp_path: Path) -> None:
             "operands": [
                 {"name": "lhs_op"},
                 "plain_op_str",
-                123,  # non-dict, non-str branch
+                123,
             ],
         },
         {"mnemonic": "V_ADD_F32", "api_path": "amd_rdna.v_add_f32"},
@@ -193,7 +189,6 @@ def test_grounding_validator_multi_format_and_directory(tmp_path: Path) -> None:
     assert "dot_general" in gv_list.grounded_symbols
     assert "V_ADD_F32" in gv_list.grounded_symbols
 
-    # Test attributes list[dict] and list[str], operands list[dict] and list[str]
     valid_hlo_node = LogicalNode(
         id="hlo1",
         op_type="dot_general",
@@ -207,78 +202,6 @@ def test_grounding_validator_multi_format_and_directory(tmp_path: Path) -> None:
     )
     assert not gv_list.validate_grounding(valid_hlo_node)
 
-    # 2. Directory traversal with .json, .json.gz, and corrupt file
-    snap_dir = tmp_path / "snapshots_dir"
-    snap_dir.mkdir()
-
-    # Regular json file
-    json_file = snap_dir / "ops1.json"
-    with open(json_file, "w", encoding="utf-8") as f:
-        json.dump([{"name": "op_plain", "api_path": "dial.op_plain"}], f)
-
-    # Gzipped json file
-    gz_file = snap_dir / "ops2.json.gz"
-    with gzip.open(gz_file, "wt", encoding="utf-8") as f:
-        json.dump([{"name": "op_gz", "api_path": "dial.op_gz"}], f)
-
-    # Corrupt/non-json file
-    bad_file = snap_dir / "corrupt.json"
-    with open(bad_file, "w", encoding="utf-8") as f:
-        f.write("not valid json")
-
-    # Corrupt .json.gz file
-    bad_gz = snap_dir / "corrupt.json.gz"
-    bad_gz.write_bytes(b"not valid gzip data")
-
-    # Ignored non-json file in directory
-    ignored_file = snap_dir / "ignored.txt"
-    ignored_file.write_text("should be ignored", encoding="utf-8")
-
-    # Load directory
-    gv_dir = GroundingValidator(snapshot_manifest=str(snap_dir))
-    assert "dial.op_plain" in gv_dir.grounded_symbols
-    assert "dial.op_gz" in gv_dir.grounded_symbols
-
-    # Ingest target of unsupported type and load unsupported data type
-    gv_unsupported = GroundingValidator(snapshot_manifest=12345)  # type: ignore[arg-type]
-    assert gv_unsupported.grounded_symbols == {}
-    gv_unsupported._load_snapshot_data("not_list_or_dict")  # type: ignore[arg-type]
-
-    # 3. Collection of targets (list of file paths and dicts)
-    manifest_collection = [
-        str(json_file),
-        {"custom_target": {"name": "custom_target"}},
-    ]
-    gv_coll = GroundingValidator(snapshot_manifest=manifest_collection)
-    assert "dial.op_plain" in gv_coll.grounded_symbols
-    assert "custom_target" in gv_coll.grounded_symbols
-
-    # 4. audit_graph_grounding function with list, directory, and None (with/without DEFAULT_SNAPSHOT_DIR)
-    from ml_switcheroo_ir.validator import audit_graph_grounding
-
-    test_graph = LogicalGraph(
-        nodes={"p1": LogicalNode(id="p1", op_type="op_plain", domain="dial")}
-    )
-    rep_dir = audit_graph_grounding(test_graph, snapshots_path=str(snap_dir))
-    assert rep_dir.grounded_count == 1
-
-    rep_list = audit_graph_grounding(test_graph, snapshots_path=list_manifest)
-    assert rep_list.total_nodes == 1
-
-    # audit_graph_grounding with snapshots_path=None and existing DEFAULT_SNAPSHOT_DIR
-    with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(snap_dir)):
-        rep_default_dir = audit_graph_grounding(test_graph, snapshots_path=None)
-        assert rep_default_dir.grounded_count == 1
-
-    # audit_graph_grounding with snapshots_path=None and non-existing DEFAULT_SNAPSHOT_DIR
-    with patch(
-        "ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR",
-        str(tmp_path / "non_existing_dir"),
-    ):
-        rep_no_dir = audit_graph_grounding(test_graph, snapshots_path=None)
-        assert rep_no_dir.grounded_count == 0
-
-    # Symbol with attributes and operands that have dicts without 'name'
     unnamed_manifest = [
         {
             "name": "unnamed_op",
@@ -289,6 +212,77 @@ def test_grounding_validator_multi_format_and_directory(tmp_path: Path) -> None:
     gv_unnamed = GroundingValidator(snapshot_manifest=unnamed_manifest)
     node_unnamed = LogicalNode(id="u1", op_type="unnamed_op", domain="test")
     assert not gv_unnamed.validate_grounding(node_unnamed)
+
+
+def test_grounding_validator_directory_and_audit_graph(tmp_path: Path) -> None:
+    """Test GroundingValidator ingesting gzip files, directories, and audit_graph_grounding.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
+    import gzip
+    import json
+    from ml_switcheroo_ir.validator import audit_graph_grounding
+
+    snap_dir = tmp_path / "snapshots_dir"
+    snap_dir.mkdir()
+
+    json_file = snap_dir / "ops1.json"
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump([{"name": "op_plain", "api_path": "dial.op_plain"}], f)
+
+    gz_file = snap_dir / "ops2.json.gz"
+    with gzip.open(gz_file, "wt", encoding="utf-8") as f:
+        json.dump([{"name": "op_gz", "api_path": "dial.op_gz"}], f)
+
+    bad_file = snap_dir / "corrupt.json"
+    with open(bad_file, "w", encoding="utf-8") as f:
+        f.write("not valid json")
+
+    bad_gz = snap_dir / "corrupt.json.gz"
+    bad_gz.write_bytes(b"not valid gzip data")
+
+    ignored_file = snap_dir / "ignored.txt"
+    ignored_file.write_text("should be ignored", encoding="utf-8")
+
+    gv_dir = GroundingValidator(snapshot_manifest=str(snap_dir))
+    assert "dial.op_plain" in gv_dir.grounded_symbols
+    assert "dial.op_gz" in gv_dir.grounded_symbols
+
+    gv_unsupported = GroundingValidator(snapshot_manifest=12345)  # type: ignore[arg-type]
+    assert gv_unsupported.grounded_symbols == {}
+    gv_unsupported._load_snapshot_data("not_list_or_dict")  # type: ignore[arg-type]
+
+    manifest_collection = [
+        str(json_file),
+        {"custom_target": {"name": "custom_target"}},
+    ]
+    gv_coll = GroundingValidator(snapshot_manifest=manifest_collection)
+    assert "dial.op_plain" in gv_coll.grounded_symbols
+    assert "custom_target" in gv_coll.grounded_symbols
+
+    test_graph = LogicalGraph(
+        nodes={"p1": LogicalNode(id="p1", op_type="op_plain", domain="dial")}
+    )
+    rep_dir = audit_graph_grounding(test_graph, snapshots_path=str(snap_dir))
+    assert rep_dir.grounded_count == 1
+
+    rep_list = audit_graph_grounding(
+        test_graph,
+        snapshots_path=[{"name": "op_plain", "api_path": "dial.op_plain"}],
+    )
+    assert rep_list.total_nodes == 1
+
+    with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(snap_dir)):
+        rep_default_dir = audit_graph_grounding(test_graph, snapshots_path=None)
+        assert rep_default_dir.grounded_count == 1
+
+    with patch(
+        "ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR",
+        str(tmp_path / "non_existing_dir"),
+    ):
+        rep_no_dir = audit_graph_grounding(test_graph, snapshots_path=None)
+        assert rep_no_dir.grounded_count == 0
 
 
 def test_grounding_validator_fuzzy_suggestions() -> None:
@@ -487,21 +481,19 @@ def test_grounding_against_ml_framework_snapshots_golden_fallback(
         test_grounding_against_ml_framework_snapshots_golden(tmp_path)
 
 
-def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> None:
-    """Test get_default_snapshots_dir resolution branches and multi-format snapshot ingestion.
+def test_snapshots_dir_resolution_env_and_siblings(tmp_path: Path) -> None:
+    """Test get_default_snapshots_dir resolution branches for env vars, cache, and sibling directories.
 
     Args:
         tmp_path (Path): Temporary directory fixture.
     """
     from ml_switcheroo_ir.validator import get_default_snapshots_dir
 
-    # 1. ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable branch
     env_eco_dir = tmp_path / "env_eco_snapshots"
     env_eco_dir.mkdir()
     with patch.dict(os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": str(env_eco_dir)}):
         assert get_default_snapshots_dir() == str(env_eco_dir)
 
-    # 2. Sibling directory branches (ml-ecosystem-snapshots/src/ml_framework_snapshots and ml_ecosystem_snapshots)
     with patch.dict(os.environ, {}, clear=True), patch(
         "importlib.util.find_spec", return_value=None
     ):
@@ -523,7 +515,6 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
         ), patch("os.listdir", return_value=["snapshot.json"]):
             assert "ml_ecosystem_snapshots" in get_default_snapshots_dir()
 
-    # 3. User cache ml_ecosystem_snapshots branch
     with patch.dict(os.environ, {}, clear=True), patch(
         "importlib.util.find_spec", return_value=None
     ), patch(
@@ -536,7 +527,6 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ), patch("os.listdir", return_value=["snapshot.json"]):
         assert ".cache" in get_default_snapshots_dir()
 
-    # 4. ML_FRAMEWORK_SNAPSHOTS_DIR environment variable branch
     env_dir = tmp_path / "env_snapshots"
     env_dir.mkdir()
     with patch.dict(
@@ -545,7 +535,6 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ), patch("os.path.isdir", side_effect=lambda d: str(d) == str(env_dir)):
         assert get_default_snapshots_dir() == str(env_dir)
 
-    # 5. User cache ml_framework_snapshots branch
     with patch.dict(os.environ, {}, clear=True), patch(
         "importlib.util.find_spec", return_value=None
     ), patch(
@@ -554,7 +543,6 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ), patch("os.listdir", return_value=["snapshot.json"]):
         assert ".cache" in get_default_snapshots_dir()
 
-    # 6. Sibling directory ml-framework-snapshots branch
     with patch.dict(os.environ, {}, clear=True), patch(
         "importlib.util.find_spec", return_value=None
     ), patch(
@@ -563,7 +551,6 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ), patch("os.listdir", return_value=["snapshot.json"]):
         assert "ml-framework-snapshots" in get_default_snapshots_dir()
 
-    # 7. Fixtures branch
     with patch.dict(os.environ, {}, clear=True), patch(
         "importlib.util.find_spec", return_value=None
     ), patch("os.path.isdir", side_effect=lambda d: "fixtures" in str(d)), patch(
@@ -571,13 +558,20 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ):
         assert "fixtures" in get_default_snapshots_dir()
 
-    # 8. Unconditional fallback branch
+
+def test_snapshots_dir_resolution_packages_and_manifest_formats(tmp_path: Path) -> None:
+    """Test get_default_snapshots_dir package spec discovery and GroundingValidator custom manifest formats.
+
+    Args:
+        tmp_path (Path): Temporary directory fixture.
+    """
+    from ml_switcheroo_ir.validator import get_default_snapshots_dir
+
     with patch.dict(os.environ, {}, clear=True), patch(
         "importlib.util.find_spec", return_value=None
     ), patch("os.path.isdir", return_value=False):
         assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
-    # Spec found with origin=None falling back to sibling directory
     spec_no_origin = MagicMock()
     spec_no_origin.origin = None
     with patch.dict(os.environ, {}, clear=True), patch(
@@ -585,7 +579,6 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ), patch("os.path.isdir", return_value=False):
         assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
-    # Spec found but snapshots dir does not exist
     fake_spec = MagicMock()
     fake_spec.origin = str(tmp_path / "nonexistent" / "__init__.py")
     with patch.dict(os.environ, {}, clear=True), patch(
@@ -593,7 +586,6 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ), patch("os.path.isdir", return_value=False):
         assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
-    # Spec found with empty snapshots dir (no .json/.json.gz) falling back to sibling
     pkg_empty = tmp_path / "fake_pkg_empty"
     pkg_empty_snaps = pkg_empty / "snapshots"
     pkg_empty_snaps.mkdir(parents=True)
@@ -605,7 +597,6 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ), patch("os.path.isdir", return_value=False):
         assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
-    # Spec found with valid snapshots dir containing .json file
     pkg_valid_json = tmp_path / "fake_pkg_json"
     pkg_json_snaps = pkg_valid_json / "snapshots"
     pkg_json_snaps.mkdir(parents=True)
@@ -617,7 +608,6 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ), patch("importlib.util.find_spec", return_value=spec_json):
         assert get_default_snapshots_dir() == os.path.abspath(str(pkg_json_snaps))
 
-    # Spec found with valid snapshots dir containing .json.gz file
     pkg_valid_gz = tmp_path / "fake_pkg_gz"
     pkg_gz_snaps = pkg_valid_gz / "snapshots"
     pkg_gz_snaps.mkdir(parents=True)
@@ -629,13 +619,11 @@ def test_grounding_validator_multi_format_and_snapshots_dir(tmp_path: Path) -> N
     ), patch("importlib.util.find_spec", return_value=spec_gz):
         assert get_default_snapshots_dir() == os.path.abspath(str(pkg_gz_snaps))
 
-    # Exception in find_spec
     with patch.dict(os.environ, {}, clear=True), patch(
         "importlib.util.find_spec", side_effect=ValueError("spec error")
     ), patch("os.path.isdir", return_value=False):
         assert "ml-ecosystem-snapshots" in get_default_snapshots_dir()
 
-    # 4. Ingestion of _parameter_translations, operations list, and custom list format
     manifest_data = {
         "_parameter_translations": {"matmul": {"roles": {"lhs": {"torch": ["input"]}}}},
         "operations": [{"name": "hlo_op_1", "params": []}],

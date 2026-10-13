@@ -532,15 +532,8 @@ def test_tensor_shape_and_spec_symbolic_integration() -> None:
         _ = types_mod.NonExistentType
 
 
-def test_symbolic_shapes_exhaustive_branches() -> None:
-    """Test exhaustive branches in Polynomial, SymNode, SymBinaryOp, and SymInt."""
-    vx = SymVar("x")
-    vy = SymVar("y")
-    c0 = SymConst(0)
-    c1 = SymConst(1)
-    c2 = SymConst(2)
-
-    # Polynomial index 0 negative constant and multi-power monomials
+def test_polynomial_and_parser_edge_cases() -> None:
+    """Test Polynomial negative constants, multi-power monomials, and expression parser edge cases."""
     p_neg_const = Polynomial.from_const(-8)
     assert str(p_neg_const) == "-8"
 
@@ -548,16 +541,27 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
     assert p_multi.eval({"x": 2, "y": 1}) == (-4 * 4 * 1 + 5)
     assert p_multi.canonical_str() != ""
 
-    # div_exact branches
     p_cube = Polynomial({((("x", 3),)): 1})
     p_quad = Polynomial({((("x", 4),)): 1})
     assert p_cube.div_exact(p_quad) is None
 
-    # _poly_to_symnode with power >= 2
     n_cube = _poly_to_symnode(p_cube)
     assert n_cube.eval({"x": 2}) == 8
 
-    # Tokenizer and parser edge cases
+    p_zero_coeff = Polynomial({(): 0})
+    assert p_zero_coeff.is_zero()
+
+    p_x = Polynomial.from_var("x")
+    p_y = Polynomial.from_var("y")
+    p_canc_sum = p_x.add(Polynomial({((("x", 1),)): -1}))
+    assert p_canc_sum.is_zero()
+
+    p_c1 = Polynomial.from_const(1)
+    p_canc_mul = p_x.add(p_c1).mul(p_x.sub(p_c1))
+    assert p_canc_mul.eval({"x": 5}) == 24
+    assert p_x.mul(p_y).div_exact(p_x) == p_y
+    assert p_x.div_exact(p_x.add(p_y)) is None
+
     tokens = _tokenize_expr("   x  +  1   ")
     assert tokens == ["x", "+", "1"]
     assert _tokenize_expr("x < 5") == ["x", "<", "5"]
@@ -573,7 +577,10 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
     n_paren_pow = _parse_sym_str("(x + 1) ** 2")
     assert n_paren_pow.eval({"x": 3}) == 16
 
-    # SymNode right dunders
+
+def test_sym_node_dunders_and_pydantic_schema() -> None:
+    """Test SymNode right-hand arithmetic dunders, custom subclass evaluation, and Pydantic schemas."""
+    vx = SymVar("x")
     assert (2 + vx).eval({"x": 3}) == 5
     assert (10 - vx).eval({"x": 3}) == 7
     assert (4 * vx).eval({"x": 3}) == 12
@@ -581,7 +588,6 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
     assert (10 % vx).eval({"x": 3}) == 1
     assert (2**vx).eval({"x": 3}) == 8
 
-    # SymNode.canonical and eval fallback
     base_node = SymNode()
     assert base_node.to_polynomial() is None
     assert base_node.canonical() is base_node
@@ -600,11 +606,38 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
 
     assert SimplifyingNode().eval({}) == 99
 
-    # Pydantic core schemas
+    class PolyNode(SymNode):
+        """Mock custom node with polynomial override."""
+
+        def to_polynomial(self) -> Polynomial:
+            """Convert to polynomial.
+
+            Returns:
+                Polynomial: Constant polynomial.
+            """
+            return Polynomial.from_const(123)
+
+    assert PolyNode().eval({}) == 123
+
     assert SymNode.__get_pydantic_core_schema__(SymNode, None) is not None
     assert SymInt.__get_pydantic_core_schema__(SymInt, None) is not None
 
-    # SymBinaryOp identities
+    import sys
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(sys.modules, "pydantic_core", None)
+        assert SymNode.__get_pydantic_core_schema__(SymNode, None) is None
+        assert SymInt.__get_pydantic_core_schema__(SymInt, None) is None
+
+
+def test_sym_binary_op_identities_and_minmax() -> None:
+    """Test SymBinaryOp algebraic identities, factor cancellation, and min/max absorption."""
+    vx = SymVar("x")
+    vy = SymVar("y")
+    c0 = SymConst(0)
+    c1 = SymConst(1)
+    c2 = SymConst(2)
+
     assert ((vx + vy) - vx).simplify() == vy
     assert (vx * c0).simplify() == c0
     assert (c0 * vx).simplify() == c0
@@ -625,35 +658,6 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
     assert (c0**vx).simplify() == c0
     assert (c1**vx).simplify() == c1
 
-    # Polynomial cancellation and zero coefficient branches
-    p_zero_coeff = Polynomial({(): 0})
-    assert p_zero_coeff.is_zero()
-
-    p_x = Polynomial.from_var("x")
-    p_y = Polynomial.from_var("y")
-    p_canc_sum = p_x.add(Polynomial({((("x", 1),)): -1}))
-    assert p_canc_sum.is_zero()
-
-    p_c1 = Polynomial.from_const(1)
-    p_canc_mul = p_x.add(p_c1).mul(p_x.sub(p_c1))
-    assert p_canc_mul.eval({"x": 5}) == 24
-
-    assert p_x.mul(p_y).div_exact(p_x) == p_y
-
-    class PolyNode(SymNode):
-        """Mock custom node with polynomial override."""
-
-        def to_polynomial(self) -> Polynomial:
-            """Convert to polynomial.
-
-            Returns:
-                Polynomial: Constant polynomial.
-            """
-            return Polynomial.from_const(123)
-
-    assert PolyNode().eval({}) == 123
-
-    # Nested min / max
     min1 = SymBinaryOp("min", vx, SymBinaryOp("min", vx, vy)).simplify()
     assert min1 == SymBinaryOp("min", vx, vy)
     min2 = SymBinaryOp("min", vx, SymBinaryOp("min", vy, vx)).simplify()
@@ -668,13 +672,15 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
     max3 = SymBinaryOp("max", vy, SymBinaryOp("max", vx, vy)).simplify()
     assert max3 == SymBinaryOp("max", vx, vy)
 
-    # Directly constructed SymBinaryOp division with integer factor on left
     assert (
         SymBinaryOp("//", SymBinaryOp("*", SymConst(6), vx), SymConst(2)).simplify()
         == (SymConst(3) * vx).simplify()
     )
+    assert (
+        SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(6)), SymConst(2)).simplify()
+        == ((vx % 2) * SymConst(3)).simplify()
+    )
 
-    # SymBinaryOp.to_polynomial
     assert (vx + vy).to_polynomial() is not None
     assert (vx - vy).to_polynomial() is not None
     assert (vx * vy).to_polynomial() is not None
@@ -683,20 +689,23 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
     assert (vx % vy).to_polynomial() is None
     assert SymBinaryOp("+", vx % 2, vy).to_polynomial() is None
 
-    # SymBinaryOp eval
     assert SymBinaryOp("min", vx, vy).eval({"x": 3, "y": 7}) == 3
     assert SymBinaryOp("max", vx, vy).eval({"x": 3, "y": 7}) == 7
     assert (vx**vy).eval({"x": 2, "y": 3}) == 8
 
-    # SymUnaryOp
+
+def test_sym_irreducible_and_piecewise_branches() -> None:
+    """Test irreducible SymBinaryOp, SymUnaryOp, SymPiecewise, and SymInt comparison branches."""
+    vx = SymVar("x")
+    vy = SymVar("y")
+    c0 = SymConst(0)
+
     assert (-SymUnaryOp("-", vx)).simplify() == vx
     assert abs(abs(vx)).simplify() == abs(vx)
 
-    # SymPiecewise free_vars
     pw_vars = SymPiecewise([(SymBinaryOp("<", vx, SymConst(5)), vy)], default=c0)
     assert pw_vars.free_vars() == {"x", "y"}
 
-    # SymInt comparisons
     si_x = SymInt("x")
     si_y = SymInt("y")
     assert si_x != si_y
@@ -709,10 +718,6 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
         is True
     )
 
-    # div_exact with multi-term divisor returns None
-    assert p_x.div_exact(p_x.add(p_y)) is None
-
-    # Irreducible binary operations
     assert SymBinaryOp("&", vx, vy).simplify() == SymBinaryOp("&", vx, vy)
     assert SymBinaryOp("-", vx, vy).simplify() == (vx - vy)
     assert SymBinaryOp("//", vx, vy).simplify() == (vx // vy)
@@ -720,7 +725,6 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
     assert SymBinaryOp("min", vx, vy).simplify() == SymBinaryOp("min", vx, vy)
     assert SymBinaryOp("max", vx, vy).simplify() == SymBinaryOp("max", vx, vy)
 
-    # Non-polynomial binary simplifications (+, -, // with non-poly left)
     assert SymBinaryOp("+", vx % 2, vy).simplify() == SymBinaryOp("+", vx % 2, vy)
     assert SymBinaryOp("+", vx % 2, SymConst(3)).simplify() == SymBinaryOp(
         "+", vx % 2, SymConst(3)
@@ -786,12 +790,9 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
         "max", SymVar("z"), SymBinaryOp("+", vx % 2, vy)
     ).simplify() == SymBinaryOp("max", SymVar("z"), SymBinaryOp("+", vx % 2, vy))
 
-    # Binary op & with SymConst
     assert SymBinaryOp("&", SymConst(1), SymConst(2)).simplify() == SymBinaryOp(
         "&", SymConst(1), SymConst(2)
     )
-
-    # Power simplify with non-polynomial subexpressions
     assert SymBinaryOp("**", vx % 2, SymConst(3)).simplify() == SymBinaryOp(
         "**", vx % 2, SymConst(3)
     )
@@ -800,25 +801,15 @@ def test_symbolic_shapes_exhaustive_branches() -> None:
         "**", SymConst(3), vx % 2
     )
 
-    # Unary simplify custom op and negated abs
     assert SymUnaryOp("custom", SymConst(5)).simplify() == SymUnaryOp(
         "custom", SymConst(5)
     )
     assert SymUnaryOp("-", SymUnaryOp("abs", vx)).simplify() == SymUnaryOp(
         "-", SymUnaryOp("abs", vx)
     )
-
-    # Piecewise with unsupported condition type and empty cases free_vars
     assert SymPiecewise([(123, SymConst(5))], default=SymConst(0)).eval({}) == 0
     assert SymPiecewise([], default=SymConst(0)).free_vars() == set()
     assert SymUnaryOp("abs", vx).simplify() == SymUnaryOp("abs", vx)
 
-    # Factor division where s_left.right is SymConst
-    assert (
-        SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(6)), SymConst(2)).simplify()
-        == ((vx % 2) * SymConst(3)).simplify()
-    )
-
-    # Non-SymNode condition in Piecewise free_vars
     pw_non_sym = SymPiecewise([(True, vx), (lambda env: True, vy)], default=c0)
     assert pw_non_sym.free_vars() == {"x", "y"}

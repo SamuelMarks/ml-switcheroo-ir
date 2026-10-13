@@ -126,7 +126,14 @@ class WrongArgBackend(CompilerBackend):
     import ml_switcheroo_ir.compliance
 
     files = ml_switcheroo_ir.compliance.collect_files([str(workspace)])
-    print(f"COLLECTED FILES: {files}")
+    assert len(files) >= 4
 
     cli_main(["compliance", str(workspace)])
+    captured_ws = capsys.readouterr()
+    assert "IR Compliance (CompilerBackend / GraphFrontend):" in captured_ws.out
+    assert "FrameworkAdapter Compliance:" in captured_ws.out
+    assert "DIALECT Compliance" in captured_ws.out
+
     cli_main(["compliance", str(workspace / "dummy.txt")])
+    captured_txt = capsys.readouterr()
+    assert "No Python or JSON files found in the specified targets." in captured_txt.out

@@ -17,7 +17,7 @@ repos:
 
       - id: mypy
         name: Mypy Strict Type Check
-        entry: mypy src tests scripts
+        entry: mypy --strict src tests scripts
         language: system
         types: [python]
         pass_filenames: false
@@ -38,7 +38,7 @@ repos:
 
       - id: verify-grounding
         name: Verify Grounding
-        entry: python3 scripts/verify_grounding.py --strict
+        entry: python3 scripts/verify_grounding.py --strict --snapshots-dir ../ml-framework-snapshots
         language: system
         types: [python]
         pass_filenames: false

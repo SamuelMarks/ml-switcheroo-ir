@@ -129,6 +129,37 @@ def get_default_snapshots_dir() -> str:
 DEFAULT_SNAPSHOT_DIR: str = get_default_snapshots_dir()
 
 
+def resolve_snapshots_path(override_path: Path | str) -> Path | None:
+    """Resolve an explicit snapshots directory path, supporting repo-root and sibling layouts.
+
+    Args:
+        override_path (Union[Path, str]): Explicit path provided via CLI flag or API parameter.
+
+    Returns:
+        Optional[Path]: Resolved snapshots directory path if found, or None.
+    """
+    p = Path(override_path).resolve()
+    if p.is_dir():
+        nested_fw = p / "src" / "ml_framework_snapshots" / "snapshots"
+        if nested_fw.is_dir():
+            return nested_fw
+        nested_eco = p / "src" / "ml_ecosystem_snapshots" / "snapshots"
+        if nested_eco.is_dir():
+            return nested_eco
+        return p
+    if p.name == "ml-framework-snapshots":
+        unified_sibling = (
+            p.parent
+            / "ml-ecosystem-snapshots"
+            / "src"
+            / "ml_framework_snapshots"
+            / "snapshots"
+        )
+        if unified_sibling.is_dir():
+            return unified_sibling
+    return None
+
+
 def find_schema_file(
     filename: str, override_path: Path | str | None = None
 ) -> Path | None:

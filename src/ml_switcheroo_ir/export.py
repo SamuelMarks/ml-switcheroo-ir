@@ -7,23 +7,26 @@ for web playground and frontend integrations, and programmatic Python code gener
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 from pathlib import Path
 from typing import Any
 
 from pydantic import TypeAdapter
 
-from ml_switcheroo_ir import (
-    LogicalGraph,
-    LogicalNode,
-    TensorSpec,
-)
 from ml_switcheroo_ir.distributed import (
     PipelineTopologyConfig,
     WebRTCSignalingTopology,
 )
+from ml_switcheroo_ir.graph import (
+    LogicalGraph,
+    LogicalNode,
+    NoTangent,
+    ZeroTangent,
+)
 from ml_switcheroo_ir.schema.ghost import SnapshotEnvelope
 from ml_switcheroo_ir.shapes import (
+    DimensionType,
     SymBinaryOp,
     SymConst,
     SymInt,
@@ -31,7 +34,7 @@ from ml_switcheroo_ir.shapes import (
     SymUnaryOp,
     SymVar,
 )
-from ml_switcheroo_ir.types import NoTangent, ZeroTangent
+from ml_switcheroo_ir.types import TensorShape, TensorSpec
 
 DRAFT_2020_12_SCHEMA_URI: str = "https://json-schema.org/draft/2020-12/schema"
 
@@ -321,11 +324,11 @@ export interface SnapshotEnvelope {
 """
 
 
-def _format_sym_node(node: Any) -> str:
+def _format_sym_node(node: DimensionType | object) -> str:
     """Recursively format a symbolic shape node into executable Python code.
 
     Args:
-        node (Any): Symbolic node, integer, or string dimension.
+        node (Union[DimensionType, object]): Symbolic node, integer, or string dimension.
 
     Returns:
         str: Python code expression creating the symbol.
@@ -350,11 +353,13 @@ def _format_sym_node(node: Any) -> str:
     return repr(node)
 
 
-def _format_shape_tuple(shape: Any) -> str:
+def _format_shape_tuple(
+    shape: Sequence[DimensionType | object] | TensorShape | None,
+) -> str:
     """Format shape metadata or dimension tuple into Python representation.
 
     Args:
-        shape (Any): Shape tuple, list, or None.
+        shape (Optional[Union[Sequence[Union[DimensionType, object]], TensorShape]]): Shape tuple, list, or None.
 
     Returns:
         str: Python tuple representation.
@@ -383,6 +388,19 @@ def _format_tensor_spec(spec: TensorSpec) -> str:
         f"sw_ir.TensorSpec(shape={shape_str}, dtype={dtype_str}, "
         f"sparsity={sparsity_str})"
     )
+
+
+def _format_graph_expr(graph: LogicalGraph, indent: int = 8) -> str:
+    """Format a nested LogicalGraph into a Python expression string.
+
+    Args:
+        graph (LogicalGraph): Nested subgraph to serialize.
+        indent (int): Indentation level in spaces.
+
+    Returns:
+        str: Executable Python expression reconstructing the subgraph.
+    """
+    return f"sw_ir.LogicalGraph.from_dict({graph.to_dict()!r})"
 
 
 def export_to_python(
@@ -489,6 +507,14 @@ def export_to_python(
             f"[{', '.join(_format_tensor_spec(s) for s in node.output_specs)}]"
         )
 
+        subgraphs_entries: list[str] = []
+        for sub_k, sub_v in node.subgraphs.items():
+            if isinstance(sub_v, LogicalGraph):
+                subgraphs_entries.append(f"{sub_k!r}: {_format_graph_expr(sub_v)}")
+            else:
+                subgraphs_entries.append(f"{sub_k!r}: {sub_v!r}")
+        subgraphs_str = "{" + ", ".join(subgraphs_entries) + "}"
+
         lines.append(f"        {nid!r}: sw_ir.LogicalNode(")
         lines.append(f"            id={node.id!r},")
         lines.append(f"            op_type={node.op_type!r},")
@@ -502,6 +528,7 @@ def export_to_python(
         lines.append(f"            sharding={sharding_str},")
         lines.append(f"            dtype={dtype_val_str},")
         lines.append(f"            output_specs={out_specs_list},")
+        lines.append(f"            subgraphs={subgraphs_str},")
         lines.append(f"            device={node.device!r},")
         lines.append(f"            stream={node.stream!r},")
         lines.append("        ),")
@@ -533,9 +560,12 @@ def export_to_python(
     lines.append("")
     code = "\n".join(lines)
 
-    import black
+    try:
+        import black
 
-    return black.format_str(code, mode=black.Mode())
+        return black.format_str(code, mode=black.Mode())
+    except ImportError:
+        return code
 
 
 def export_schemas(

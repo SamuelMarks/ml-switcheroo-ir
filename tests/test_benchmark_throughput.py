@@ -9,7 +9,6 @@ from __future__ import annotations
 import io
 import time
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -281,13 +280,19 @@ def test_streaming_and_compressed_file_io(tmp_path: Path) -> None:
     assert loaded_explicit_zst.name == "TestStreaming"
 
 
-def test_file_io_error_handling(tmp_path: Path, monkeypatch: Any) -> None:
+def test_file_io_error_handling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test error handling for unsupported compression and missing libraries.
 
     Args:
         tmp_path (Path): Pytest temporary directory fixture.
-        monkeypatch (Any): Pytest monkeypatch fixture.
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
+    import sys
+
+    from ml_switcheroo_ir import _load_zstandard
+
     graph = LogicalGraph(
         name="ErrGraph", nodes={"x": LogicalNode(id="x", op_type="Input")}
     )
@@ -303,7 +308,12 @@ def test_file_io_error_handling(tmp_path: Path, monkeypatch: Any) -> None:
     with pytest.raises(TypeError, match="Unsupported source type"):
         LogicalGraph.from_json(12345)  # type: ignore[arg-type]
 
-    # Missing zstandard library
+    # Missing zstandard library via _load_zstandard()
+    assert _load_zstandard() is not None
+    monkeypatch.setitem(sys.modules, "zstandard", None)
+    assert _load_zstandard() is None
+
+    # Missing zstandard library on module attribute
     monkeypatch.setattr("ml_switcheroo_ir.zstandard", None)
 
     with pytest.raises(ImportError, match="zstandard library is required"):

@@ -214,13 +214,20 @@ def test_shape_tracker_inference_and_feedback() -> None:
     assert resolved_nested["node_1"] == (2, 4, 8)
 
     # Resolve dynamic bounds in mock graph
+    from typing import Protocol, Sequence
+
+    class _MockNodeProto(Protocol):
+        """Protocol for mock nodes with an id attribute."""
+
+        id: str
+
     class MockNode:
         """Mock node for testing dynamic bound resolution."""
 
         def __init__(
             self,
             node_id: str,
-            shape: tuple[object, ...],
+            shape: tuple[object, ...] | None,
         ) -> None:
             """Initialize mock node with id and shape."""
             self.id = node_id
@@ -230,7 +237,7 @@ def test_shape_tracker_inference_and_feedback() -> None:
     class MockGraph:
         """Mock graph containing nodes."""
 
-        def __init__(self, nodes: list[MockNode]) -> None:
+        def __init__(self, nodes: Sequence[_MockNodeProto]) -> None:
             """Initialize mock graph with node list."""
             self.nodes = {n.id: n for n in nodes}
 
@@ -279,7 +286,7 @@ def test_shape_tracker_inference_and_feedback() -> None:
     n_so = MockNodeShapeOnly(
         "n_so", (SymInt("si_track_none"), SymVar("sv_track_none"), "var_dim", 64, 128)
     )
-    g_so = MockGraph([n_so])  # type: ignore[list-item]
+    g_so = MockGraph([n_so])
 
     # Resolve bounds with tracker=None and shorter telemetry (dim 3 pads with 1)
     bounds_so = ShapeTracker.resolve_dynamic_bounds(
@@ -335,7 +342,7 @@ def test_shape_tracker_inference_and_feedback() -> None:
 
     # Exact rank match in resolve_dynamic_bounds
     n_exact = MockNode("n_exact", (SymInt("A"), SymVar("B"), "C", 10))
-    n_none = MockNode("n_none", None)  # type: ignore[arg-type]
+    n_none = MockNode("n_none", None)
 
     class MockNodeShapeMetaOnly:
         """Mock node with shape_metadata only."""
@@ -346,7 +353,7 @@ def test_shape_tracker_inference_and_feedback() -> None:
             self.shape_metadata = shape_meta
 
     n_smo = MockNodeShapeMetaOnly("n_smo", (16, 32))
-    g_exact = MockGraph([n_exact, n_none, n_smo])  # type: ignore[list-item]
+    g_exact = MockGraph([n_exact, n_none, n_smo])
     bounds_exact = ShapeTracker.resolve_dynamic_bounds(
         g_exact,
         {"n_exact": [1, 2, 3, 10], "n_none": [1], "n_smo": [16, 32]},

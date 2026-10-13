@@ -83,11 +83,22 @@ def test_permute_conv_weights() -> None:
         """Mock tensor implementing transpose method."""
 
         def __init__(self, data: object) -> None:
-            """Initialize with data."""
+            """Initialize with data.
+
+            Args:
+                data (object): Underlying payload.
+            """
             self.data = data
 
         def transpose(self, perm: tuple[int, ...]) -> tuple[object, tuple[int, ...]]:
-            """Transpose with permutation."""
+            """Transpose with permutation.
+
+            Args:
+                perm (tuple[int, ...]): Permutation axes.
+
+            Returns:
+                tuple[object, tuple[int, ...]]: Data and permutation tuple.
+            """
             return (self.data, perm)
 
     t_trans = MockTensorTranspose("weight_data")
@@ -99,11 +110,22 @@ def test_permute_conv_weights() -> None:
         """Mock tensor implementing permute method."""
 
         def __init__(self, data: object) -> None:
-            """Initialize with data."""
+            """Initialize with data.
+
+            Args:
+                data (object): Underlying payload.
+            """
             self.data = data
 
         def permute(self, perm: tuple[int, ...]) -> tuple[object, tuple[int, ...]]:
-            """Permute with permutation."""
+            """Permute with permutation.
+
+            Args:
+                perm (tuple[int, ...]): Permutation axes.
+
+            Returns:
+                tuple[object, tuple[int, ...]]: Data and permutation tuple.
+            """
             return (self.data, perm)
 
     t_perm = MockTensorPermute("weight_data")
@@ -149,7 +171,15 @@ def test_split_and_merge_qkv_weights() -> None:
         """Mock QKV tensor implementing split method."""
 
         def split(self, size: int, dim: int = 0) -> list[str]:
-            """Split into chunks."""
+            """Split into chunks.
+
+            Args:
+                size (int): Chunk size.
+                dim (int): Dimension along which to split.
+
+            Returns:
+                list[str]: Split chunk identifiers.
+            """
             return [
                 f"chunk_q_{size}_{dim}",
                 f"chunk_k_{size}_{dim}",
@@ -179,19 +209,56 @@ def test_split_and_merge_qkv_weights() -> None:
 
 
 def test_concept_map_transformer_blocks() -> None:
-    """Verify that concept_map.json defines mappings for transformer building blocks."""
-    cmap = {
-        "grouped_query_attention": {"torch": ["..."], "jax": ["..."]},
-        "multi_head_latent_attention": {"torch": ["..."], "jax": ["..."]},
-        "rope_rotary_position_embedding": {"torch": ["..."], "jax": ["..."]},
-        "expert_moe_routing": {"torch": ["..."], "jax": ["..."]},
+    """Verify GroundingValidator concept_map ingestion and CUSTOM_OPS_REGISTRY transformer blocks."""
+    from ml_switcheroo_ir import LogicalNode
+    from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
+    from ml_switcheroo_ir.validator import GroundingValidator, Validator
+
+    manifest = {
+        "grouped_query_attention": {
+            "torch": ["torch.nn.functional.scaled_dot_product_attention"],
+            "jax": ["jax.nn.dot_product_attention"],
+        },
+        "multi_head_latent_attention": {
+            "torch": ["ml.switcheroo.custom.MultiHeadLatentAttention"],
+            "jax": ["ml.switcheroo.custom.MultiHeadLatentAttention"],
+        },
+        "rope_rotary_position_embedding": {
+            "torch": ["ml.switcheroo.custom.RoPE"],
+            "jax": ["ml.switcheroo.custom.RoPE"],
+        },
+        "expert_moe_routing": {
+            "torch": ["ml.switcheroo.custom.MoETopKRouter"],
+            "jax": ["ml.switcheroo.custom.MoETopKRouter"],
+        },
     }
 
-    for block in [
+    gv = GroundingValidator(snapshot_manifest=manifest)
+    for block in (
         "grouped_query_attention",
         "multi_head_latent_attention",
         "rope_rotary_position_embedding",
         "expert_moe_routing",
-    ]:
-        assert block in cmap
-        assert "torch" in cmap[block] or "jax" in cmap[block]
+    ):
+        assert block in gv.concept_map
+        assert "torch" in gv.concept_map[block]
+        assert "jax" in gv.concept_map[block]
+        node = LogicalNode(id=f"n_{block}", op_type=block, domain="concept")
+        assert gv.validate_grounding(node) == []
+
+    validator = Validator()
+    for custom_op_name in (
+        "FlashAttention",
+        "PagedAttention",
+        "RoPE",
+        "SwiGLU",
+        "RMSNorm",
+        "EmbeddingLookup",
+    ):
+        assert custom_op_name in CUSTOM_OPS_REGISTRY
+        custom_node = LogicalNode(
+            id=f"custom_{custom_op_name}",
+            op_type=custom_op_name,
+            domain="ml.switcheroo.custom",
+        )
+        assert validator.validate_kind(custom_node) == []

@@ -369,6 +369,10 @@ def test_stablehlo_loader_error_and_malformed_entries() -> None:
             mock.mock_open(read_data=json.dumps(malformed_data)),
         ), mock.patch("pathlib.Path.exists", return_value=True):
             stablehlo._load_stablehlo_schemas()
+            assert "op_with_malformed_attr" in stablehlo.STABLEHLO_REGISTRY
+            loaded_op = stablehlo.STABLEHLO_REGISTRY["op_with_malformed_attr"]
+            assert "valid_attr" in loaded_op.attributes
+            assert loaded_op.attributes["valid_attr"].type == "int"
     finally:
         stablehlo.STABLEHLO_REGISTRY.pop("op_with_malformed_attr", None)
 
@@ -384,6 +388,8 @@ def test_onnx_schemas_loader_edge_cases(tmp_path: Path) -> None:
         "CustomOp": {
             "domain": "ai.onnx",
             "version": 1,
+            "schema_version": 18,
+            "deprecated": True,
             "inputs": ["x"],
             "outputs": ["y"],
             "attributes": {
@@ -400,7 +406,13 @@ def test_onnx_schemas_loader_edge_cases(tmp_path: Path) -> None:
 
     res = onnx_registry.load_onnx_schemas(json_path=custom_file)
     assert "CustomOp" in res
+    assert res["CustomOp"].schema_version == 18
+    assert res["CustomOp"].deprecated is True
     assert "dict_attr" in res["CustomOp"].attributes
+    assert res["CustomOp"].attributes["dict_attr"].required is True
+    assert res["CustomOp"].attributes["dict_attr"].default == 42
+    assert res["CustomOp"].inputs == ["x"]
+    assert res["CustomOp"].outputs == ["y"]
 
 
 def test_onnx_proto_default_parser_branches() -> None:
@@ -562,4 +574,5 @@ def test_verify_stablehlo_grounding_discovery_branches(tmp_path: Path) -> None:
     snaps_sub = tmp_path / "snapshots"
     snaps_sub.mkdir()
     errs_fw = verify_stablehlo_grounding(snaps_sub)
-    assert isinstance(errs_fw, list)
+    assert len(errs_fw) == len(stablehlo.STABLEHLO_REGISTRY)
+    assert any("is not grounded in" in err for err in errs_fw)

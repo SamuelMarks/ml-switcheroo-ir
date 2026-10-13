@@ -3,92 +3,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
-from ml_switcheroo_ir.schema.onnx_registry import OpAttribute, OpSchema
-
-
-@dataclass
-class CustomAttributeSchema:
-    """Represents an attribute for a custom operator.
-
-    Attributes:
-        name (str): The name of the attribute.
-        type (str): The expected Python type (e.g. 'int', 'List[float]').
-        required (bool): Whether the attribute is required.
-        default (Any): The default value if not provided.
-    """
-
-    name: str = ""
-    type: str = "Any"
-    required: bool = False
-    default: Any = None
-
-    def to_op_attribute(self) -> OpAttribute:
-        """Convert to the internal OpAttribute type.
-
-        Returns:
-            OpAttribute: Converted operator attribute schema.
-        """
-        return OpAttribute(
-            name=self.name, type=self.type, required=self.required, default=self.default
-        )
-
-
-@dataclass
-class CustomOpSchema:
-    """Represents a custom operator schema.
-
-    Attributes:
-        name (str): The name of the operator.
-        domain (str): The custom domain (e.g., 'ai.custom').
-        attributes (Union[List[CustomAttributeSchema], Dict[str, CustomAttributeSchema]]): The list or dictionary of attributes.
-        inputs (List[str]): List of expected inputs.
-        outputs (List[str]): List of expected outputs.
-    """
-
-    name: str
-    domain: str
-    attributes: (
-        list[CustomAttributeSchema] | dict[str, CustomAttributeSchema | OpAttribute]
-    ) = field(default_factory=list)
-    inputs: list[str] = field(default_factory=list)
-    outputs: list[str] = field(default_factory=list)
-
-    def to_op_schema(self) -> OpSchema:
-        """Convert to the internal OpSchema type.
-
-        Note:
-            Version is set to 1 by default for custom ops.
-
-        Returns:
-            OpSchema: Converted operator schema.
-        """
-        if isinstance(self.attributes, dict):
-            attr_dict: dict[str, OpAttribute] = {}
-            for k, attr in self.attributes.items():
-                if isinstance(attr, CustomAttributeSchema):
-                    attr_name = attr.name if attr.name else k
-                    attr_dict[attr_name] = OpAttribute(
-                        name=attr_name,
-                        type=attr.type,
-                        required=attr.required,
-                        default=attr.default,
-                    )
-                else:
-                    attr_dict[k] = attr
-        else:
-            attr_dict = {attr.name: attr.to_op_attribute() for attr in self.attributes}
-        return OpSchema(
-            name=self.name,
-            domain=self.domain,
-            version=1,
-            attributes=attr_dict,
-            inputs=self.inputs,
-            outputs=self.outputs,
-        )
+from ml_switcheroo_ir.schema.base import (
+    CustomAttributeSchema as CustomAttributeSchema,
+    CustomOpSchema as CustomOpSchema,
+    OpSchema as OpSchema,
+    load_op_schema_catalog as load_op_schema_catalog,
+)
 
 
 class Registry:
@@ -753,36 +675,17 @@ def _load_state_schemas(json_path: Path | str | None = None) -> None:
     Args:
         json_path (Optional[Union[Path, str]]): Explicit path to state_ops.json.
     """
-    from ml_switcheroo_ir.snapshots import find_schema_file
-
-    path = find_schema_file("state_ops.json", override_path=json_path)
-    if path is None or not path.is_file():
-        if json_path is None:
-            for s in _CANONICAL_STATE_OPS:
-                STATE_OPS_REGISTRY[s.name] = s.to_op_schema()
-        return
-
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    for op_data in data.get("ops", []):
-        attrs = [
-            CustomAttributeSchema(
-                name=a.get("name", ""),
-                type=a.get("type", "Any"),
-                required=a.get("required", False),
-                default=a.get("default", None),
-            )
-            for a in op_data.get("attributes", [])
-        ]
-        schema = CustomOpSchema(
-            name=op_data["name"],
-            domain=op_data.get("domain", "ml.switcheroo.state"),
-            attributes=attrs,
-            inputs=op_data.get("inputs", []),
-            outputs=op_data.get("outputs", []),
-        )
-        STATE_OPS_REGISTRY[schema.name] = schema.to_op_schema()
+    loaded = load_op_schema_catalog(
+        "state_ops.json",
+        domain_default="ml.switcheroo.state",
+        json_path=json_path,
+        attr_type_default="Any",
+    )
+    if loaded:
+        STATE_OPS_REGISTRY.update(loaded)
+    elif json_path is None:
+        for s in _CANONICAL_STATE_OPS:
+            STATE_OPS_REGISTRY[s.name] = s.to_op_schema()
 
 
 _load_state_schemas()

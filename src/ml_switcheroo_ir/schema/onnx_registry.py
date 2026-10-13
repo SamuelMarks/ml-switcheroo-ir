@@ -5,49 +5,13 @@ from __future__ import annotations
 import json
 import re
 import threading
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ml_switcheroo_ir.schema.base import OpAttribute, OpSchema
 from ml_switcheroo_ir.snapshots import find_schema_file
 
-
-@dataclass
-class OpAttribute:
-    """Represents a single operator attribute schema.
-
-    Attributes:
-        name: Name of the attribute.
-        type: Type descriptor string of the attribute.
-        required: Whether the attribute must be provided.
-        default: Default value if optional.
-    """
-
-    name: str
-    type: str
-    required: bool
-    default: Any
-
-
-@dataclass
-class OpSchema:
-    """Represents a single operator schema.
-
-    Attributes:
-        name: Operator identifier name.
-        domain: Domain namespace of the operator.
-        version: Operator schema version integer.
-        attributes: Mapping of attribute names to OpAttribute instances.
-        inputs: List of formal input operand names.
-        outputs: List of formal output operand names.
-    """
-
-    name: str
-    domain: str
-    version: int
-    attributes: dict[str, OpAttribute]
-    inputs: list[str]
-    outputs: list[str]
+__all__ = ["ONNX_REGISTRY", "OpAttribute", "OpSchema", "load_onnx_schemas"]
 
 
 def _parse_onnx_proto_default(raw: Any) -> Any:
@@ -110,13 +74,17 @@ def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema
                     )
                     for attr_name, attr_data in op_data.get("attributes", {}).items()
                 }
+                ver = int(op_data.get("version", 1))
+                raw_sv = op_data.get("schema_version")
                 loaded[op_name] = OpSchema(
                     name=op_name,
                     domain=op_data.get("domain", "ai.onnx"),
-                    version=op_data.get("version", 1),
+                    version=ver,
                     attributes=attributes,
                     inputs=op_data.get("inputs", []),
                     outputs=op_data.get("outputs", []),
+                    schema_version=int(raw_sv) if isinstance(raw_sv, int) else ver,
+                    deprecated=bool(op_data.get("deprecated", False)),
                 )
         else:
             try:
@@ -164,15 +132,19 @@ def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema
                                 required=bool(val_req),
                                 default=val_def,
                             )
+                    ver = int(
+                        op_data.get("since_version") or op_data.get("version") or 1
+                    )
+                    raw_sv = op_data.get("schema_version")
                     loaded[name] = OpSchema(
                         name=name,
                         domain=str(op_data.get("domain") or "ai.onnx"),
-                        version=int(
-                            op_data.get("since_version") or op_data.get("version") or 1
-                        ),
+                        version=ver,
                         attributes=attributes,
                         inputs=[str(i) for i in op_data.get("inputs", [])],
                         outputs=[str(o) for o in op_data.get("outputs", [])],
+                        schema_version=int(raw_sv) if isinstance(raw_sv, int) else ver,
+                        deprecated=bool(op_data.get("deprecated", False)),
                     )
             except (ImportError, AttributeError, ValueError, OSError):
                 pass

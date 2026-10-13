@@ -254,9 +254,6 @@ class TensorShape:
 
         Returns:
             tuple[int, ...]: Tuple of concrete integer dimension sizes.
-
-        Raises:
-            KeyError: If an unbound symbolic variable is encountered.
         """
         res: list[int] = []
         for d in self.dims:
@@ -314,14 +311,16 @@ class TensorShape:
         """
         return iter(self.dims)
 
-    def __getitem__(self, idx: Any) -> Any:
+    def __getitem__(
+        self, idx: int | slice
+    ) -> DimensionType | tuple[DimensionType, ...]:
         """Retrieve dimension size by index or slice.
 
         Args:
-            idx (Any): Index or slice.
+            idx (int | slice): Index or slice.
 
         Returns:
-            Any: Dimension size or tuple of sizes.
+            DimensionType | tuple[DimensionType, ...]: Dimension size or tuple of sizes.
         """
         return self.dims[idx]
 

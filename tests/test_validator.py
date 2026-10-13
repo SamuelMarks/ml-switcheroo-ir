@@ -44,7 +44,11 @@ MOCK_REGISTRY = {
 
 @pytest.fixture
 def validator() -> Validator:
-    """Returns a Validator initialized with the mock registry."""
+    """Return a Validator initialized with the mock registry.
+
+    Returns:
+        Validator: Configured Validator instance.
+    """
     return Validator(registry=MOCK_REGISTRY)
 
 

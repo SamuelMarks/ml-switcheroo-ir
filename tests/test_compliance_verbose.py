@@ -21,7 +21,11 @@ def test_cli_compliance_verbose(
     original_get_dialect_ops = ml_switcheroo_ir.compliance.get_dialect_ops
 
     def mock_get_dialect_ops() -> set[str]:
-        """Test."""
+        """Return dialect ops extended with a synthetic FakeOp.
+
+        Returns:
+            set[str]: Set of dialect operation names.
+        """
         ops = original_get_dialect_ops()
         ops.add("FakeOp")
         return ops
@@ -64,11 +68,12 @@ def test_cli_compliance_verbose_mapping(
     import importlib
     import json
     import types
-    from typing import Any
 
     orig_import = importlib.import_module
 
-    def mock_import_module(name: str, package: str | None = None) -> Any:
+    def mock_import_module(
+        name: str, package: str | None = None
+    ) -> types.ModuleType | types.SimpleNamespace:
         """Mock import_module to avoid importing heavy third-party packages.
 
         Args:
@@ -76,7 +81,7 @@ def test_cli_compliance_verbose_mapping(
             package (Optional[str]): Package anchor.
 
         Returns:
-            Any: Mocked or actual imported module.
+            types.ModuleType | types.SimpleNamespace: Mocked or actual imported module.
         """
         if name in ("tensorflow", "jax.numpy"):
             return types.SimpleNamespace(
@@ -149,20 +154,17 @@ def test_cli_compliance_verbose_mapping_exception(
     """
     import inspect
     import json
-    from typing import Any
 
-    def mock_getdoc(obj: Any) -> str:
-        """Mock inspect.getdoc to raise an Exception.
+    def mock_getdoc(obj: object) -> str:
+        """Mock inspect.getdoc to raise a RuntimeError.
 
         Args:
-            obj: Any object.
-
-        Returns:
-            str: Never returns, raises Exception.
+            obj (object): Inspected object.
 
         Raises:
-            Exception: Always.
+            RuntimeError: Always raised to test error resilience.
         """
+        del obj
         raise RuntimeError("Mocked exception")
 
     monkeypatch.setattr(inspect, "getdoc", mock_getdoc)

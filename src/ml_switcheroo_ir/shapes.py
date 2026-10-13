@@ -384,6 +384,155 @@ def _poly_to_symnode(poly: Polynomial) -> SymNode:
     return res_node or SymConst(0)
 
 
+class SymbolicExpressionParser:
+    """Recursive-descent parser and tokenizer for symbolic dimension expressions."""
+
+    def __init__(self, tokens: list[str]) -> None:
+        """Initialize parser with a token stream.
+
+        Args:
+            tokens (list[str]): Sequence of lexical tokens.
+        """
+        self.tokens: list[str] = tokens
+        self.idx: int = 0
+
+    @staticmethod
+    def tokenize(expr_str: str) -> list[str]:
+        """Tokenize a symbolic expression string into component tokens.
+
+        Args:
+            expr_str (str): Input expression string.
+
+        Returns:
+            list[str]: Sequence of string tokens.
+        """
+        tokens: list[str] = []
+        i = 0
+        s = expr_str.strip()
+        n = len(s)
+        while i < n:
+            c = s[i]
+            if c.isspace():
+                i += 1
+            elif c in "()+*":
+                if c == "*" and i + 1 < n and s[i + 1] == "*":
+                    tokens.append("**")
+                    i += 2
+                else:
+                    tokens.append(c)
+                    i += 1
+            elif c in ("<", ">", "=", "!"):
+                if i + 1 < n and s[i + 1] == "=":
+                    tokens.append(s[i : i + 2])
+                    i += 2
+                else:
+                    tokens.append(c)
+                    i += 1
+            elif c in ("-", "%"):
+                tokens.append(c)
+                i += 1
+            elif c == "/":
+                tokens.append("//")
+                i += 2 if (i + 1 < n and s[i + 1] == "/") else 1
+            elif c.isdigit():
+                start = i
+                while i < n and s[i].isdigit():
+                    i += 1
+                tokens.append(s[start:i])
+            elif c.isalpha() or c == "_":
+                start = i
+                while i < n and (s[i].isalnum() or s[i] == "_"):
+                    i += 1
+                tokens.append(s[start:i])
+            else:
+                i += 1
+        return tokens
+
+    def parse_comparison(self) -> SymNode:
+        """Parse comparison expressions.
+
+        Returns:
+            SymNode: Comparison binary expression node or additive expression.
+        """
+        node = self.parse_expr()
+        if self.idx < len(self.tokens) and self.tokens[self.idx] in (
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+        ):
+            op = self.tokens[self.idx]
+            self.idx += 1
+            right = self.parse_expr()
+            node = SymBinaryOp(op, node, right)
+        return node
+
+    def parse_expr(self) -> SymNode:
+        """Parse additive binary expressions.
+
+        Returns:
+            SymNode: Root parsed expression node.
+        """
+        node = self.parse_term()
+        while self.idx < len(self.tokens) and self.tokens[self.idx] in ("+", "-"):
+            op = self.tokens[self.idx]
+            self.idx += 1
+            right = self.parse_term()
+            node = SymBinaryOp(op, node, right)
+        return node
+
+    def parse_term(self) -> SymNode:
+        """Parse multiplicative binary expressions.
+
+        Returns:
+            SymNode: Root parsed term node.
+        """
+        node = self.parse_factor()
+        while self.idx < len(self.tokens) and self.tokens[self.idx] in (
+            "*",
+            "//",
+            "%",
+        ):
+            op = self.tokens[self.idx]
+            self.idx += 1
+            right = self.parse_factor()
+            node = SymBinaryOp(op, node, right)
+        return node
+
+    def parse_factor(self) -> SymNode:
+        """Parse factor, power expression, parenthesized expression, or unary negative.
+
+        Returns:
+            SymNode: Root parsed factor node.
+        """
+        if self.idx >= len(self.tokens):
+            return SymConst(0)
+        tok = self.tokens[self.idx]
+        if tok == "(":
+            self.idx += 1
+            node = self.parse_comparison()
+            if self.idx < len(self.tokens) and self.tokens[self.idx] == ")":
+                self.idx += 1
+            if self.idx < len(self.tokens) and self.tokens[self.idx] == "**":
+                self.idx += 1
+                exponent = self.parse_factor()
+                node = SymBinaryOp("**", node, exponent)
+            return node
+        if tok == "-":
+            self.idx += 1
+            inner = self.parse_factor()
+            return SymBinaryOp("-", SymConst(0), inner)
+        self.idx += 1
+        base_node: SymNode = SymConst(int(tok)) if tok.isdigit() else SymVar(tok)
+        if self.idx < len(self.tokens) and self.tokens[self.idx] == "**":
+            self.idx += 1
+            exponent = self.parse_factor()
+            base_node = SymBinaryOp("**", base_node, exponent)
+        return base_node
+
+
 def _tokenize_expr(expr_str: str) -> list[str]:
     """Tokenize a symbolic expression string into component tokens.
 
@@ -393,55 +542,7 @@ def _tokenize_expr(expr_str: str) -> list[str]:
     Returns:
         list[str]: Sequence of string tokens.
     """
-    tokens: list[str] = []
-    i = 0
-    s = expr_str.strip()
-    n = len(s)
-    while i < n:
-        c = s[i]
-        if c.isspace():
-            i += 1
-            continue
-        if c in "()+*":
-            if c == "*" and i + 1 < n and s[i + 1] == "*":
-                tokens.append("**")
-                i += 2
-            else:
-                tokens.append(c)
-                i += 1
-        elif c in ("<", ">", "=", "!"):
-            if i + 1 < n and s[i + 1] == "=":
-                tokens.append(s[i : i + 2])
-                i += 2
-            else:
-                tokens.append(c)
-                i += 1
-        elif c == "-":
-            tokens.append(c)
-            i += 1
-        elif c == "/":
-            if i + 1 < n and s[i + 1] == "/":
-                tokens.append("//")
-                i += 2
-            else:
-                tokens.append("//")
-                i += 1
-        elif c == "%":
-            tokens.append("%")
-            i += 1
-        elif c.isdigit():
-            start = i
-            while i < n and s[i].isdigit():
-                i += 1
-            tokens.append(s[start:i])
-        elif c.isalpha() or c == "_":
-            start = i
-            while i < n and (s[i].isalnum() or s[i] == "_"):
-                i += 1
-            tokens.append(s[start:i])
-        else:
-            i += 1
-    return tokens
+    return SymbolicExpressionParser.tokenize(expr_str)
 
 
 def _parse_sym_str(s: str) -> SymNode:
@@ -457,98 +558,9 @@ def _parse_sym_str(s: str) -> SymNode:
     if not tokens:
         return SymVar(s)
 
-    idx = 0
-
-    def parse_comparison() -> SymNode:
-        """Parse comparison expressions.
-
-        Returns:
-            SymNode: Comparison binary expression node or additive expression.
-        """
-        nonlocal idx
-        node = parse_expr()
-        if idx < len(tokens) and tokens[idx] in (
-            "==",
-            "!=",
-            "<",
-            "<=",
-            ">",
-            ">=",
-        ):
-            op = tokens[idx]
-            idx += 1
-            right = parse_expr()
-            node = SymBinaryOp(op, node, right)
-        return node
-
-    def parse_expr() -> SymNode:
-        """Parse additive binary expressions.
-
-        Returns:
-            SymNode: Root parsed expression node.
-        """
-        nonlocal idx
-        node = parse_term()
-        while idx < len(tokens) and tokens[idx] in ("+", "-"):
-            op = tokens[idx]
-            idx += 1
-            right = parse_term()
-            node = SymBinaryOp(op, node, right)
-        return node
-
-    def parse_term() -> SymNode:
-        """Parse multiplicative binary expressions.
-
-        Returns:
-            SymNode: Root parsed term node.
-        """
-        nonlocal idx
-        node = parse_factor()
-        while idx < len(tokens) and tokens[idx] in ("*", "//", "%"):
-            op = tokens[idx]
-            idx += 1
-            right = parse_factor()
-            node = SymBinaryOp(op, node, right)
-        return node
-
-    def parse_factor() -> SymNode:
-        """Parse factor, power expression, parenthesized expression, or unary negative.
-
-        Returns:
-            SymNode: Root parsed factor node.
-        """
-        nonlocal idx
-        if idx >= len(tokens):
-            return SymConst(0)
-        tok = tokens[idx]
-        if tok == "(":
-            idx += 1
-            node = parse_comparison()
-            if idx < len(tokens) and tokens[idx] == ")":
-                idx += 1
-            if idx < len(tokens) and tokens[idx] == "**":
-                idx += 1
-                exponent = parse_factor()
-                node = SymBinaryOp("**", node, exponent)
-            return node
-        if tok == "-":
-            idx += 1
-            inner = parse_factor()
-            return SymBinaryOp("-", SymConst(0), inner)
-        idx += 1
-        base_node: SymNode
-        if tok.isdigit():
-            base_node = SymConst(int(tok))
-        else:
-            base_node = SymVar(tok)
-        if idx < len(tokens) and tokens[idx] == "**":
-            idx += 1
-            exponent = parse_factor()
-            base_node = SymBinaryOp("**", base_node, exponent)
-        return base_node
-
-    node = parse_comparison()
-    if idx == len(tokens):
+    parser = SymbolicExpressionParser(tokens)
+    node = parser.parse_comparison()
+    if parser.idx == len(tokens):
         return node
 
     return SymVar(s)
@@ -617,8 +629,6 @@ class SymNode:
             int: Evaluated integer result.
 
         Raises:
-            KeyError: If an unbound variable is encountered.
-            ZeroDivisionError: If dividing or taking modulo by zero.
             NotImplementedError: If evaluated on an unspecialized base node.
         """
         poly = self.to_polynomial()
@@ -663,7 +673,7 @@ class SymNode:
                     core_schema.is_instance_schema(cls),
                 ]
             )
-        except ImportError:  # pragma: no cover
+        except ImportError:
             return None
 
     @property
@@ -1044,6 +1054,218 @@ class SymBinaryOp(SymNode):
         self.left: SymNode = left
         self.right: SymNode = right
 
+    @staticmethod
+    def _simplify_constants(
+        op: str, s_left: SymConst, s_right: SymConst
+    ) -> SymNode | None:
+        """Fold two constant operands if the operator is statically evaluable.
+
+        Args:
+            op (str): Binary operator symbol.
+            s_left (SymConst): Left constant operand.
+            s_right (SymConst): Right constant operand.
+
+        Returns:
+            SymNode | None: Folded SymConst or None if division by zero or unknown op.
+        """
+        v1, v2 = s_left.value, s_right.value
+        if op == "+":
+            return SymConst(v1 + v2)
+        if op == "-":
+            return SymConst(v1 - v2)
+        if op == "*":
+            return SymConst(v1 * v2)
+        if op == "//" and v2 != 0:
+            return SymConst(v1 // v2)
+        if op == "%" and v2 != 0:
+            return SymConst(v1 % v2)
+        if op == "**":
+            return SymConst(int(v1**v2))
+        if op == "min":
+            return SymConst(min(v1, v2))
+        if op == "max":
+            return SymConst(max(v1, v2))
+        return None
+
+    @staticmethod
+    def _simplify_add(s_left: SymNode, s_right: SymNode) -> SymNode | None:
+        """Apply additive identity rules (x + 0 -> x, 0 + x -> x).
+
+        Args:
+            s_left (SymNode): Simplified left operand.
+            s_right (SymNode): Simplified right operand.
+
+        Returns:
+            SymNode | None: Simplified node or None.
+        """
+        if isinstance(s_right, SymConst) and s_right.value == 0:
+            return s_left
+        if isinstance(s_left, SymConst) and s_left.value == 0:
+            return s_right
+        return None
+
+    @staticmethod
+    def _simplify_sub(s_left: SymNode, s_right: SymNode) -> SymNode | None:
+        """Apply subtractive identity and cancellation rules.
+
+        Args:
+            s_left (SymNode): Simplified left operand.
+            s_right (SymNode): Simplified right operand.
+
+        Returns:
+            SymNode | None: Simplified node or None.
+        """
+        if isinstance(s_right, SymConst) and s_right.value == 0:
+            return s_left
+        if s_left == s_right:
+            return SymConst(0)
+        if isinstance(s_left, SymBinaryOp) and s_left.op == "+":
+            if s_left.right == s_right:
+                return s_left.left
+            if s_left.left == s_right:
+                return s_left.right
+        return None
+
+    @staticmethod
+    def _simplify_mul(s_left: SymNode, s_right: SymNode) -> SymNode | None:
+        """Apply multiplicative identity and zero-annihilation rules.
+
+        Args:
+            s_left (SymNode): Simplified left operand.
+            s_right (SymNode): Simplified right operand.
+
+        Returns:
+            SymNode | None: Simplified node or None.
+        """
+        if isinstance(s_right, SymConst):
+            if s_right.value == 1:
+                return s_left
+            if s_right.value == 0:
+                return SymConst(0)
+        if isinstance(s_left, SymConst):
+            if s_left.value == 1:
+                return s_right
+            if s_left.value == 0:
+                return SymConst(0)
+        return None
+
+    @staticmethod
+    def _simplify_floordiv(s_left: SymNode, s_right: SymNode) -> SymNode | None:
+        """Apply floor-division identity and factor cancellation rules.
+
+        Args:
+            s_left (SymNode): Simplified left operand.
+            s_right (SymNode): Simplified right operand.
+
+        Returns:
+            SymNode | None: Simplified node or None.
+        """
+        if isinstance(s_right, SymConst) and s_right.value == 1:
+            return s_left
+        if isinstance(s_left, SymConst) and s_left.value == 0:
+            return SymConst(0)
+        if s_left == s_right and not (
+            isinstance(s_right, SymConst) and s_right.value == 0
+        ):
+            return SymConst(1)
+        if isinstance(s_left, SymBinaryOp) and s_left.op == "*":
+            if s_left.right == s_right:
+                return s_left.left
+            if s_left.left == s_right:
+                return s_left.right
+            if isinstance(s_right, SymConst) and s_right.value != 0:
+                if (
+                    isinstance(s_left.right, SymConst)
+                    and s_left.right.value % s_right.value == 0
+                ):
+                    return SymBinaryOp(
+                        "*",
+                        s_left.left,
+                        SymConst(s_left.right.value // s_right.value),
+                    ).simplify()
+                if (
+                    isinstance(s_left.left, SymConst)
+                    and s_left.left.value % s_right.value == 0
+                ):
+                    return SymBinaryOp(
+                        "*",
+                        s_left.right,
+                        SymConst(s_left.left.value // s_right.value),
+                    ).simplify()
+        return None
+
+    @staticmethod
+    def _simplify_mod(s_left: SymNode, s_right: SymNode) -> SymNode | None:
+        """Apply modulo identity rules.
+
+        Args:
+            s_left (SymNode): Simplified left operand.
+            s_right (SymNode): Simplified right operand.
+
+        Returns:
+            SymNode | None: Simplified node or None.
+        """
+        if isinstance(s_right, SymConst) and s_right.value == 1:
+            return SymConst(0)
+        if isinstance(s_left, SymConst) and s_left.value == 0:
+            return SymConst(0)
+        if s_left == s_right and not (
+            isinstance(s_right, SymConst) and s_right.value == 0
+        ):
+            return SymConst(0)
+        return None
+
+    @staticmethod
+    def _simplify_pow(s_left: SymNode, s_right: SymNode) -> SymNode | None:
+        """Apply exponentiation identity rules.
+
+        Args:
+            s_left (SymNode): Simplified left operand.
+            s_right (SymNode): Simplified right operand.
+
+        Returns:
+            SymNode | None: Simplified node or None.
+        """
+        if isinstance(s_right, SymConst):
+            if s_right.value == 1:
+                return s_left
+            if s_right.value == 0:
+                return SymConst(1)
+        if isinstance(s_left, SymConst):
+            if s_left.value == 0:
+                return SymConst(0)
+            if s_left.value == 1:
+                return SymConst(1)
+        return None
+
+    @staticmethod
+    def _simplify_minmax(op: str, s_left: SymNode, s_right: SymNode) -> SymNode | None:
+        """Apply idempotence and absorption rules for min and max operations.
+
+        Args:
+            op (str): Either 'min' or 'max'.
+            s_left (SymNode): Simplified left operand.
+            s_right (SymNode): Simplified right operand.
+
+        Returns:
+            SymNode | None: Simplified node or None.
+        """
+        if s_left == s_right:
+            return s_left
+        if (
+            isinstance(s_left, SymBinaryOp)
+            and s_left.op == op
+            and (s_left.left == s_right or s_left.right == s_right)
+        ):
+            return s_left
+        if (
+            isinstance(s_right, SymBinaryOp)
+            and s_right.op == op
+            and (s_right.left == s_left or s_right.right == s_left)
+        ):
+            return s_right
+        return None
+
     def simplify(self) -> SymNode:
         """Apply algebraic rewrite rules to simplify binary operation.
 
@@ -1054,140 +1276,27 @@ class SymBinaryOp(SymNode):
         s_right = self.right.simplify()
 
         if isinstance(s_left, SymConst) and isinstance(s_right, SymConst):
-            v1, v2 = s_left.value, s_right.value
-            if self.op == "+":
-                return SymConst(v1 + v2)
-            if self.op == "-":
-                return SymConst(v1 - v2)
-            if self.op == "*":
-                return SymConst(v1 * v2)
-            if self.op == "//" and v2 != 0:
-                return SymConst(v1 // v2)
-            if self.op == "%" and v2 != 0:
-                return SymConst(v1 % v2)
-            if self.op == "**":
-                return SymConst(int(v1**v2))
-            if self.op == "min":
-                return SymConst(min(v1, v2))
-            if self.op == "max":
-                return SymConst(max(v1, v2))
+            folded = self._simplify_constants(self.op, s_left, s_right)
+            if folded is not None:
+                return folded
 
-        if self.op == "+":
-            if isinstance(s_right, SymConst) and s_right.value == 0:
-                return s_left
-            if isinstance(s_left, SymConst) and s_left.value == 0:
-                return s_right
-
-        elif self.op == "-":
-            if isinstance(s_right, SymConst) and s_right.value == 0:
-                return s_left
-            if s_left == s_right:
-                return SymConst(0)
-            if isinstance(s_left, SymBinaryOp) and s_left.op == "+":
-                if s_left.right == s_right:
-                    return s_left.left
-                if s_left.left == s_right:
-                    return s_left.right
-
-        elif self.op == "*":
-            if isinstance(s_right, SymConst):
-                if s_right.value == 1:
-                    return s_left
-                if s_right.value == 0:
-                    return SymConst(0)
-            if isinstance(s_left, SymConst):
-                if s_left.value == 1:
-                    return s_right
-                if s_left.value == 0:
-                    return SymConst(0)
-
-        elif self.op == "//":
-            if isinstance(s_right, SymConst) and s_right.value == 1:
-                return s_left
-            if isinstance(s_left, SymConst) and s_left.value == 0:
-                return SymConst(0)
-            if s_left == s_right and not (
-                isinstance(s_right, SymConst) and s_right.value == 0
-            ):
-                return SymConst(1)
-            if isinstance(s_left, SymBinaryOp) and s_left.op == "*":
-                if s_left.right == s_right:
-                    return s_left.left
-                if s_left.left == s_right:
-                    return s_left.right
-                if isinstance(s_right, SymConst) and s_right.value != 0:
-                    if (
-                        isinstance(s_left.right, SymConst)
-                        and s_left.right.value % s_right.value == 0
-                    ):
-                        return SymBinaryOp(
-                            "*",
-                            s_left.left,
-                            SymConst(s_left.right.value // s_right.value),
-                        ).simplify()
-                    if (
-                        isinstance(s_left.left, SymConst)
-                        and s_left.left.value % s_right.value == 0
-                    ):
-                        return SymBinaryOp(
-                            "*",
-                            s_left.right,
-                            SymConst(s_left.left.value // s_right.value),
-                        ).simplify()
-
-        elif self.op == "%":
-            if isinstance(s_right, SymConst) and s_right.value == 1:
-                return SymConst(0)
-            if isinstance(s_left, SymConst) and s_left.value == 0:
-                return SymConst(0)
-            if s_left == s_right and not (
-                isinstance(s_right, SymConst) and s_right.value == 0
-            ):
-                return SymConst(0)
-
-        elif self.op == "**":
-            if isinstance(s_right, SymConst):
-                if s_right.value == 1:
-                    return s_left
-                if s_right.value == 0:
-                    return SymConst(1)
-            if isinstance(s_left, SymConst):
-                if s_left.value == 0:
-                    return SymConst(0)
-                if s_left.value == 1:
-                    return SymConst(1)
-
-        elif self.op == "min":
-            if s_left == s_right:
-                return s_left
-            if (
-                isinstance(s_left, SymBinaryOp)
-                and s_left.op == "min"
-                and (s_left.left == s_right or s_left.right == s_right)
-            ):
-                return s_left
-            if (
-                isinstance(s_right, SymBinaryOp)
-                and s_right.op == "min"
-                and (s_right.left == s_left or s_right.right == s_left)
-            ):
-                return s_right
-
-        elif self.op == "max":
-            if s_left == s_right:
-                return s_left
-            if (
-                isinstance(s_left, SymBinaryOp)
-                and s_left.op == "max"
-                and (s_left.left == s_right or s_left.right == s_right)
-            ):
-                return s_left
-            if (
-                isinstance(s_right, SymBinaryOp)
-                and s_right.op == "max"
-                and (s_right.left == s_left or s_right.right == s_left)
-            ):
-                return s_right
+        op_handlers = {
+            "+": self._simplify_add,
+            "-": self._simplify_sub,
+            "*": self._simplify_mul,
+            "//": self._simplify_floordiv,
+            "%": self._simplify_mod,
+            "**": self._simplify_pow,
+        }
+        handler = op_handlers.get(self.op)
+        if handler is not None:
+            res = handler(s_left, s_right)
+            if res is not None:
+                return res
+        elif self.op in ("min", "max"):
+            res = self._simplify_minmax(self.op, s_left, s_right)
+            if res is not None:
+                return res
 
         poly = self.to_polynomial()
         if poly is not None:
@@ -1630,7 +1739,7 @@ class SymInt:
                     core_schema.is_instance_schema(cls),
                 ]
             )
-        except ImportError:  # pragma: no cover
+        except ImportError:
             return None
 
     @property
@@ -1930,6 +2039,46 @@ class SymbolicConstraintTracker:
             self._parent[key] = self._find(self._parent[key])
         return self._parent[key]
 
+    def _extract_const_value(
+        self,
+        dim: int | str | SymNode | SymInt,
+        key: str,
+        root: str,
+    ) -> int | None:
+        """Resolve an integer constant bound for a dimension if known.
+
+        Args:
+            dim (int | str | SymNode | SymInt): Dimension value.
+            key (str): Canonical string key for dim.
+            root (str): Disjoint-set root key for dim.
+
+        Returns:
+            int | None: Resolved integer constant or None.
+        """
+        if isinstance(dim, int):
+            return dim
+        if isinstance(dim, SymConst):
+            return dim.value
+        if key.isdigit():
+            return int(key)
+        return self._const_map.get(root)
+
+    @staticmethod
+    def _is_unit_dimension(dim: int | str | SymNode | SymInt) -> bool:
+        """Return True if dim represents a unit (size-1) dimension.
+
+        Args:
+            dim (int | str | SymNode | SymInt): Dimension value.
+
+        Returns:
+            bool: True if unit dimension.
+        """
+        return (
+            (isinstance(dim, int) and dim == 1)
+            or (isinstance(dim, SymConst) and dim.value == 1)
+            or str(dim) == "1"
+        )
+
     def record_equality(
         self,
         a: int | str | SymNode | SymInt,
@@ -1957,26 +2106,8 @@ class SymbolicConstraintTracker:
         root_a = self._find(key_a)
         root_b = self._find(key_b)
 
-        const_a: int | None = None
-        const_b: int | None = None
-
-        if isinstance(a, int):
-            const_a = a
-        elif isinstance(a, SymConst):
-            const_a = a.value
-        elif key_a.isdigit():
-            const_a = int(key_a)
-        elif root_a in self._const_map:
-            const_a = self._const_map[root_a]
-
-        if isinstance(b, int):
-            const_b = b
-        elif isinstance(b, SymConst):
-            const_b = b.value
-        elif key_b.isdigit():
-            const_b = int(key_b)
-        elif root_b in self._const_map:
-            const_b = self._const_map[root_b]
+        const_a = self._extract_const_value(a, key_a, root_a)
+        const_b = self._extract_const_value(b, key_b, root_b)
 
         if const_a is not None and const_b is not None and const_a != const_b:
             self._contradiction = True
@@ -2004,21 +2135,10 @@ class SymbolicConstraintTracker:
 
         Returns:
             int | str | SymNode | SymInt: Unified dimension representative.
-
-        Raises:
-            ShapeMismatchError: If the dimensions cannot be unified.
         """
-        if (
-            (isinstance(a, int) and a == 1)
-            or (isinstance(a, SymConst) and a.value == 1)
-            or str(a) == "1"
-        ):
+        if self._is_unit_dimension(a):
             return b
-        if (
-            (isinstance(b, int) and b == 1)
-            or (isinstance(b, SymConst) and b.value == 1)
-            or str(b) == "1"
-        ):
+        if self._is_unit_dimension(b):
             return a
 
         self.record_equality(a, b)
@@ -2302,7 +2422,6 @@ def normalize_axis(
         int | tuple[int, ...]: Normalized positive axis index or indices.
 
     Raises:
-        ValueError: If any axis index is out of [-rank, rank - 1] bounds.
         TypeError: If axis has an unsupported type.
     """
 
@@ -2404,6 +2523,34 @@ class ShapeTracker:
         return resolved
 
     @staticmethod
+    def _record_dynamic_dim_bound(
+        dim: Any,
+        concrete_val: int,
+        resolved_bounds: dict[str, int],
+        tracker: SymbolicConstraintTracker | None,
+    ) -> None:
+        """Record a concrete integer bound for a single symbolic dimension.
+
+        Args:
+            dim (Any): Symbolic dimension entry.
+            concrete_val (int): Observed concrete dimension size.
+            resolved_bounds (dict[str, int]): Output bounds dictionary to update.
+            tracker (SymbolicConstraintTracker | None): Optional constraint tracker.
+        """
+        var_name: str | None = None
+        if isinstance(dim, SymInt):
+            var_name = dim.name
+        elif isinstance(dim, SymNode):
+            var_name = str(dim)
+        elif isinstance(dim, str) and not dim.isdigit():
+            var_name = dim
+
+        if var_name is not None:
+            resolved_bounds[var_name] = concrete_val
+            if tracker is not None:
+                tracker.record_equality(dim, concrete_val)
+
+    @staticmethod
     def resolve_dynamic_bounds(
         graph: Any,
         feedback_telemetry: Mapping[str, Any],
@@ -2442,20 +2589,9 @@ class ShapeTracker:
                     concrete_val = (
                         observed_shape[idx] if idx < len(observed_shape) else 1
                     )
-                    if isinstance(dim, SymInt):
-                        var_name = dim.name
-                        resolved_bounds[var_name] = concrete_val
-                        if tracker is not None:
-                            tracker.record_equality(dim, concrete_val)
-                    elif isinstance(dim, SymNode):
-                        var_name = str(dim)
-                        resolved_bounds[var_name] = concrete_val
-                        if tracker is not None:
-                            tracker.record_equality(dim, concrete_val)
-                    elif isinstance(dim, str) and not dim.isdigit():
-                        resolved_bounds[dim] = concrete_val
-                        if tracker is not None:
-                            tracker.record_equality(dim, concrete_val)
+                    ShapeTracker._record_dynamic_dim_bound(
+                        dim, concrete_val, resolved_bounds, tracker
+                    )
                     new_shape.append(concrete_val)
 
                 if hasattr(node, "shape_metadata"):

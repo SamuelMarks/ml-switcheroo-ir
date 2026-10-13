@@ -10,7 +10,7 @@ from collections import deque
 from collections.abc import Sequence
 from typing import Any
 
-from ml_switcheroo_ir import (
+from ml_switcheroo_ir.graph import (
     LogicalEdge,
     LogicalGraph,
     LogicalNode,
@@ -21,6 +21,7 @@ from ml_switcheroo_ir.shapes import (
     SymBinaryOp,
     SymbolicConstraintTracker,
     SymConst,
+    SymInt,
     SymNode,
     broadcast_shapes,
     matmul_shape,
@@ -425,7 +426,11 @@ def _propagate_squeeze_op(
                     axes = axes_node.attributes["value"]
 
             if axes is not None:
-                raw_list = [axes] if isinstance(axes, int) else list(axes)  # type: ignore[arg-type]
+                raw_list: Sequence[Any] = (
+                    [axes]
+                    if isinstance(axes, int)
+                    else (axes if isinstance(axes, (list, tuple)) else [])
+                )
                 norm_axes = set(
                     normalize_axis(
                         [int(a) for a in raw_list if isinstance(a, (int, str))],
@@ -462,7 +467,11 @@ def _propagate_unsqueeze_op(
                     axes = axes_node.attributes["value"]
 
             if axes is not None:
-                raw_list = [axes] if isinstance(axes, int) else list(axes)  # type: ignore[arg-type]
+                raw_list: Sequence[Any] = (
+                    [axes]
+                    if isinstance(axes, int)
+                    else (axes if isinstance(axes, (list, tuple)) else [])
+                )
                 raw_axes = [int(a) for a in raw_list if isinstance(a, (int, str))]
                 target_rank = len(s) + len(raw_axes)
                 norm_axes = sorted([normalize_axis(a, target_rank) for a in raw_axes])
@@ -591,7 +600,12 @@ def _propagate_split_op(
             )
             first_split: DimensionType
             if isinstance(split, (list, tuple)) and len(split) > 0:
-                first_split = split[0]  # type: ignore[assignment]
+                raw_first = split[0]
+                first_split = (
+                    raw_first
+                    if isinstance(raw_first, (int, str, SymNode, SymInt))
+                    else int(str(raw_first))
+                )
             else:
                 dim_val = s[norm_axis]
                 if isinstance(dim_val, int):
@@ -664,6 +678,251 @@ def _propagate_slice_op(
     return None
 
 
+def _propagate_shape_op(
+    node: LogicalNode, new_nodes: dict[str, LogicalNode]
+) -> tuple[DimensionType, ...] | None:
+    """Propagate output shape for Shape operator returning 1D rank tensor.
+
+    Args:
+        node (LogicalNode): Current Shape node.
+        new_nodes (dict[str, LogicalNode]): Map of processed preceding nodes.
+
+    Returns:
+        tuple[DimensionType, ...] | None: 1D shape tuple `(rank,)` or None.
+    """
+    if node.inputs:
+        inp_node = new_nodes.get(node.inputs[0])
+        if inp_node is not None and isinstance(inp_node.shape_metadata, (list, tuple)):
+            return (len(inp_node.shape_metadata),)
+    return None
+
+
+def _propagate_reshape_op(
+    node: LogicalNode, new_nodes: dict[str, LogicalNode]
+) -> tuple[DimensionType, ...] | None:
+    """Propagate output shape and validate element count for Reshape operations.
+
+    Args:
+        node (LogicalNode): Current Reshape node.
+        new_nodes (dict[str, LogicalNode]): Map of processed preceding nodes.
+
+    Returns:
+        tuple[DimensionType, ...] | None: Resolved target shape or None.
+
+    Raises:
+        ValueError: If multiple -1 dimensions exist or static element counts mismatch.
+    """
+    if not node.inputs:
+        return None
+    inp_node = new_nodes.get(node.inputs[0])
+    target_shape_attr = node.attributes.get("shape")
+    if target_shape_attr is None:
+        target_shape_attr = node.attributes.get("new_shape")
+    if (
+        inp_node is None
+        or not isinstance(inp_node.shape_metadata, (list, tuple))
+        or not isinstance(target_shape_attr, (list, tuple))
+    ):
+        return None
+
+    in_numel = 1
+    all_concrete = True
+    for d in inp_node.shape_metadata:
+        if isinstance(d, int) and d > 0:
+            in_numel *= d
+        else:
+            all_concrete = False
+            break
+
+    resolved_dims: list[DimensionType] = []
+    neg_idx = -1
+    target_known_numel = 1
+
+    for idx, d in enumerate(target_shape_attr):
+        if d == -1:
+            if neg_idx != -1:
+                raise ValueError(
+                    f"Reshape in node '{node.id}' contains multiple -1 dimensions."
+                )
+            neg_idx = idx
+            resolved_dims.append(-1)
+        elif isinstance(d, int):
+            target_known_numel *= d
+            resolved_dims.append(d)
+        else:
+            resolved_dims.append(str(d))
+
+    if all_concrete and neg_idx != -1:
+        if in_numel % target_known_numel != 0:
+            raise ValueError(
+                f"Static shape mismatch in Reshape '{node.id}': input elements ({in_numel}) "
+                f"not divisible by target dimensions ({target_known_numel})."
+            )
+        resolved_dims[neg_idx] = in_numel // target_known_numel
+    elif all_concrete and neg_idx == -1 and in_numel != target_known_numel:
+        raise ValueError(
+            f"Static shape mismatch in Reshape '{node.id}': input elements ({in_numel}) "
+            f"mismatches target elements ({target_known_numel})."
+        )
+
+    return tuple(resolved_dims)
+
+
+def _propagate_transpose_op(
+    node: LogicalNode, new_nodes: dict[str, LogicalNode]
+) -> tuple[DimensionType, ...] | None:
+    """Propagate output shape for Transpose operations according to perm attribute.
+
+    Args:
+        node (LogicalNode): Current Transpose node.
+        new_nodes (dict[str, LogicalNode]): Map of processed preceding nodes.
+
+    Returns:
+        tuple[DimensionType, ...] | None: Permuted shape or None.
+    """
+    if node.inputs:
+        inp_node = new_nodes.get(node.inputs[0])
+        perm = node.attributes.get("perm")
+        if (
+            inp_node is not None
+            and isinstance(inp_node.shape_metadata, (list, tuple))
+            and isinstance(perm, (list, tuple))
+            and len(perm) == len(inp_node.shape_metadata)
+        ):
+            return tuple(
+                inp_node.shape_metadata[p]
+                for p in perm
+                if isinstance(p, int)
+                and not isinstance(p, bool)
+                and 0 <= p < len(inp_node.shape_metadata)
+            )
+    return None
+
+
+def _propagate_broadcast_in_dim_op(
+    node: LogicalNode, new_nodes: dict[str, LogicalNode]
+) -> tuple[DimensionType, ...] | None:
+    """Propagate output shape for BroadcastInDim operations.
+
+    Args:
+        node (LogicalNode): Current BroadcastInDim node.
+        new_nodes (dict[str, LogicalNode]): Map of processed preceding nodes.
+
+    Returns:
+        tuple[DimensionType, ...] | None: Broadcasted target shape or None.
+    """
+    _ = new_nodes
+    if node.inputs:
+        out_shape = node.attributes.get("output_shape")
+        if out_shape is None:
+            out_shape = node.attributes.get("shape")
+        if isinstance(out_shape, (list, tuple)):
+            return tuple(out_shape)
+    return None
+
+
+_UNARY_SHAPE_OPS: frozenset[str] = frozenset(
+    {
+        "Abs",
+        "Neg",
+        "Exp",
+        "Log",
+        "Sqrt",
+        "Relu",
+        "Sigmoid",
+        "Tanh",
+        "Sin",
+        "Cos",
+        "Floor",
+        "Ceil",
+        "Round",
+        "Identity",
+        "relu",
+        "sigmoid",
+        "tanh",
+    }
+)
+
+_BINARY_SHAPE_OPS: frozenset[str] = frozenset(
+    {
+        "Add",
+        "Sub",
+        "Mul",
+        "Div",
+        "Pow",
+        "Mod",
+        "Equal",
+        "Greater",
+        "Less",
+        "Max",
+        "Min",
+        "add",
+        "sub",
+        "mul",
+        "div",
+    }
+)
+
+_MATMUL_SHAPE_OPS: frozenset[str] = frozenset(
+    {
+        "MatMul",
+        "BatchMatMul",
+        "matmul",
+        "batch_matmul",
+    }
+)
+
+
+def _infer_node_shape(
+    node: LogicalNode,
+    new_nodes: dict[str, LogicalNode],
+    tracker: SymbolicConstraintTracker,
+) -> tuple[DimensionType, ...] | None:
+    """Dispatch shape inference for a single LogicalNode.
+
+    Args:
+        node (LogicalNode): Node to infer shape for.
+        new_nodes (dict[str, LogicalNode]): Already-processed upstream nodes.
+        tracker (SymbolicConstraintTracker): Symbolic constraint tracker.
+
+    Returns:
+        tuple[DimensionType, ...] | None: Inferred shape tuple or None.
+    """
+    op = node.op_type
+    if op in _UNARY_SHAPE_OPS:
+        return _propagate_unary_op(node, new_nodes)
+    if op in _BINARY_SHAPE_OPS:
+        return _propagate_binary_op(node, new_nodes, tracker)
+    if op in _MATMUL_SHAPE_OPS:
+        return _propagate_matmul_op(node, new_nodes)
+    if op in ("Gemm", "gemm"):
+        return _propagate_gemm_op(node, new_nodes, tracker)
+
+    direct_propagators = {
+        "Squeeze": _propagate_squeeze_op,
+        "squeeze": _propagate_squeeze_op,
+        "Unsqueeze": _propagate_unsqueeze_op,
+        "unsqueeze": _propagate_unsqueeze_op,
+        "Flatten": _propagate_flatten_op,
+        "flatten": _propagate_flatten_op,
+        "Concat": _propagate_concat_op,
+        "concat": _propagate_concat_op,
+        "Split": _propagate_split_op,
+        "split": _propagate_split_op,
+        "Slice": _propagate_slice_op,
+        "slice": _propagate_slice_op,
+        "Shape": _propagate_shape_op,
+        "Reshape": _propagate_reshape_op,
+        "Transpose": _propagate_transpose_op,
+        "BroadcastInDim": _propagate_broadcast_in_dim_op,
+        "broadcast_in_dim": _propagate_broadcast_in_dim_op,
+    }
+    handler = direct_propagators.get(op)
+    if handler is not None:
+        return handler(node, new_nodes)
+    return None
+
+
 def propagate_shapes_and_constants(graph: LogicalGraph) -> LogicalGraph:
     """Propagate statically computable tensor shapes and fold constant metadata.
 
@@ -684,191 +943,9 @@ def propagate_shapes_and_constants(graph: LogicalGraph) -> LogicalGraph:
     new_nodes: dict[str, LogicalNode] = {}
     tracker = SymbolicConstraintTracker()
 
-    unary_ops: set[str] = {
-        "Abs",
-        "Neg",
-        "Exp",
-        "Log",
-        "Sqrt",
-        "Relu",
-        "Sigmoid",
-        "Tanh",
-        "Sin",
-        "Cos",
-        "Floor",
-        "Ceil",
-        "Round",
-        "Identity",
-        "relu",
-        "sigmoid",
-        "tanh",
-    }
-    binary_ops: set[str] = {
-        "Add",
-        "Sub",
-        "Mul",
-        "Div",
-        "Pow",
-        "Mod",
-        "Equal",
-        "Greater",
-        "Less",
-        "Max",
-        "Min",
-        "add",
-        "sub",
-        "mul",
-        "div",
-    }
-    matmul_ops: set[str] = {
-        "MatMul",
-        "BatchMatMul",
-        "matmul",
-        "batch_matmul",
-    }
-
     for node in sorted_nodes:
-        inferred_shape = node.shape_metadata
-
-        if node.op_type in unary_ops:
-            u_shape = _propagate_unary_op(node, new_nodes)
-            if u_shape is not None:
-                inferred_shape = u_shape
-
-        elif node.op_type in binary_ops:
-            b_shape = _propagate_binary_op(node, new_nodes, tracker)
-            if b_shape is not None:
-                inferred_shape = b_shape
-
-        elif node.op_type in matmul_ops:
-            m_shape = _propagate_matmul_op(node, new_nodes)
-            if m_shape is not None:
-                inferred_shape = m_shape
-
-        elif node.op_type in ("Gemm", "gemm"):
-            g_shape = _propagate_gemm_op(node, new_nodes, tracker)
-            if g_shape is not None:
-                inferred_shape = g_shape
-
-        elif node.op_type in ("Squeeze", "squeeze"):
-            sq_shape = _propagate_squeeze_op(node, new_nodes)
-            if sq_shape is not None:
-                inferred_shape = sq_shape
-
-        elif node.op_type in ("Unsqueeze", "unsqueeze"):
-            unsq_shape = _propagate_unsqueeze_op(node, new_nodes)
-            if unsq_shape is not None:
-                inferred_shape = unsq_shape
-
-        elif node.op_type in ("Flatten", "flatten"):
-            fl_shape = _propagate_flatten_op(node, new_nodes)
-            if fl_shape is not None:
-                inferred_shape = fl_shape
-
-        elif node.op_type in ("Concat", "concat"):
-            cat_shape = _propagate_concat_op(node, new_nodes)
-            if cat_shape is not None:
-                inferred_shape = cat_shape
-
-        elif node.op_type in ("Split", "split"):
-            sp_shape = _propagate_split_op(node, new_nodes)
-            if sp_shape is not None:
-                inferred_shape = sp_shape
-
-        elif node.op_type in ("Slice", "slice"):
-            sl_shape = _propagate_slice_op(node, new_nodes)
-            if sl_shape is not None:
-                inferred_shape = sl_shape
-
-        elif node.op_type == "Shape":
-            if node.inputs:
-                inp_node = new_nodes.get(node.inputs[0])
-                if inp_node is not None and isinstance(
-                    inp_node.shape_metadata, (list, tuple)
-                ):
-                    inferred_shape = (len(inp_node.shape_metadata),)
-
-        elif node.op_type == "Reshape":
-            if node.inputs:
-                inp_node = new_nodes.get(node.inputs[0])
-                target_shape_attr = node.attributes.get("shape")
-                if target_shape_attr is None:
-                    target_shape_attr = node.attributes.get("new_shape")
-                if (
-                    inp_node is not None
-                    and isinstance(inp_node.shape_metadata, (list, tuple))
-                    and isinstance(target_shape_attr, (list, tuple))
-                ):
-                    in_numel = 1
-                    all_concrete = True
-                    for d in inp_node.shape_metadata:
-                        if isinstance(d, int) and d > 0:
-                            in_numel *= d
-                        else:
-                            all_concrete = False
-                            break
-
-                    resolved_dims: list[DimensionType] = []
-                    neg_idx = -1
-                    target_known_numel = 1
-
-                    for idx, d in enumerate(target_shape_attr):
-                        if d == -1:
-                            if neg_idx != -1:
-                                raise ValueError(
-                                    f"Reshape in node '{node.id}' contains multiple -1 dimensions."
-                                )
-                            neg_idx = idx
-                            resolved_dims.append(-1)
-                        elif isinstance(d, int):
-                            target_known_numel *= d
-                            resolved_dims.append(d)
-                        else:
-                            resolved_dims.append(str(d))
-
-                    if all_concrete and neg_idx != -1:
-                        if in_numel % target_known_numel != 0:
-                            raise ValueError(
-                                f"Static shape mismatch in Reshape '{node.id}': input elements ({in_numel}) "
-                                f"not divisible by target dimensions ({target_known_numel})."
-                            )
-                        resolved_dims[neg_idx] = in_numel // target_known_numel
-                    elif (
-                        all_concrete
-                        and neg_idx == -1
-                        and in_numel != target_known_numel
-                    ):
-                        raise ValueError(
-                            f"Static shape mismatch in Reshape '{node.id}': input elements ({in_numel}) "
-                            f"mismatches target elements ({target_known_numel})."
-                        )
-
-                    inferred_shape = tuple(resolved_dims)
-
-        elif node.op_type == "Transpose":
-            if node.inputs:
-                inp_node = new_nodes.get(node.inputs[0])
-                perm = node.attributes.get("perm")
-                if (
-                    inp_node is not None
-                    and isinstance(inp_node.shape_metadata, (list, tuple))
-                    and isinstance(perm, (list, tuple))
-                    and len(perm) == len(inp_node.shape_metadata)
-                ):
-                    inferred_shape = tuple(
-                        inp_node.shape_metadata[p]
-                        for p in perm
-                        if isinstance(p, int)
-                        and not isinstance(p, bool)
-                        and 0 <= p < len(inp_node.shape_metadata)
-                    )
-
-        elif node.op_type in ("BroadcastInDim", "broadcast_in_dim") and node.inputs:
-            out_shape = node.attributes.get("output_shape")
-            if out_shape is None:
-                out_shape = node.attributes.get("shape")
-            if isinstance(out_shape, (list, tuple)):
-                inferred_shape = tuple(out_shape)
+        computed = _infer_node_shape(node, new_nodes, tracker)
+        inferred_shape = computed if computed is not None else node.shape_metadata
 
         new_node = LogicalNode(
             id=node.id,

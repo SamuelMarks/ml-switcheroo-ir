@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import ml_switcheroo_ir as sw_ir
 from ml_switcheroo_ir.export import (
     _format_shape_tuple,
@@ -242,3 +244,44 @@ def test_export_to_python_mesh_without_webrtc() -> None:
     builder = scope["build_graph"]
     assert callable(builder)
     assert builder() == graph
+
+
+def test_export_to_python_subgraphs_and_missing_black(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test exporting LogicalGraph with nested subgraphs and when black is unavailable.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
+    import sys
+
+    sub = sw_ir.LogicalGraph(
+        name="BodySubgraph",
+        nodes={"sub_relu": sw_ir.LogicalNode(id="sub_relu", op_type="Relu")},
+        outputs=["sub_relu"],
+    )
+    parent_node = sw_ir.LogicalNode(
+        id="scan_op",
+        op_type="Scan",
+        subgraphs={"body": sub, "meta": "custom_tag"},
+    )
+    graph = sw_ir.LogicalGraph(
+        name="ParentWithSubgraph",
+        nodes={"scan_op": parent_node},
+        outputs=["scan_op"],
+    )
+
+    code = export_to_python(graph)
+    assert "LogicalGraph.from_dict(" in code
+    scope: dict[str, object] = {}
+    exec(code, scope)  # noqa: S102
+    builder = scope["build_graph"]
+    assert callable(builder)
+    reconstructed = builder()
+    assert reconstructed.nodes["scan_op"].subgraphs["body"].name == "BodySubgraph"
+    assert reconstructed.nodes["scan_op"].subgraphs["meta"] == "custom_tag"
+
+    monkeypatch.setitem(sys.modules, "black", None)
+    unformatted_code = export_to_python(graph)
+    assert "def build_graph() -> sw_ir.LogicalGraph:" in unformatted_code

@@ -259,6 +259,9 @@ def test_get_coverage_metrics_temp_file_handling() -> None:
 
         Args:
             p: Path to remove.
+
+        Raises:
+            OSError: Always raised to simulate permission error.
         """
         del p
         raise OSError("Permission denied")
@@ -958,12 +961,6 @@ def test_verify_grounding_find_snapshots_directory() -> None:
         ):
             assert find_snapshots_directory() is not None
 
-        with patch(
-            "pathlib.Path.is_dir",
-            side_effect=[False, False, False, False, False, False, False, True],
-        ):
-            assert find_snapshots_directory() is not None
-
         # All is_dir return False
         with patch("pathlib.Path.is_dir", return_value=False):
             assert find_snapshots_directory() is None
@@ -1167,6 +1164,35 @@ def test_find_snapshots_directory_env_and_override() -> None:
         # Explicit override
         assert find_snapshots_directory(tmpdir) == Path(tmpdir).resolve()
         assert find_snapshots_directory("/non/existent/path") is None
+
+        # Repo-root override with nested src/ml_framework_snapshots/snapshots
+        fw_root = Path(tmpdir) / "fw_repo"
+        nested_fw = fw_root / "src" / "ml_framework_snapshots" / "snapshots"
+        nested_fw.mkdir(parents=True)
+        assert find_snapshots_directory(str(fw_root)) == nested_fw.resolve()
+
+        # Repo-root override with nested src/ml_ecosystem_snapshots/snapshots
+        eco_root = Path(tmpdir) / "eco_repo"
+        nested_eco = eco_root / "src" / "ml_ecosystem_snapshots" / "snapshots"
+        nested_eco.mkdir(parents=True)
+        assert find_snapshots_directory(str(eco_root)) == nested_eco.resolve()
+
+        # Sibling ml-framework-snapshots resolved via ml-ecosystem-snapshots
+        ws_root = Path(tmpdir) / "ws"
+        eco_sibling = (
+            ws_root
+            / "ml-ecosystem-snapshots"
+            / "src"
+            / "ml_framework_snapshots"
+            / "snapshots"
+        )
+        eco_sibling.mkdir(parents=True)
+        fw_alias = ws_root / "ml-framework-snapshots"
+        assert find_snapshots_directory(str(fw_alias)) == eco_sibling.resolve()
+
+        # Sibling ml-framework-snapshots when neither exists
+        empty_ws = Path(tmpdir) / "empty_ws" / "ml-framework-snapshots"
+        assert find_snapshots_directory(str(empty_ws)) is None
 
         # Environment variable valid and invalid
         with patch.dict(os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": tmpdir}):

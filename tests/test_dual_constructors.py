@@ -178,6 +178,12 @@ def test_logical_graph_outputs_deduction_and_override() -> None:
     # c_s0 is completely unconsumed, so c_s0 is the output
     assert "c_s0" in graph_multi.outputs
 
+    # Output node inputs extraction with duplicate input entries
+    in_n = LogicalNode(id="in_n", op_type="Input")
+    out_n = LogicalNode(id="out_n", op_type="Output", inputs=["in_n", "in_n"])
+    graph_with_output_op = LogicalGraph(nodes={"in_n": in_n, "out_n": out_n})
+    assert graph_with_output_op.outputs == ["in_n"]
+
 
 def test_logical_graph_roundtrip_instantiation() -> None:
     """Test roundtrip construction using Format B CST syntax."""
@@ -310,3 +316,7 @@ def test_logical_node_scalar_and_none_shapes() -> None:
 
     node_none = LogicalNode(id="n2", op_type="Constant", shape_metadata=None)
     assert node_none.shape_metadata is None
+
+    node_dict_domain = LogicalNode(id="n3", op_type="Add", domain={"axis": 1})
+    assert node_dict_domain.domain == "ai.onnx"
+    assert node_dict_domain.attributes["axis"] == 1

@@ -124,3 +124,19 @@ def test_graph_edges_unresolved_colon_input() -> None:
     assert len(edges) == 1
     assert edges[0].source == "missing_node:3"
     assert edges[0].source_idx == 0
+
+
+def test_graph_edges_setter_synchronization() -> None:
+    """Test LogicalGraph.edges setter synchronizing single and multi-output edges into node inputs."""
+    split_node = LogicalNode(id="split", op_type="Split", outputs=["s0", "s1"])
+    consumer_node = LogicalNode(id="cons", op_type="Add", inputs=["old_input"])
+    graph = LogicalGraph(nodes={"split": split_node, "cons": consumer_node})
+
+    graph.edges = [
+        LogicalEdge(source="split", target="cons", source_idx=1),
+        LogicalEdge(source="split", target="cons", source_idx=1),
+        LogicalEdge(source="external_input", target="cons", source_idx=None),
+        LogicalEdge(source="split", target="nonexistent_target", source_idx=0),
+    ]
+    assert graph.nodes["split"].inputs == []
+    assert graph.nodes["cons"].inputs == ["s1", "external_input"]

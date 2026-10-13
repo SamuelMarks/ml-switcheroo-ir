@@ -204,6 +204,45 @@ class ParameterTranslationEngine:
         if not self.translations:
             self._load_default_translations(concept_map_path)
 
+    def _merge_fallback_translations(self) -> None:
+        """Merge canonical fallback translations into self.translations without overwriting."""
+        for op, op_dict in _CANONICAL_FALLBACK_TRANSLATIONS.items():
+            if op not in self.translations:
+                self.translations[op] = op_dict
+                continue
+            roles = self.translations[op].setdefault("roles", {})
+            for r_name, r_map in op_dict.get("roles", {}).items():
+                if r_name not in roles:
+                    roles[r_name] = r_map
+                else:
+                    for fw, fw_params in r_map.items():
+                        if fw not in roles[r_name]:
+                            roles[r_name][fw] = list(fw_params)
+                        else:
+                            for p in fw_params:
+                                if p not in roles[r_name][fw]:
+                                    roles[r_name][fw].append(p)
+
+    def _canonicalize_role_aliases(self) -> None:
+        """Synchronize role aliases (e.g. 'kernel' <-> 'weight') across all operations."""
+        role_aliases = {"kernel": "weight"}
+        for op_data in self.translations.values():
+            roles = op_data.get("roles", {})
+            for alias, canonical in role_aliases.items():
+                if alias in roles and canonical in roles:
+                    for fw, fw_params in roles[alias].items():
+                        if fw not in roles[canonical]:
+                            roles[canonical][fw] = list(fw_params)
+                        else:
+                            for p in fw_params:
+                                if p not in roles[canonical][fw]:
+                                    roles[canonical][fw].append(p)
+                    roles[alias] = roles[canonical]
+                elif alias in roles:
+                    roles[canonical] = roles[alias]
+                elif canonical in roles:
+                    roles[alias] = roles[canonical]
+
     def _load_default_translations(self, path: str | None = None) -> None:
         """Load default translations from concept_map.json in snapshot directory or package root.
 
@@ -230,43 +269,8 @@ class ParameterTranslationEngine:
                 except (json.JSONDecodeError, OSError):
                     pass
         if path is None:
-            for op, op_dict in _CANONICAL_FALLBACK_TRANSLATIONS.items():
-                if op not in self.translations:
-                    self.translations[op] = op_dict
-                else:
-                    roles = self.translations[op].setdefault("roles", {})
-                    fb_roles = op_dict.get("roles", {})
-                    for r_name, r_map in fb_roles.items():
-                        if r_name not in roles:
-                            roles[r_name] = r_map
-                        else:
-                            for fw, fw_params in r_map.items():
-                                if fw not in roles[r_name]:
-                                    roles[r_name][fw] = list(fw_params)
-                                else:
-                                    for p in fw_params:
-                                        if p not in roles[r_name][fw]:
-                                            roles[r_name][fw].append(p)
-
-        # Canonicalize roles
-        ROLE_ALIASES = {"kernel": "weight"}
-        for op_data in self.translations.values():
-            roles = op_data.get("roles", {})
-            for alias, canonical in ROLE_ALIASES.items():
-                if alias in roles and canonical in roles:
-                    # Merge alias into canonical
-                    for fw, fw_params in roles[alias].items():
-                        if fw not in roles[canonical]:
-                            roles[canonical][fw] = list(fw_params)
-                        else:
-                            for p in fw_params:
-                                if p not in roles[canonical][fw]:
-                                    roles[canonical][fw].append(p)
-                    roles[alias] = roles[canonical]
-                elif alias in roles:
-                    roles[canonical] = roles[alias]
-                elif canonical in roles:
-                    roles[alias] = roles[canonical]
+            self._merge_fallback_translations()
+        self._canonicalize_role_aliases()
 
     def translate_parameter(
         self,
@@ -373,9 +377,6 @@ class ParameterTranslationEngine:
 
         Returns:
             str: Translated weight identifier.
-
-        Raises:
-            KeyError: If layer_type or weight_name is unrecognized.
         """
         op = layer_type.lower().strip()
         if op in ("layernorm", "layer_norm"):

@@ -1,6 +1,9 @@
 """Tests for the Ghost Protocol schema in ml_switcheroo_ir."""
 
+import json
+
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from ml_switcheroo_ir.schema.ghost import (
     GhostParam,
@@ -185,11 +188,6 @@ def test_extended_ghost_param_normalization() -> None:
     )
     assert env.operations == [{"name": "arith.addi"}]
     assert env.instructions == [{"name": "V_ADD_F32"}]
-
-
-import json
-
-from pydantic import BaseModel, ValidationError
 
 
 def test_parameter_kind_enum_roundtrip() -> None:

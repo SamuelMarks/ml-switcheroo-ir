@@ -41,6 +41,12 @@ test = ["requirements-test.txt"]
 [tool.ruff]
 exclude = ["third_party"]
 
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "D100", "D101", "D102", "D103", "D104", "D105", "D107", "D401", "D417"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [tool.hatch.metadata]
 allow-direct-references = true
 

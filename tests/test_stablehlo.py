@@ -50,7 +50,14 @@ def test_find_schema_file_branches() -> None:
 
         # 4. Sibling schema path fallback
         def mock_is_file_sibling(self: Path) -> bool:
-            """Check if path string contains schema."""
+            """Check if path string contains schema.
+
+            Args:
+                self (Path): Candidate path instance.
+
+            Returns:
+                bool: True if 'schema' is in the path string.
+            """
             return "schema" in str(self)
 
         with mock.patch.object(Path, "is_file", mock_is_file_sibling):

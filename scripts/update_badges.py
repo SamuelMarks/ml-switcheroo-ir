@@ -340,7 +340,7 @@ def update_readme(
 
 
 def main(args: list[str] | None = None) -> int:
-    """Main CLI entry point for badge update and enforcement.
+    """Run main CLI entry point for badge update and enforcement.
 
     Args:
         args: Command-line arguments list or None for sys.argv[1:].

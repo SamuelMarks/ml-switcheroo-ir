@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
 
-from ml_switcheroo_ir.schema.custom_ops import CustomAttributeSchema, CustomOpSchema
-from ml_switcheroo_ir.schema.onnx_registry import OpSchema
+from ml_switcheroo_ir.schema.base import (
+    CustomOpSchema,
+    OpSchema,
+    load_op_schema_catalog,
+)
 from ml_switcheroo_ir.snapshots import find_schema_file
 
 PTX_REGISTRY: dict[str, OpSchema] = {}
@@ -129,32 +130,12 @@ def _load_schema_file(
     Returns:
         dict[str, OpSchema]: Mapping from operator names to OpSchema definitions.
     """
-    registry: dict[str, OpSchema] = {}
-    target = find_schema_file(filename, override_path=json_path)
-    if target and target.exists():
-        with open(target, "r", encoding="utf-8") as f:
-            data: dict[str, Any] = json.load(f)
-        for op_data in data.get("ops", []):
-            name = str(op_data["name"])
-            domain = str(op_data.get("domain", domain_default))
-            attrs = [
-                CustomAttributeSchema(
-                    name=a["name"],
-                    type=a.get("type", "str"),
-                    required=a.get("required", False),
-                    default=a.get("default", None),
-                )
-                for a in op_data.get("attributes", [])
-            ]
-            schema = CustomOpSchema(
-                name=name,
-                domain=domain,
-                attributes=attrs,
-                inputs=op_data.get("inputs", []),
-                outputs=op_data.get("outputs", []),
-            )
-            registry[schema.name] = schema.to_op_schema()
-    return registry
+    return load_op_schema_catalog(
+        filename,
+        domain_default=domain_default,
+        json_path=json_path,
+        find_file_fn=find_schema_file,
+    )
 
 
 def _initialize_low_level_registries() -> None:

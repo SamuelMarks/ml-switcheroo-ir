@@ -47,14 +47,13 @@ except ImportError:
 
 
 def _parse_graph_from_json(json_str: str) -> LogicalGraph:
-    """Parses a LogicalGraph from a JSON string.
+    """Parse a LogicalGraph from a JSON string.
 
     Args:
         json_str (str): The JSON string.
 
     Returns:
         LogicalGraph: The parsed graph object.
-
     """
     return LogicalGraph.from_json(json_str)
 
@@ -129,6 +128,303 @@ def _verify_backend(file_path: str, class_name: str) -> None:
     print_report()
 
 
+def _handle_toposort(parsed_args: argparse.Namespace) -> None:
+    """Execute the 'toposort' CLI subcommand.
+
+    Args:
+        parsed_args (argparse.Namespace): Parsed CLI arguments.
+    """
+    json_data = parsed_args.infile.read()
+    graph = _parse_graph_from_json(json_data)
+    sorted_nodes = topological_sort(graph)
+    print("Topological Order:")
+    for node in sorted_nodes:
+        print(f" - {node.id} ({node.op_type})")
+
+
+def _handle_validate(parsed_args: argparse.Namespace) -> None:
+    """Execute the 'validate' CLI subcommand.
+
+    Args:
+        parsed_args (argparse.Namespace): Parsed CLI arguments.
+    """
+    from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+
+    json_data = parsed_args.infile.read()
+    graph = _parse_graph_from_json(json_data)
+
+    registry = Registry()
+    if parsed_args.custom_ops:
+        registry.load_custom_ops_from_json(parsed_args.custom_ops)
+
+    merged_schemas = {**ONNX_REGISTRY, **registry.schemas}
+    validator = Validator(registry=merged_schemas)
+    errors = validator.validate_graph(graph)
+
+    if not errors:
+        print("Graph is valid.")
+        sys.exit(0)
+
+    has_errors = False
+    grouped_errors: dict[str, list[ValidationError]] = {}
+    for err in errors:
+        if err.level == ValidationLevel.ERROR or parsed_args.strict:
+            has_errors = True
+        grouped_errors.setdefault(err.node_id, []).append(err)
+
+    for node_id, errs in grouped_errors.items():
+        print(f"Node {node_id}:")
+        for err in errs:
+            level_str = (
+                "ERROR"
+                if err.level == ValidationLevel.ERROR or parsed_args.strict
+                else "WARNING"
+            )
+            print(f"  [{level_str}] {err.attribute}: {err.message}")
+
+    sys.exit(1 if has_errors else 0)
+
+
+def _handle_list_ops(parsed_args: argparse.Namespace) -> None:
+    """Execute the 'list-ops' CLI subcommand.
+
+    Args:
+        parsed_args (argparse.Namespace): Parsed CLI arguments.
+    """
+    from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
+    from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+    from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
+
+    seen_ops: set[tuple[str, str]] = set()
+    schemas = []
+    for reg in (ONNX_REGISTRY, CUSTOM_OPS_REGISTRY, STABLEHLO_REGISTRY):
+        for s in reg.values():
+            key = (s.domain, s.name)
+            if key not in seen_ops:
+                seen_ops.add(key)
+                schemas.append(s)
+
+    if parsed_args.domain:
+        schemas = [s for s in schemas if s.domain == parsed_args.domain]
+
+    if parsed_args.search:
+        pattern = re.compile(parsed_args.search)
+        schemas = [s for s in schemas if pattern.search(s.name)]
+
+    table_data = []
+    for s in sorted(schemas, key=lambda x: x.name):
+        req_args = [name for name, attr in s.attributes.items() if attr.required]
+        opt_args = [name for name, attr in s.attributes.items() if not attr.required]
+        table_data.append([s.name, s.domain, ", ".join(req_args), ", ".join(opt_args)])
+
+    print(
+        tabulate(
+            table_data,
+            headers=["Op Name", "Domain", "Required Args", "Optional Args"],
+        )
+    )
+
+
+def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
+    """Execute the 'dump-snapshot' CLI subcommand.
+
+    Args:
+        parsed_args (argparse.Namespace): Parsed CLI arguments.
+    """
+    import datetime
+    from typing import Any
+
+    from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
+    from ml_switcheroo_ir.schema.ghost import (
+        ExtendedGhostParam,
+        GhostMlirRef,
+        GhostParam,
+        GhostRef,
+        IRParameterRole,
+        ParameterKind,
+        SnapshotEnvelope,
+    )
+    from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+    from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
+
+    snapshot_entries: dict[str, dict[str, Any]] = {}
+    onnx_list: list[dict[str, Any]] = []
+    custom_list: list[dict[str, Any]] = []
+    stablehlo_list: list[dict[str, Any]] = []
+
+    for op_name, schema in ONNX_REGISTRY.items():
+        params = [
+            GhostParam(
+                name=inp,
+                kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+                default=None,
+                annotation="Tensor",
+            )
+            for inp in schema.inputs
+        ] + [
+            GhostParam(
+                name=attr_name,
+                kind=ParameterKind.KEYWORD_ONLY,
+                default=str(attr.default) if attr.default is not None else None,
+                annotation=attr.type,
+            )
+            for attr_name, attr in schema.attributes.items()
+        ]
+        ghost_ref = GhostRef(
+            name=op_name,
+            api_path=f"{schema.domain}.{op_name}",
+            kind="function",
+            params=params,
+            returns_type="Tensor",
+            docstring=f"ONNX operator {op_name} in domain {schema.domain}",
+            has_varargs=False,
+            schema_version="2.0.0",
+        )
+        dumped = ghost_ref.model_dump()
+        snapshot_entries[f"{schema.domain}.{op_name}"] = dumped
+        onnx_list.append(dumped)
+
+    for op_name, schema in CUSTOM_OPS_REGISTRY.items():
+        params = [
+            GhostParam(
+                name=inp,
+                kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+                default=None,
+                annotation="Tensor",
+            )
+            for inp in schema.inputs
+        ] + [
+            GhostParam(
+                name=attr_name,
+                kind=ParameterKind.KEYWORD_ONLY,
+                default=str(attr.default) if attr.default is not None else None,
+                annotation=attr.type,
+            )
+            for attr_name, attr in schema.attributes.items()
+        ]
+        ghost_ref = GhostRef(
+            name=op_name,
+            api_path=f"{schema.domain}.{op_name}",
+            kind="function",
+            params=params,
+            returns_type="Tensor",
+            docstring=f"Custom operator {op_name} in domain {schema.domain}",
+            has_varargs=False,
+            schema_version="2.0.0",
+        )
+        dumped = ghost_ref.model_dump()
+        snapshot_entries[f"{schema.domain}.{op_name}"] = dumped
+        custom_list.append(dumped)
+
+    for op_name, schema in STABLEHLO_REGISTRY.items():
+        operands: list[ExtendedGhostParam | GhostParam] = [
+            ExtendedGhostParam(
+                name=inp,
+                kind=ParameterKind.POSITIONAL_OR_KEYWORD,
+                role=IRParameterRole.OPERAND,
+            )
+            for inp in schema.inputs
+        ]
+        attrs_dict: dict[str, Any] = {
+            attr_name: {
+                "type": attr.type,
+                "default": attr.default,
+                "required": attr.required,
+            }
+            for attr_name, attr in schema.attributes.items()
+        }
+        mlir_ref = GhostMlirRef(
+            name=op_name,
+            api_path=f"{schema.domain}.{op_name}",
+            kind="function",
+            domain_type="mlir",
+            operands=operands,
+            attributes=attrs_dict,
+            docstring=f"StableHLO operator {op_name} in domain {schema.domain}",
+            schema_version="2.0.0",
+        )
+        dumped = mlir_ref.model_dump()
+        snapshot_entries[f"{schema.domain}.{op_name}"] = dumped
+        stablehlo_list.append(dumped)
+
+    envelope = SnapshotEnvelope(
+        schema_version="2.0.0",
+        target="ml-switcheroo-ir",
+        generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        environment={"source": "ml_switcheroo_ir.schema"},
+        categories={
+            "onnx": onnx_list,
+            "custom": custom_list,
+            "stablehlo": stablehlo_list,
+        },
+    )
+    data_to_dump = envelope.model_dump()
+    data_to_dump.update(snapshot_entries)
+
+    with open(parsed_args.output, "w", encoding="utf-8") as f:
+        json.dump(data_to_dump, f, indent=2, sort_keys=True)
+    print(f"Dumped snapshot to {parsed_args.output}")
+
+
+def _handle_ground(parsed_args: argparse.Namespace) -> None:
+    """Execute the 'ground' CLI subcommand.
+
+    Args:
+        parsed_args (argparse.Namespace): Parsed CLI arguments.
+    """
+    from ml_switcheroo_ir.validator import audit_graph_grounding
+
+    json_data = parsed_args.infile.read()
+    graph = _parse_graph_from_json(json_data)
+    report = audit_graph_grounding(graph, snapshots_path=parsed_args.snapshots_dir)
+
+    print(
+        f"Grounding Audit: {report.grounded_count}/{report.total_nodes} nodes grounded. "
+        f"Hallucination score: {report.hallucination_score:.1%}"
+    )
+
+    if report.diagnostics:
+        for err in report.diagnostics:
+            print(
+                f"  [{err.level.value}] Node {err.node_id} ({err.attribute}): {err.message}"
+            )
+        sys.exit(1)
+    print("Graph is fully grounded against framework snapshots.")
+    sys.exit(0)
+
+
+def _handle_export_schema(parsed_args: argparse.Namespace) -> None:
+    """Execute the 'export-schema' CLI subcommand.
+
+    Args:
+        parsed_args (argparse.Namespace): Parsed CLI arguments.
+    """
+    from ml_switcheroo_ir.export import (
+        export_schemas,
+        generate_typescript_definitions,
+        get_json_schema,
+    )
+
+    if parsed_args.out_dir:
+        exported = export_schemas(
+            parsed_args.out_dir, include_typescript=parsed_args.typescript
+        )
+        print(f"Exported {len(exported)} schemas to {parsed_args.out_dir}:")
+        for k, v in exported.items():
+            print(f" - {k}: {v}")
+    elif parsed_args.ts_out:
+        ts_code = generate_typescript_definitions()
+        Path(parsed_args.ts_out).parent.mkdir(parents=True, exist_ok=True)
+        with open(parsed_args.ts_out, "w", encoding="utf-8") as f:
+            f.write(ts_code)
+        print(f"Exported TypeScript interfaces to {parsed_args.ts_out}")
+    elif parsed_args.typescript:
+        print(generate_typescript_definitions())
+    else:
+        exported_schema = get_json_schema(parsed_args.target)
+        print(json.dumps(exported_schema, indent=2, sort_keys=True))
+
+
 def main(args: list[str] | None = None) -> None:
     """Entrypoint for the CLI.
 
@@ -144,7 +440,6 @@ def main(args: list[str] | None = None) -> None:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Toposort command
     sort_parser = subparsers.add_parser(
         "toposort", help="Topologically sort a graph from JSON"
     )
@@ -152,7 +447,6 @@ def main(args: list[str] | None = None) -> None:
         "infile", type=argparse.FileType("r"), help="Input JSON file"
     )
 
-    # Verify backend command
     verify_parser = subparsers.add_parser(
         "verify-backend", help="Verify a backend implementation against IR interfaces"
     )
@@ -163,7 +457,6 @@ def main(args: list[str] | None = None) -> None:
         "class_name", type=str, help="Name of the class to verify"
     )
 
-    # Validate command
     validate_parser = subparsers.add_parser(
         "validate", help="Validate a graph against the operator schema"
     )
@@ -177,7 +470,6 @@ def main(args: list[str] | None = None) -> None:
         "--custom-ops", type=str, help="Path to a custom ops JSON file"
     )
 
-    # List ops command
     list_ops_parser = subparsers.add_parser(
         "list-ops", help="List registered operators"
     )
@@ -186,7 +478,6 @@ def main(args: list[str] | None = None) -> None:
         "--search", type=str, help="Regex search operator names"
     )
 
-    # Compliance command
     compliance_parser = subparsers.add_parser(
         "compliance",
         help="Check compliance of Python code against ml-switcheroo-ir IR or DIALECT",
@@ -207,7 +498,6 @@ def main(args: list[str] | None = None) -> None:
         help="Print a detailed markdown checklist of missing operations",
     )
 
-    # Dump snapshot command
     dump_parser = subparsers.add_parser(
         "dump-snapshot",
         help="Dump all classes, methods, parameters, and ops to GhostRef format JSON",
@@ -220,7 +510,6 @@ def main(args: list[str] | None = None) -> None:
         help="Path to output JSON file",
     )
 
-    # Ground command
     ground_parser = subparsers.add_parser(
         "ground",
         help="Ground and audit a graph against ground-truth framework snapshots",
@@ -237,7 +526,6 @@ def main(args: list[str] | None = None) -> None:
         help="Path to snapshot JSON file or directory",
     )
 
-    # Export schema command
     export_parser = subparsers.add_parser(
         "export-schema",
         help="Export canonical JSON Schema definitions and TypeScript interfaces",
@@ -272,58 +560,11 @@ def main(args: list[str] | None = None) -> None:
     parsed_args = parser.parse_args(args)
 
     if parsed_args.command == "toposort":
-        json_data = parsed_args.infile.read()
-        graph = _parse_graph_from_json(json_data)
-        sorted_nodes = topological_sort(graph)
-        print("Topological Order:")
-        for node in sorted_nodes:
-            print(f" - {node.id} ({node.op_type})")
-
+        _handle_toposort(parsed_args)
     elif parsed_args.command == "verify-backend":
         _verify_backend(parsed_args.file_path, parsed_args.class_name)
-
     elif parsed_args.command == "validate":
-        json_data = parsed_args.infile.read()
-        graph = _parse_graph_from_json(json_data)
-
-        registry = Registry()
-        if parsed_args.custom_ops:
-            registry.load_custom_ops_from_json(parsed_args.custom_ops)
-
-        # Merge with base ONNX registry inside Validator
-        from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
-
-        merged_schemas = {**ONNX_REGISTRY, **registry.schemas}
-        validator = Validator(registry=merged_schemas)
-
-        errors = validator.validate_graph(graph)
-
-        if not errors:
-            print("Graph is valid.")
-            sys.exit(0)
-
-        has_errors = False
-        grouped_errors: dict[str, list[ValidationError]] = {}
-        for err in errors:
-            if err.level == ValidationLevel.ERROR or parsed_args.strict:
-                has_errors = True
-            grouped_errors.setdefault(err.node_id, []).append(err)
-
-        for node_id, errs in grouped_errors.items():
-            print(f"Node {node_id}:")
-            for err in errs:
-                level_str = (
-                    "ERROR"
-                    if err.level == ValidationLevel.ERROR or parsed_args.strict
-                    else "WARNING"
-                )
-                print(f"  [{level_str}] {err.attribute}: {err.message}")
-
-        if has_errors:
-            sys.exit(1)
-        else:
-            sys.exit(0)
-
+        _handle_validate(parsed_args)
     elif parsed_args.command == "compliance":
         from ml_switcheroo_ir.compliance import run_compliance_check
 
@@ -333,234 +574,14 @@ def main(args: list[str] | None = None) -> None:
             mapping_file=parsed_args.mapping,
             warn=False,
         )
-
     elif parsed_args.command == "list-ops":
-        from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
-        from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
-        from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
-
-        seen_ops: set[tuple[str, str]] = set()
-        schemas = []
-        for reg in (ONNX_REGISTRY, CUSTOM_OPS_REGISTRY, STABLEHLO_REGISTRY):
-            for s in reg.values():
-                key = (s.domain, s.name)
-                if key not in seen_ops:
-                    seen_ops.add(key)
-                    schemas.append(s)
-
-        if parsed_args.domain:
-            schemas = [s for s in schemas if s.domain == parsed_args.domain]
-
-        if parsed_args.search:
-            pattern = re.compile(parsed_args.search)
-            schemas = [s for s in schemas if pattern.search(s.name)]
-
-        table_data = []
-        for s in sorted(schemas, key=lambda x: x.name):
-            req_args = [name for name, attr in s.attributes.items() if attr.required]
-            opt_args = [
-                name for name, attr in s.attributes.items() if not attr.required
-            ]
-            table_data.append(
-                [s.name, s.domain, ", ".join(req_args), ", ".join(opt_args)]
-            )
-
-        print(
-            tabulate(
-                table_data,
-                headers=["Op Name", "Domain", "Required Args", "Optional Args"],
-            )
-        )
-
+        _handle_list_ops(parsed_args)
     elif parsed_args.command == "dump-snapshot":
-        import datetime
-        from typing import Any
-
-        from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
-        from ml_switcheroo_ir.schema.ghost import (
-            ExtendedGhostParam,
-            GhostMlirRef,
-            GhostParam,
-            GhostRef,
-            IRParameterRole,
-            ParameterKind,
-            SnapshotEnvelope,
-        )
-        from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
-        from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
-
-        snapshot_entries: dict[str, dict[str, Any]] = {}
-        onnx_list: list[dict[str, Any]] = []
-        custom_list: list[dict[str, Any]] = []
-        stablehlo_list: list[dict[str, Any]] = []
-
-        # Dump ONNX operators
-        for op_name, schema in ONNX_REGISTRY.items():
-            params = []
-            for inp in schema.inputs:
-                params.append(
-                    GhostParam(
-                        name=inp,
-                        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
-                        default=None,
-                        annotation="Tensor",
-                    )
-                )
-            for attr_name, attr in schema.attributes.items():
-                params.append(
-                    GhostParam(
-                        name=attr_name,
-                        kind=ParameterKind.KEYWORD_ONLY,
-                        default=str(attr.default) if attr.default is not None else None,
-                        annotation=attr.type,
-                    )
-                )
-            ghost_ref = GhostRef(
-                name=op_name,
-                api_path=f"{schema.domain}.{op_name}",
-                kind="function",
-                params=params,
-                returns_type="Tensor",
-                docstring=f"ONNX operator {op_name} in domain {schema.domain}",
-                has_varargs=False,
-                schema_version="2.0.0",
-            )
-            dumped = ghost_ref.model_dump()
-            snapshot_entries[f"{schema.domain}.{op_name}"] = dumped
-            onnx_list.append(dumped)
-
-        # Dump Custom operators
-        for op_name, schema in CUSTOM_OPS_REGISTRY.items():
-            params = []
-            for inp in schema.inputs:
-                params.append(
-                    GhostParam(
-                        name=inp,
-                        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
-                        default=None,
-                        annotation="Tensor",
-                    )
-                )
-            for attr_name, attr in schema.attributes.items():
-                params.append(
-                    GhostParam(
-                        name=attr_name,
-                        kind=ParameterKind.KEYWORD_ONLY,
-                        default=str(attr.default) if attr.default is not None else None,
-                        annotation=attr.type,
-                    )
-                )
-            ghost_ref = GhostRef(
-                name=op_name,
-                api_path=f"{schema.domain}.{op_name}",
-                kind="function",
-                params=params,
-                returns_type="Tensor",
-                docstring=f"Custom operator {op_name} in domain {schema.domain}",
-                has_varargs=False,
-                schema_version="2.0.0",
-            )
-            dumped = ghost_ref.model_dump()
-            snapshot_entries[f"{schema.domain}.{op_name}"] = dumped
-            custom_list.append(dumped)
-
-        # Dump StableHLO operators
-        for op_name, schema in STABLEHLO_REGISTRY.items():
-            operands: list[ExtendedGhostParam | GhostParam] = []
-            for inp in schema.inputs:
-                operands.append(
-                    ExtendedGhostParam(
-                        name=inp,
-                        kind=ParameterKind.POSITIONAL_OR_KEYWORD,
-                        role=IRParameterRole.OPERAND,
-                    )
-                )
-            attrs_dict: dict[str, Any] = {}
-            for attr_name, attr in schema.attributes.items():
-                attrs_dict[attr_name] = {
-                    "type": attr.type,
-                    "default": attr.default,
-                    "required": attr.required,
-                }
-            mlir_ref = GhostMlirRef(
-                name=op_name,
-                api_path=f"{schema.domain}.{op_name}",
-                kind="function",
-                domain_type="mlir",
-                operands=operands,
-                attributes=attrs_dict,
-                docstring=f"StableHLO operator {op_name} in domain {schema.domain}",
-                schema_version="2.0.0",
-            )
-            dumped = mlir_ref.model_dump()
-            snapshot_entries[f"{schema.domain}.{op_name}"] = dumped
-            stablehlo_list.append(dumped)
-
-        envelope = SnapshotEnvelope(
-            schema_version="2.0.0",
-            target="ml-switcheroo-ir",
-            generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            environment={"source": "ml_switcheroo_ir.schema"},
-            categories={
-                "onnx": onnx_list,
-                "custom": custom_list,
-                "stablehlo": stablehlo_list,
-            },
-        )
-        data_to_dump = envelope.model_dump()
-        data_to_dump.update(snapshot_entries)
-
-        with open(parsed_args.output, "w", encoding="utf-8") as f:
-            json.dump(data_to_dump, f, indent=2, sort_keys=True)
-        print(f"Dumped snapshot to {parsed_args.output}")
-
+        _handle_dump_snapshot(parsed_args)
     elif parsed_args.command == "ground":
-        from ml_switcheroo_ir.validator import audit_graph_grounding
-
-        json_data = parsed_args.infile.read()
-        graph = _parse_graph_from_json(json_data)
-        report = audit_graph_grounding(graph, snapshots_path=parsed_args.snapshots_dir)
-
-        print(
-            f"Grounding Audit: {report.grounded_count}/{report.total_nodes} nodes grounded. "
-            f"Hallucination score: {report.hallucination_score:.1%}"
-        )
-
-        if report.diagnostics:
-            for err in report.diagnostics:
-                print(
-                    f"  [{err.level.value}] Node {err.node_id} ({err.attribute}): {err.message}"
-                )
-            sys.exit(1)
-        else:
-            print("Graph is fully grounded against framework snapshots.")
-            sys.exit(0)
-
+        _handle_ground(parsed_args)
     elif parsed_args.command == "export-schema":
-        from ml_switcheroo_ir.export import (
-            export_schemas,
-            generate_typescript_definitions,
-            get_json_schema,
-        )
-
-        if parsed_args.out_dir:
-            exported = export_schemas(
-                parsed_args.out_dir, include_typescript=parsed_args.typescript
-            )
-            print(f"Exported {len(exported)} schemas to {parsed_args.out_dir}:")
-            for k, v in exported.items():
-                print(f" - {k}: {v}")
-        elif parsed_args.ts_out:
-            ts_code = generate_typescript_definitions()
-            Path(parsed_args.ts_out).parent.mkdir(parents=True, exist_ok=True)
-            with open(parsed_args.ts_out, "w", encoding="utf-8") as f:
-                f.write(ts_code)
-            print(f"Exported TypeScript interfaces to {parsed_args.ts_out}")
-        elif parsed_args.typescript:
-            print(generate_typescript_definitions())
-        else:
-            exported_schema = get_json_schema(parsed_args.target)
-            print(json.dumps(exported_schema, indent=2, sort_keys=True))
+        _handle_export_schema(parsed_args)
 
 
 if __name__ == "__main__":

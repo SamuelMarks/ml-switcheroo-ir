@@ -1,10 +1,16 @@
+"""Pytest configuration and benchmark collection hooks for ml-switcheroo-ir."""
+
 from __future__ import annotations
 
 import pytest
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Add pytest options."""
+    """Add custom command-line options to pytest.
+
+    Args:
+        parser (pytest.Parser): Pytest command-line argument parser.
+    """
     parser.addoption(
         "--run-benchmarks",
         action="store_true",
@@ -14,14 +20,23 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Configure pytest markers."""
+    """Configure custom pytest markers.
+
+    Args:
+        config (pytest.Config): Pytest configuration object.
+    """
     config.addinivalue_line("markers", "benchmark: mark test as a heavy benchmark")
 
 
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Modify collection for benchmarks."""
+    """Skip benchmark tests unless --run-benchmarks is explicitly supplied.
+
+    Args:
+        config (pytest.Config): Pytest configuration object.
+        items (list[pytest.Item]): Collected test items.
+    """
     if config.getoption("--run-benchmarks"):
         return
     skip_bench = pytest.mark.skip(reason="need --run-benchmarks option to run")
