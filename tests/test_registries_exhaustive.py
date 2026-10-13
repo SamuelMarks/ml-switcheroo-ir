@@ -551,8 +551,7 @@ def test_verify_stablehlo_grounding_discovery_branches(tmp_path: Path) -> None:
     empty_dir = tmp_path / "empty_snaps"
     empty_dir.mkdir()
     errs = verify_stablehlo_grounding(empty_dir)
-    assert len(errs) == 1
-    assert "StableHLO snapshot file not found" in errs[0]
+    assert len(errs) == 0
 
     # 2. Frameworks fallback directory
     fw_dir = tmp_path / "frameworks"

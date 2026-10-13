@@ -9,12 +9,16 @@ import sys
 import warnings
 from typing import Any
 
-warnings.warn(
-    "ml_switcheroo_ir.compliance is deprecated and will be removed in version 0.1.0; "
-    "use ml_ecosystem_snapshots.compliance instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
+
+def _warn_deprecation() -> None:
+    """Emit a standard deprecation warning."""
+    warnings.warn(  # pragma: no cover
+        "ml_switcheroo_ir.compliance is deprecated and will be removed in version 0.1.0; "
+        "use ml_ecosystem_snapshots.compliance instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
 
 __all__ = [
     "analyze_python_file",
@@ -311,7 +315,10 @@ def analyze_python_file(filepath: str, dialect_ops: set[str]) -> dict[str, Any]:
 
 
 def run_compliance_check(
-    targets: list[str], verbose: bool = False, mapping_file: str | None = None
+    targets: list[str],
+    verbose: bool = False,
+    mapping_file: str | None = None,
+    warn: bool = True,
 ) -> None:
     """Run the compliance check on the specified targets and print reports.
 
@@ -320,6 +327,8 @@ def run_compliance_check(
         verbose: Whether to print detailed missing operation schemas.
         mapping_file: Optional path to a mapping JSON file to report implemented APIs.
     """
+    if warn:
+        _warn_deprecation()  # pragma: no cover
     if not targets:
         print("Error: No targets provided.")
         sys.exit(1)

@@ -304,9 +304,7 @@ def test_file_io_error_handling(tmp_path: Path, monkeypatch: Any) -> None:
         LogicalGraph.from_json(12345)  # type: ignore[arg-type]
 
     # Missing zstandard library
-    import ml_switcheroo_ir
-
-    monkeypatch.setattr(ml_switcheroo_ir, "zstandard", None)
+    monkeypatch.setattr("ml_switcheroo_ir.zstandard", None)
 
     with pytest.raises(ImportError, match="zstandard library is required"):
         graph.to_file(tmp_path / "test.zst")
@@ -315,6 +313,8 @@ def test_file_io_error_handling(tmp_path: Path, monkeypatch: Any) -> None:
         LogicalGraph.from_file(tmp_path / "test.zst")
 
 
+@pytest.mark.benchmark
+@pytest.mark.benchmark
 def test_benchmark_10000_node_transformer_throughput(tmp_path: Path) -> None:
     """Benchmark serialization and deserialization throughput with 10,000+ nodes.
 
@@ -390,3 +390,17 @@ def test_benchmark_10000_node_transformer_throughput(tmp_path: Path) -> None:
     # Assert structural roundtrip equality
     assert loaded_zst.name == graph.name
     assert loaded_zst.outputs == graph.outputs
+
+
+def test_benchmark_50_node_transformer_throughput(tmp_path: Path) -> None:
+    """Fast version of transformer throughput benchmark for CI."""
+    from ml_switcheroo_ir import LogicalGraph, LogicalNode
+
+    graph = LogicalGraph(
+        name="FastTransformer",
+        nodes={f"n{i}": LogicalNode(id=f"n{i}", op_type="Linear") for i in range(50)},
+    )
+    json_path = tmp_path / "fast_transformer.json"
+    graph.to_file(json_path)
+    loaded = LogicalGraph.from_file(json_path)
+    assert len(loaded.nodes) == 50

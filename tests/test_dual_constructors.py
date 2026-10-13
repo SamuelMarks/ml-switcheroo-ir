@@ -252,14 +252,20 @@ class DummyShape:
 
 
 def test_logical_node_bad_shape_and_arbitrary_object() -> None:
-    """Test LogicalNode initialization with non-iterable BadShape and arbitrary objects."""
-    bad_shape = BadShape()
-    node = LogicalNode(id="n1", op_type="CustomOp", shape_metadata=bad_shape)
-    assert node.shape_metadata is bad_shape
+    """Test behavior when passing unsupported shape metadata types and arbitrary objects."""
+    from ml_switcheroo_ir import LogicalNode
 
-    arb = ArbitraryObject()
-    node2 = LogicalNode(id="n2", op_type="CustomOp", shape_metadata=arb)
-    assert node2.shape_metadata is arb
+    class BadShape:
+        """A class simulating an invalid shape."""
+
+    bad_shape = BadShape()
+    node4 = LogicalNode(id="n4", op_type="Linear", shape_metadata=bad_shape)
+    assert node4.shape_metadata == bad_shape
+
+    # Arbitrary object (fallback to original reference without tuple conversion)
+    obj = object()
+    node5 = LogicalNode(id="n5", op_type="Custom", shape_metadata=obj)
+    assert node5.shape_metadata == obj
 
 
 def test_logical_node_duck_typed_shape() -> None:

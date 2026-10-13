@@ -17,7 +17,7 @@ def test_cli_compliance_no_targets(capsys: pytest.CaptureFixture[str]) -> None:
 def test_cli_compliance_empty_targets(capsys: pytest.CaptureFixture[str]) -> None:
     """Test."""
     with pytest.raises(SystemExit):
-        run_compliance_check([])
+        run_compliance_check([], warn=False)
 
 
 def test_cli_compliance_invalid_json(

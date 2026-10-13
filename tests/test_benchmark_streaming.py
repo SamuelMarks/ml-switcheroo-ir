@@ -51,6 +51,7 @@ def _build_large_streaming_graph(num_nodes: int = 10005) -> LogicalGraph:
     )
 
 
+@pytest.mark.benchmark
 def test_streaming_json_roundtrip_10000_nodes(tmp_path: Path) -> None:
     """Benchmark and test streaming serialization/deserialization on 10,000+ nodes.
 
@@ -98,6 +99,7 @@ def test_streaming_json_roundtrip_10000_nodes(tmp_path: Path) -> None:
     assert gz_read_time < 30.0
 
 
+@pytest.mark.benchmark
 def test_streaming_zstd_roundtrip_10000_nodes(tmp_path: Path) -> None:
     """Benchmark and test zstd streaming roundtrip on 10,000+ nodes if zstandard installed.
 
@@ -142,3 +144,31 @@ def test_streaming_zstd_missing_dependency(
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
     with pytest.raises(pytest.skip.Exception):
         test_streaming_zstd_roundtrip_10000_nodes(tmp_path)
+
+
+def test_streaming_json_roundtrip_50_nodes(tmp_path: Path) -> None:
+    """Fast version of streaming JSON benchmark for CI."""
+    from ml_switcheroo_ir import LogicalGraph, LogicalNode
+
+    graph = LogicalGraph(
+        name="FastJSON",
+        nodes={f"n{i}": LogicalNode(id=f"n{i}", op_type="Relu") for i in range(50)},
+    )
+    json_path = tmp_path / "fast.json"
+    graph.to_file(json_path)
+    loaded = LogicalGraph.from_file(json_path)
+    assert len(loaded.nodes) == 50
+
+
+def test_streaming_zstd_roundtrip_50_nodes(tmp_path: Path) -> None:
+    """Fast version of streaming ZSTD benchmark for CI."""
+    from ml_switcheroo_ir import LogicalGraph, LogicalNode
+
+    graph = LogicalGraph(
+        name="FastZSTD",
+        nodes={f"n{i}": LogicalNode(id=f"n{i}", op_type="Relu") for i in range(50)},
+    )
+    zstd_path = tmp_path / "fast.zstd"
+    graph.to_file(zstd_path, compression="zstd")
+    loaded = LogicalGraph.from_file(zstd_path)
+    assert len(loaded.nodes) == 50

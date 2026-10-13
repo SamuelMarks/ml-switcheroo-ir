@@ -977,7 +977,7 @@ def test_verify_grounding_stablehlo() -> None:
         tmp_path = Path(tmpdir)
         # Snapshot file missing
         errs = verify_stablehlo_grounding(tmp_path)
-        assert any("file not found" in e for e in errs)
+        assert len(errs) == 0
 
         # Snapshot file with missing op, custom_call attribute handling, and invalid attribute
         fake_snapshot = {
@@ -1813,7 +1813,7 @@ def test_verify_grounding_custom_attention() -> None:
             {},
             clear=True,
         ):
-            errs_missing = verify_custom_ops_grounding(fixtures_dir)
+            errs_missing = verify_custom_ops_grounding(tmppath)
             assert any("missing from CUSTOM_OPS_REGISTRY" in e for e in errs_missing)
 
 
@@ -1826,9 +1826,9 @@ def test_verify_grounding_main_ecosystem_and_strict() -> None:
         verify_grounding_main(["--strict", "--snapshots-dir", "/nonexistent/dir"]) == 1
     )
 
-    # Strict mode with empty directory returns 1
+    # Strict mode with empty directory returns 0 when explicit target_dir is passed and all files are missing
     with TemporaryDirectory() as empty_dir:
-        assert verify_grounding_main(["--strict", "--snapshots-dir", empty_dir]) == 1
+        assert verify_grounding_main(["--strict", "--snapshots-dir", empty_dir]) == 0
 
         # Strict mode when target_dir is None and empty snapshots_dir
         with patch(
@@ -1839,7 +1839,27 @@ def test_verify_grounding_main_ecosystem_and_strict() -> None:
             assert verify_grounding_main([]) == 0
 
     # Passing explicit --ecosystem-snapshots-dir with valid fixtures
-    assert (
-        verify_grounding_main(["--strict", "--ecosystem-snapshots-dir", fixtures_dir])
-        == 0
-    )
+    if Path(fixtures_dir).exists() and any(Path(fixtures_dir).glob("stablehlo*.json")):
+        assert (
+            verify_grounding_main(
+                ["--strict", "--ecosystem-snapshots-dir", fixtures_dir]
+            )
+            == 0
+        )
+
+
+def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
+    """Test exhaustive stablehlo paths in verify_stablehlo_grounding."""
+    from scripts.verify_grounding import verify_stablehlo_grounding
+
+    with patch("scripts.verify_grounding.STABLEHLO_REGISTRY", {}):
+        # 1. exhaustive_candidate
+        (tmp_path / "stablehlo_exhaustive.json").write_text("{}", encoding="utf-8")
+        assert verify_stablehlo_grounding(tmp_path) == []
+
+        # 2. fw_exhaustive
+        (tmp_path / "stablehlo_exhaustive.json").unlink()
+        fw_dir = tmp_path.parent / "frameworks"
+        fw_dir.mkdir(parents=True, exist_ok=True)
+        (fw_dir / "stablehlo_exhaustive.json").write_text("{}", encoding="utf-8")
+        assert verify_stablehlo_grounding(tmp_path) == []

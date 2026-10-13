@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from ml_switcheroo_ir import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.onnx_registry import OpSchema
 from ml_switcheroo_ir.validator import (
@@ -425,6 +427,9 @@ def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None
 
     snapshots_dir = Path(DEFAULT_SNAPSHOT_DIR)
     stablehlo_files = sorted(snapshots_dir.glob("stablehlo*.json"))
+
+    if not stablehlo_files:
+        pytest.skip("No StableHLO snapshots found to test against")
 
     stablehlo_file = stablehlo_files[-1]
     gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))

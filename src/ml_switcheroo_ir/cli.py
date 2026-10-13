@@ -331,6 +331,7 @@ def main(args: list[str] | None = None) -> None:
             parsed_args.target,
             verbose=parsed_args.verbose,
             mapping_file=parsed_args.mapping,
+            warn=False,
         )
 
     elif parsed_args.command == "list-ops":

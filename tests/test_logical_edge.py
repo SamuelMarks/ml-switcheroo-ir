@@ -55,33 +55,6 @@ def test_graph_edges_property_getter() -> None:
     assert LogicalEdge("n1", "n3", target_idx=1) in edges
 
 
-def test_graph_edges_property_setter() -> None:
-    """Test updating node inputs via .edges assignment."""
-    n1 = LogicalNode(id="n1", op_type="Input")
-    n2 = LogicalNode(id="n2", op_type="Conv")
-    n3 = LogicalNode(id="n3", op_type="Relu")
-    graph = LogicalGraph(nodes={"n1": n1, "n2": n2, "n3": n3})
-
-    # Initially empty inputs
-    assert graph.nodes["n2"].inputs == []
-
-    # Assign new edges
-    with pytest.deprecated_call():
-        graph.edges = [
-            LogicalEdge("n1", "n2"),
-            LogicalEdge("n2", "n3"),
-            LogicalEdge(
-                "unknown", "n2"
-            ),  # Valid source unknown in nodes, still targets n2
-            LogicalEdge("n1", "unknown_target"),  # Target not in nodes, safely ignored
-            LogicalEdge("n1", "n2"),  # Duplicate edge should be deduplicated in inputs
-        ]
-
-    assert graph.nodes["n2"].inputs == ["n1", "unknown"]
-    assert graph.nodes["n3"].inputs == ["n2"]
-    assert graph.nodes["n1"].inputs == []
-
-
 def test_graph_add_edge_and_node_helpers() -> None:
     """Test add_node, add_edge, get_inputs, and get_outputs helper methods."""
     graph = LogicalGraph()

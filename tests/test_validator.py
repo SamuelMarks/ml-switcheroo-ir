@@ -268,3 +268,32 @@ def test_validator_missing_kind_methods() -> None:
     # populate defaults returns quickly
     v.populate_defaults(node)
     assert not node.attributes
+
+
+def test_validator_edge_source_idx_out_of_bounds() -> None:
+    """Test validator catches out of bounds source_idx for multi-output nodes."""
+    from ml_switcheroo_ir import LogicalEdge, LogicalGraph, LogicalNode
+    from ml_switcheroo_ir.validator import Validator
+
+    producer = LogicalNode(
+        id="prod", op_type="Split", domain="ai.onnx", outputs=["out0", "out1"]
+    )
+    consumer = LogicalNode(id="cons", op_type="Relu", domain="ai.onnx")
+
+    edge = LogicalEdge(source="prod", target="cons", source_idx=2)
+    graph = LogicalGraph(nodes={"prod": producer, "cons": consumer}, edges=[edge])
+
+    validator = Validator()
+    from unittest import mock
+
+    with mock.patch(
+        "ml_switcheroo_ir.LogicalGraph.edges", new_callable=mock.PropertyMock
+    ) as mock_edges:
+        mock_edges.return_value = [
+            LogicalEdge(source="prod", target="cons", source_idx=2)
+        ]
+        errors = validator.validate_graph(graph)
+
+    assert any("out of bounds" in str(e.message) for e in errors), (
+        f"Errors were: {errors}"
+    )

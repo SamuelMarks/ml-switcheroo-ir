@@ -13,36 +13,6 @@ from ml_switcheroo_ir.schema.ghost import (
 )
 
 
-def test_parameter_kind_enum() -> None:
-    """Test ParameterKind enumeration values."""
-    assert ParameterKind.POSITIONAL_ONLY.value == "POSITIONAL_ONLY"
-    assert ParameterKind.POSITIONAL_OR_KEYWORD.value == "POSITIONAL_OR_KEYWORD"
-    assert ParameterKind.VAR_POSITIONAL.value == "VAR_POSITIONAL"
-    assert ParameterKind.KEYWORD_ONLY.value == "KEYWORD_ONLY"
-    assert ParameterKind.VAR_KEYWORD.value == "VAR_KEYWORD"
-
-
-def test_semantic_tier_enum() -> None:
-    """Test SemanticTier enumeration values."""
-    assert SemanticTier.ARRAY_API.value == "array"
-    assert SemanticTier.NEURAL.value == "neural"
-    assert SemanticTier.NEURAL_OPS.value == "neural_ops"
-    assert SemanticTier.EXTRAS.value == "extras"
-
-
-def test_logic_op_enum() -> None:
-    """Test LogicOp enumeration values."""
-    assert LogicOp.EQ.value == "eq"
-    assert LogicOp.NEQ.value == "neq"
-    assert LogicOp.GT.value == "gt"
-    assert LogicOp.LT.value == "lt"
-    assert LogicOp.GTE.value == "gte"
-    assert LogicOp.LTE.value == "lte"
-    assert LogicOp.IN.value == "in"
-    assert LogicOp.NOT_IN.value == "not_in"
-    assert LogicOp.IS_TYPE.value == "is_type"
-
-
 def test_ghost_param_model() -> None:
     """Test GhostParam serialization and deserialization."""
     param = GhostParam(
@@ -215,3 +185,65 @@ def test_extended_ghost_param_normalization() -> None:
     )
     assert env.operations == [{"name": "arith.addi"}]
     assert env.instructions == [{"name": "V_ADD_F32"}]
+
+
+import json
+
+from pydantic import BaseModel, ValidationError
+
+
+def test_parameter_kind_enum_roundtrip() -> None:
+    """Test ParameterKind enumeration functional roundtrip and validation."""
+
+    class DummyModel(BaseModel):
+        """Dummy docstring."""
+
+        kind: ParameterKind
+
+    # Valid string parsing
+    model = DummyModel.model_validate_json('{"kind": "POSITIONAL_OR_KEYWORD"}')
+    assert model.kind == ParameterKind.POSITIONAL_OR_KEYWORD
+
+    # JSON serialization
+    serialized = json.loads(model.model_dump_json())
+    assert serialized["kind"] == "POSITIONAL_OR_KEYWORD"
+
+    # Invalid enum value
+    with pytest.raises(ValidationError):
+        DummyModel.model_validate_json('{"kind": "INVALID_KIND"}')
+
+
+def test_semantic_tier_enum_roundtrip() -> None:
+    """Test SemanticTier enumeration functional roundtrip and validation."""
+
+    class DummyModel(BaseModel):
+        """Dummy docstring."""
+
+        tier: SemanticTier
+
+    model = DummyModel.model_validate_json('{"tier": "neural_ops"}')
+    assert model.tier == SemanticTier.NEURAL_OPS
+
+    serialized = json.loads(model.model_dump_json())
+    assert serialized["tier"] == "neural_ops"
+
+    with pytest.raises(ValidationError):
+        DummyModel.model_validate_json('{"tier": "nonexistent_tier"}')
+
+
+def test_logic_op_enum_roundtrip() -> None:
+    """Test LogicOp enumeration functional roundtrip and validation."""
+
+    class DummyModel(BaseModel):
+        """Dummy docstring."""
+
+        op: LogicOp
+
+    model = DummyModel.model_validate_json('{"op": "gte"}')
+    assert model.op == LogicOp.GTE
+
+    serialized = json.loads(model.model_dump_json())
+    assert serialized["op"] == "gte"
+
+    with pytest.raises(ValidationError):
+        DummyModel.model_validate_json('{"op": "not_an_operator"}')

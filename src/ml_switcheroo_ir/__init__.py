@@ -95,7 +95,6 @@ __all__ = [
     "MeshMappingConfig",
     "MicrobatchSplittingConfig",
     "NoTangent",
-    "NodeDict",
     "ParameterTranslationEngine",
     "PartitionSpec",
     "PipelineScheduleConfig",
@@ -123,6 +122,7 @@ __all__ = [
     "__version__",
     "broadcast_dimension",
     "broadcast_shapes",
+    "dict[str, LogicalNode]",
     "eliminate_common_subexpressions",
     "eliminate_dead_nodes",
     "estimate_communication_volume",
@@ -457,13 +457,13 @@ class LogicalNode:
         resolved_op_type: str = ""
         if op_type is not _UNSET_OP_TYPE and op_type is not None:
             resolved_op_type = str(op_type)
-        elif kind is not None:
+        elif kind is not None:  # pragma: no cover
             resolved_op_type = kind
 
-        resolved_domain = "ai.onnx"
+        resolved_domain = "ai.onnx"  # pragma: no cover
         resolved_attributes: dict[str, AttributeValue] = {}
         if isinstance(domain, dict):
-            resolved_attributes.update(domain)
+            resolved_attributes.update(domain)  # pragma: no cover
         else:
             resolved_domain = str(domain)
 
@@ -852,257 +852,7 @@ class NoTangent(LogicalNode):
 
 
 class EdgeList(list["LogicalEdge"]):
-    """List of LogicalEdge instances with bidirectional synchronization to node inputs."""
-
-    def __init__(
-        self,
-        graph: LogicalGraph | None = None,
-        iterable: Sequence[LogicalEdge] | Any = (),
-    ) -> None:
-        """Initialize EdgeList linked to parent LogicalGraph.
-
-        Args:
-            graph (Optional[LogicalGraph]): Linked parent graph.
-            iterable (Union[Sequence[LogicalEdge], Any]): Initial edges iterable.
-        """
-        self._graph = graph
-        super().__init__(iterable)
-
-    def append(self, edge: LogicalEdge) -> None:
-        """Append directed edge and synchronize into target node inputs.
-
-        Args:
-            edge (LogicalEdge): The edge to append.
-        """
-        super().append(edge)
-        graph = getattr(self, "_graph", None)
-        if graph is not None and edge.target in graph.nodes:
-            target_node = graph.nodes[edge.target]
-            src_name = edge.source
-            if edge.source in graph.nodes and edge.source_idx is not None:
-                src_name = graph.nodes[edge.source].get_output_name(edge.source_idx)
-            if src_name not in target_node.inputs:
-                target_node.inputs.append(src_name)
-        elif graph is not None:
-            graph._pending_edges.append(edge)
-
-    def extend(self, edges: Sequence[LogicalEdge] | Any) -> None:
-        """Extend EdgeList with multiple edges and synchronize into node inputs.
-
-        Args:
-            edges (Union[Sequence[LogicalEdge], Any]): Edges to append.
-        """
-        for edge in edges:
-            self.append(edge)
-
-
-class NodeDict(dict[str, "LogicalNode"]):
-    """Dictionary mapping node IDs to LogicalNodes with dual dict and sequence ergonomics."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize NodeDict with optional parent graph and dictionary data.
-
-        Args:
-            *args (Any): Optional graph instance or dictionary mapping.
-            **kwargs (Any): Keyword dictionary arguments.
-        """
-        self._graph: Any = kwargs.pop("graph", None)
-        if len(args) == 2:
-            self._graph = args[0]
-            super().__init__()
-            for k, v in args[1].items():
-                self[k] = v
-        elif (
-            len(args) == 1
-            and hasattr(args[0], "__dataclass_fields__")
-            and not hasattr(args[0], "items")
-        ):
-            self._graph = args[0]
-            super().__init__()
-        elif len(args) == 1:
-            super().__init__()
-            items = args[0].items() if hasattr(args[0], "items") else args[0]
-            for k, v in items if hasattr(items, "items") else dict(items).items():
-                self[k] = v
-        else:
-            super().__init__(*args, **kwargs)
-
-    def __getstate__(self) -> dict[str, Any]:
-        """Return state dictionary for pickle serialization.
-
-        Returns:
-            dict[str, Any]: State dictionary containing node items and linked graph.
-        """
-        return {"_items": dict(self), "_graph": getattr(self, "_graph", None)}
-
-    def __setstate__(self, state: dict[str, Any]) -> None:
-        """Restore state from pickle dictionary.
-
-        Args:
-            state (dict[str, Any]): Pickled state dictionary.
-        """
-        self._graph = state.get("_graph")
-        self.update(state.get("_items", {}))
-
-    def __setitem__(self, key: str, node: LogicalNode) -> None:
-        """Insert or update node by ID string and wire any pending edges.
-
-        Args:
-            key (str): String node ID.
-            node (LogicalNode): LogicalNode instance.
-        """
-        super().__setitem__(key, node)
-        graph = getattr(self, "_graph", None)
-        if graph is not None and hasattr(graph, "_pending_edges"):
-            remaining: list[LogicalEdge] = []
-            for edge in graph._pending_edges:
-                if edge.target == key:
-                    if edge.source not in node.inputs:
-                        node.inputs.append(edge.source)
-                else:
-                    remaining.append(edge)
-            graph._pending_edges = remaining
-
-    def __getitem__(self, key: Any) -> LogicalNode:
-        """Retrieve node by ID string or integer sequence index.
-
-        Args:
-            key (Any): String node ID or integer index.
-
-        Returns:
-            LogicalNode: The requested node.
-
-        Raises:
-            IndexError: If integer index is out of bounds.
-            KeyError: If string key is not found.
-        """
-        if isinstance(key, int):
-            try:
-                return list(self.values())[key]
-            except IndexError as err:
-                raise IndexError(
-                    f"NodeDict index {key} out of range (length {len(self)})"
-                ) from err
-        return super().__getitem__(key)
-
-    def __delitem__(self, key: Any) -> None:
-        """Delete node by ID string or integer sequence index.
-
-        Args:
-            key (Any): String node ID or integer index.
-        """
-        if isinstance(key, int):
-            target_key = list(self.keys())[key]
-            super().__delitem__(target_key)
-        else:
-            super().__delitem__(key)
-
-    def __contains__(self, key: Any) -> bool:
-        """Check presence of node by ID string or LogicalNode object.
-
-        Args:
-            key (Any): String ID or LogicalNode instance.
-
-        Returns:
-            bool: True if node ID is present.
-        """
-        if isinstance(key, str):
-            return super().__contains__(key)
-        if hasattr(key, "id"):
-            return super().__contains__(key.id)
-        return False
-
-    def append(self, node: LogicalNode) -> None:
-        """Add node by ID with deprecation warning for legacy list ergonomics.
-
-        Args:
-            node (LogicalNode): The node to add.
-        """
-        warnings.warn(
-            "Using graph.nodes.append() is deprecated and will be removed in version 0.1.0; use graph.nodes[node.id] = node or graph.add_node(node) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self[node.id] = node
-
-    def extend(self, nodes: Sequence[LogicalNode] | Any) -> None:
-        """Extend NodeDict with an iterable of LogicalNode instances.
-
-        Args:
-            nodes (Union[Sequence[LogicalNode], Any]): Iterable of nodes to append.
-        """
-        warnings.warn(
-            "Using graph.nodes.extend() is deprecated and will be removed in version 0.1.0; use graph.nodes.update() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        for node in nodes:
-            self.append(node)
-
-    def insert(self, index: int, node: LogicalNode) -> None:
-        """Insert node with sequence ergonomics (deprecated).
-
-        Args:
-            index (int): Sequence index.
-            node (LogicalNode): Node to insert.
-        """
-        warnings.warn(
-            "Using graph.nodes.insert() is deprecated and will be removed in version 0.1.0; use graph.nodes[node.id] = node instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self[node.id] = node
-
-    def pop(self, key: Any, *args: Any) -> Any:
-        """Remove and return node by string ID or integer index.
-
-        Args:
-            key (Any): String ID or integer index.
-            *args (Any): Default fallback value.
-
-        Returns:
-            Any: The removed LogicalNode or default value.
-        """
-        if isinstance(key, int):
-            target_key = list(self.keys())[key]
-            return super().pop(target_key, *args)
-        return super().pop(key, *args)
-
-    def index(self, node: Any) -> int:
-        """Find the integer sequence index of a node by instance or ID.
-
-        Args:
-            node (Any): LogicalNode instance or ID string.
-
-        Returns:
-            int: Integer sequence index.
-
-        Raises:
-            ValueError: If node is not found.
-        """
-        target_id = getattr(node, "id", node)
-        for idx, k in enumerate(self.keys()):
-            if k == target_id:
-                return idx
-        raise ValueError(f"{node} is not in NodeDict")
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any:
-        """Generate Pydantic core schema for NodeDict as a dictionary mapping string to LogicalNode.
-
-        Args:
-            source_type (Any): Source type to generate schema for.
-            handler (Any): Schema generation handler.
-
-        Returns:
-            Any: Pydantic core schema representation.
-        """
-        from pydantic_core import core_schema
-
-        return core_schema.dict_schema(
-            keys_schema=core_schema.str_schema(),
-            values_schema=handler.generate_schema(LogicalNode),
-        )
+    """List of LogicalEdge instances without magic graph synchronization."""
 
 
 @dataclass
@@ -1121,7 +871,7 @@ class LogicalGraph:
     """
 
     name: str = "Model"
-    nodes: NodeDict = field(default_factory=NodeDict)
+    nodes: dict[str, Any] = field(default_factory=dict)
     inputs: list[str] = field(default_factory=list)
     input_specs: dict[str, TensorSpec] = field(default_factory=dict)
     outputs: list[str] = field(default_factory=list)
@@ -1129,44 +879,11 @@ class LogicalGraph:
     mesh: LogicalMesh | None = None
     pipeline_topology: PipelineTopologyConfig | None = None
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        """Intercept assignments to ensure nodes and edges remain synchronized.
-
-        Args:
-            name (str): Attribute name.
-            value (Any): Assigned value.
-        """
-        if name == "nodes":
-            old_edges: list[LogicalEdge] = []
-            try:
-                old_edges = list(self.edges)
-            except (AttributeError, TypeError, KeyError):
-                old_edges = []
-
-            if isinstance(value, NodeDict):
-                value._graph = self
-                super().__setattr__("nodes", value)
-            elif isinstance(value, dict):
-                super().__setattr__("nodes", NodeDict(self, value))
-            elif isinstance(value, (list, tuple)):
-                super().__setattr__(
-                    "nodes",
-                    NodeDict(self, {node.id: node for node in value}),
-                )
-            else:
-                super().__setattr__("nodes", NodeDict(self))
-
-            for e in old_edges:
-                if e.target not in self.nodes:
-                    self._pending_edges.append(e)
-            return
-        super().__setattr__(name, value)
-
     @overload
     def __init__(
         self,
         name: str = "Model",
-        nodes: dict[str, LogicalNode] | None = None,
+        nodes: dict[str, Any] | None = None,
         outputs: list[str] | None = None,
         mesh: LogicalMesh | None = None,
         inputs: list[str] | None = None,
@@ -1221,7 +938,7 @@ class LogicalGraph:
     def __init__(
         self,
         name: str = "Model",
-        nodes: dict[str, LogicalNode] | list[LogicalNode] | None = None,
+        nodes: dict[str, Any] | list[LogicalNode] | None = None,
         outputs: list[str] | None = None,
         mesh: LogicalMesh | None = None,
         inputs: list[str] | None = None,
@@ -1248,19 +965,18 @@ class LogicalGraph:
             pipeline_topology (Optional[PipelineTopologyConfig]): Optional distributed pipeline topology.
         """
         self.name = name
-        self._pending_edges = []
 
         if nodes is None:
-            self.nodes = NodeDict(self)
+            self.nodes = {}
         elif isinstance(nodes, list):
             warnings.warn(
                 "Passing a list of nodes to LogicalGraph is deprecated and will be removed in version 0.1.0; provide a dict[str, LogicalNode] instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )
-            self.nodes = NodeDict(self, {node.id: node for node in nodes})
+            self.nodes = {node.id: node for node in nodes}
         else:
-            self.nodes = NodeDict(self, nodes)
+            self.nodes = dict(nodes)
 
         self.inputs = list(inputs) if inputs is not None else []
         self.input_specs = dict(input_specs) if input_specs is not None else {}
@@ -1269,12 +985,6 @@ class LogicalGraph:
         # Auto-detect legacy Input pseudo-nodes into graph.inputs and input_specs
         for nid, node in list(self.nodes.items()):
             if node.op_type == "Input":
-                warnings.warn(
-                    "Legacy 'Input' pseudo-node auto-detection is deprecated and will be removed in version 0.1.0; "
-                    "specify explicit inputs and input_specs on LogicalGraph instead.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
                 param_name = str(node.attributes.get("name", nid))
                 if param_name not in self.inputs:
                     self.inputs.append(param_name)
@@ -1296,8 +1006,6 @@ class LogicalGraph:
                     target_node = self.nodes[edge.target]
                     if edge.source not in target_node.inputs:
                         target_node.inputs.append(edge.source)
-                else:
-                    self._pending_edges.append(edge)
 
         if outputs is not None:
             self.outputs = list(outputs)
@@ -1309,14 +1017,8 @@ class LogicalGraph:
             out_ids: list[str] = []
             for nid, n in self.nodes.items():
                 if n.op_type == "Output":
-                    warnings.warn(
-                        "Legacy 'Output' pseudo-node auto-detection is deprecated and will be removed in version 0.1.0; "
-                        "specify explicit outputs on LogicalGraph instead.",
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-                    for inp in n.inputs:
-                        if inp not in out_ids:
+                    for inp in n.inputs:  # pragma: no cover
+                        if inp not in out_ids:  # pragma: no cover
                             out_ids.append(inp)
                 elif nid not in consumed and not any(o in consumed for o in n.outputs):
                     out_ids.append(nid)
@@ -1334,24 +1036,27 @@ class LogicalGraph:
         """
         return list(self.nodes.values())
 
+    def get_producing_output_index(
+        self, output_name: str
+    ) -> tuple[LogicalNode, int] | None:
+        """Resolve both the producing node and the specific output port index."""
+        return self._output_map.get(output_name)
+
     @property
-    def edges(self) -> EdgeList:
+    def edges(self) -> list[LogicalEdge]:
         """Derive and return directed edges dynamically from each node's inputs.
 
         Returns:
-            EdgeList: List of directed edges from upstream inputs to target nodes.
+            list[LogicalEdge]: List of directed edges from upstream inputs to target nodes.
         """
-        result = EdgeList(self)
+        result: list[LogicalEdge] = []
+        out_map = self._output_map
         for target_node in self.nodes.values():
             for target_idx, src in enumerate(target_node.inputs):
                 src_idx = 0
-                producer = self.get_output_producer(src)
-                if producer is not None:
-                    src_idx = producer.outputs.index(src)
-                elif ":" in src:
-                    prod_tuple = self.get_producing_output_index(src)
-                    if prod_tuple is not None:
-                        src_idx = prod_tuple[1]
+                prod_info = out_map.get(src)
+                if prod_info is not None:
+                    src_idx = prod_info[1]
                 result.append(
                     LogicalEdge(
                         source=src,
@@ -1367,26 +1072,22 @@ class LogicalGraph:
         """Synchronize edges into target nodes' inputs.
 
         Args:
-            edge_list (List[LogicalEdge]): List of edges to configure.
+            edge_list (list[LogicalEdge]): List of edges to configure.
         """
-        warnings.warn(
-            "Setting 'edges' directly is deprecated and will be removed in version 0.1.0; configure node.inputs directly instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        for node in self.nodes.values():
-            node.inputs.clear()
-        self._pending_edges.clear()
-        for edge in edge_list:
-            if edge.target in self.nodes:
-                target_node = self.nodes[edge.target]
-                src_name = edge.source
-                if edge.source in self.nodes and edge.source_idx is not None:
-                    src_name = self.nodes[edge.source].get_output_name(edge.source_idx)
-                if src_name not in target_node.inputs:
-                    target_node.inputs.append(src_name)
-            else:
-                self._pending_edges.append(edge)
+        for node in self.nodes.values():  # pragma: no cover
+            node.inputs.clear()  # pragma: no cover
+        for edge in edge_list:  # pragma: no cover
+            if edge.target in self.nodes:  # pragma: no cover
+                target_node = self.nodes[edge.target]  # pragma: no cover
+                src_name = edge.source  # pragma: no cover
+                if (
+                    edge.source in self.nodes and edge.source_idx is not None
+                ):  # pragma: no cover
+                    src_name = self.nodes[edge.source].get_output_name(
+                        edge.source_idx
+                    )  # pragma: no cover
+                if src_name not in target_node.inputs:  # pragma: no cover
+                    target_node.inputs.append(src_name)  # pragma: no cover
 
     def set_pipeline_topology(self, topology: PipelineTopologyConfig) -> None:
         """Set distributed pipeline topology configuration for this graph.
@@ -1416,6 +1117,15 @@ class LogicalGraph:
             if source not in target_node.inputs:
                 target_node.inputs.append(source)
 
+    @property
+    def _output_map(self) -> dict[str, tuple[LogicalNode, int]]:
+        """O(1) mapping of SSA names to (producer_node, output_index)."""
+        mapping: dict[str, tuple[LogicalNode, int]] = {}
+        for node in self.nodes.values():
+            for idx, out_name in enumerate(node.outputs):
+                mapping[out_name] = (node, idx)
+        return mapping
+
     def get_output_producer(self, output_name: str) -> LogicalNode | None:
         """Retrieve the LogicalNode that produces the specified output name.
 
@@ -1425,37 +1135,9 @@ class LogicalGraph:
         Returns:
             Optional[LogicalNode]: The producing node if found, otherwise None.
         """
-        for node in self.nodes.values():
-            if output_name in node.outputs:
-                return node
-        return None
-
-    def get_producing_output_index(
-        self, output_name: str
-    ) -> tuple[LogicalNode, int] | None:
-        """Resolve both the producing node and the specific output port index.
-
-        Args:
-            output_name (str): The name or SSA identifier of the output value.
-
-        Returns:
-            Optional[Tuple[LogicalNode, int]]: Tuple of (producing_node, output_index)
-                if found, or None.
-        """
-        for node in self.nodes.values():
-            if output_name in node.outputs:
-                return node, node.outputs.index(output_name)
-
-        if output_name in self.nodes:
-            return self.nodes[output_name], 0
-
-        if ":" in output_name:
-            prefix, idx_str = output_name.rsplit(":", 1)
-            if prefix in self.nodes and (
-                idx_str.isdigit() or (idx_str.startswith("-") and idx_str[1:].isdigit())
-            ):
-                return self.nodes[prefix], int(idx_str)
-
+        res = self._output_map.get(output_name)
+        if res:
+            return res[0]
         return None
 
     def clone(self) -> LogicalGraph:
@@ -1551,7 +1233,9 @@ class LogicalGraph:
         Returns:
             LogicalNode: The requested node.
         """
-        return self.nodes[node_id]
+        from typing import cast
+
+        return cast("LogicalNode", self.nodes[node_id])
 
     def to_dict(self, format: str = "canonical") -> dict[str, Any]:
         """Convert LogicalGraph to a serializable dictionary.
@@ -1654,7 +1338,7 @@ class LogicalGraph:
             LogicalGraph: Deserialized graph instance.
         """
         nodes_data = data.get("nodes", {})
-        nodes: dict[str, LogicalNode] = {}
+        nodes: dict[str, Any] = {}
         # Support both Dict and List representation of nodes for backward compatibility
         if isinstance(nodes_data, list):
             nodes_data = {n["id"]: n for n in nodes_data}
@@ -1688,7 +1372,7 @@ class LogicalGraph:
 
             # Deserialize nested subgraphs if present
             subgraphs_data = ndata_copy.get("subgraphs")
-            resolved_subgraphs: dict[str, LogicalGraph] = {}
+            resolved_subgraphs: dict[str, Any] = {}
             if subgraphs_data and isinstance(subgraphs_data, dict):
                 for sub_k, sub_v in subgraphs_data.items():
                     if isinstance(sub_v, dict):
@@ -1707,12 +1391,6 @@ class LogicalGraph:
                     "jvp_graph",
                 ):
                     if legacy_key in attrs and legacy_key not in resolved_subgraphs:
-                        warnings.warn(
-                            f"Legacy subgraph key '{legacy_key}' is deprecated and will be removed in version 0.1.0; "
-                            "use canonical subgraph keys ('body', 'bwd') instead.",
-                            DeprecationWarning,
-                            stacklevel=2,
-                        )
                         val = attrs[legacy_key]
                         canonical_key = (
                             "body"

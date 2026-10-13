@@ -2,7 +2,7 @@
 
 # Abstract ML Machine Ecosystem Architecture
 
-*Note: This architecture document is shared across all repositories in the `zero-*`, `ml-switcheroo-*`, and `ml-framework-snapshots` ecosystem to provide comprehensive technical context on how the frameworks, compilers, and verification engines interoperate.*
+*Note: This architecture document is shared across all repositories in the `zero-*`, `ml-switcheroo-*`, and `ml-ecosystem-snapshots` ecosystem to provide comprehensive technical context on how the frameworks, compilers, and verification engines interoperate.*
 
 ---
 
@@ -37,7 +37,7 @@ flowchart LR
 
 By decoupling ingestion from code generation through a strictly validated, language-agnostic Intermediate Representation (`ml-switcheroo-ir`), the complexity collapses to $N + M$.
 
-This architecture establishes a source-to-source and source-to-binary compilation pipeline built with **strictly zero external dependencies** at runtime (relying solely on the Python Standard Library).
+This architecture establishes a source-to-source and source-to-binary compilation pipeline built with **minimal external dependencies** at runtime (relying solely on the Python Standard Library).
 
 ---
 
@@ -48,7 +48,7 @@ The ecosystem enforces a strictly layered, hierarchical dependency DAG. Circular
 ```mermaid
 graph TD
     subgraph Tier 0: Ground-Truth Grounding
-        SNAPS[ml-framework-snapshots]
+        SNAPS[ml-ecosystem-snapshots]
     end
 
     subgraph Tier 1: Core Definitions & Dialects
@@ -116,7 +116,7 @@ graph TD
 
 ### Component Breakdown
 
-1. **`ml-framework-snapshots` (Tier 0)**:
+1. **`ml-ecosystem-snapshots` (Tier 0)**:
    The empirical ground-truth database. Introspects and captures exact runtime function signatures, parameter kinds, default values, docstrings, and AST snapshots from official upstream framework releases (PyTorch, JAX, TensorFlow). It provides the reference manifests that eliminate LLM and compiler hallucinations.
 2. **`ml-switcheroo-ir` (Tier 1)**:
    The foundational intermediate representation contract. Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding (`PartitionSpec`), multi-dialect schema registries (ONNX, StableHLO, MLIR, Modern Custom Ops, WebGPU WGSL, AMD RDNA, NVIDIA SASS), native IR graph transformations (DCE, CSE, shape propagation), Ghost Protocol v2 specifications, cross-framework `ParameterTranslationEngine`, and the anti-hallucination `GroundingValidator`.
@@ -129,7 +129,7 @@ graph TD
 4. **`ml-switcheroo` (Transpilation Layer)**:
    The source-to-source Python CST/AST transformation and framework adapter layer. Rewrites concrete framework calls into canonical IR invocations or cross-compiles between framework syntaxes.
 5. **`zero-*` Frontends (Tiers 3 & 4)**:
-   Pure-Python, zero-dependency implementations mirroring official APIs:
+   Pure-Python, minimal-dependency implementations mirroring official APIs:
    - **`zero-jax`**: Functional array operations (`jnp`, `lax`, `jit`, `grad`, `vmap`) using PyTree flattening to route state into the compiler tape.
    - **`zero-flax`**: Neural network module abstraction (`Dense`, `Conv`, `Attention`) and `nnx` state functionalization.
    - **`zero-pytorch` / `zero-keras` / `zero-tensorflow` / `zero-mlx`**: Stateful object-oriented APIs dynamically lifted to functional graphs via the compiler's `lift_state` pass.
@@ -235,7 +235,7 @@ The `DType` enumeration provides complete coverage for modern deep learning comp
 
 ### 3.4. Multi-Dialect Schema Registries
 
-The IR incorporates built-in, zero-dependency schema registries across deep learning, compiler, and hardware ISA levels:
+The IR incorporates built-in, minimal-dependency schema registries across deep learning, compiler, and hardware ISA levels:
 1. **Canonical ONNX (`ai.onnx`)**:
    Contains 205 canonical operators derived and verified against the official ONNX specification, with zero hallucinated parameters or attributes. Validates required/optional attributes, type constraints, and operand arities without requiring `onnx` at runtime.
 2. **Modern Custom Neural Primitives (`ml.switcheroo.custom`)**:
@@ -259,7 +259,7 @@ The IR incorporates built-in, zero-dependency schema registries across deep lear
 To ensure LLMs and automated compilers cannot generate phantom operators or illegal attributes, `ml-switcheroo-ir` integrates Ghost Protocol v2:
 - **Data Models**: `GhostRef`, `ExtendedGhostRef`, `GhostIsaRef`, `GhostMlirRef`, `GhostParam`, `GhostResult`, `SnapshotEnvelope`.
 - **Hardware & Compiler Semantics**: Models operand direction (`READ`, `WRITE`, `PREDICATE`), parameter roles (`OPERAND`, `ATTRIBUTE`, `RESULT`), MLIR traits, and ISA register classes.
-- **`GroundingValidator` & `audit_graph`**: Ingests ground-truth snapshot manifests from `ml-framework-snapshots` (over 17,000 empirical symbols). Validates that every operation kind and attribute exists in the snapshot, computing a precise hallucination score ($0.0$ to $1.0$) and surfacing Levenshtein distance typo suggestions.
+- **`GroundingValidator` & `audit_graph`**: Ingests ground-truth snapshot manifests from `ml-ecosystem-snapshots` (over 17,000 empirical symbols). Validates that every operation kind and attribute exists in the snapshot, computing a precise hallucination score ($0.0$ to $1.0$) and surfacing Levenshtein distance typo suggestions.
 - **`ParameterTranslationEngine`**: Translates parameter names and keyword arguments across frameworks (`torch`, `jax`, `tf`, `stablehlo`, `numpy`) based on empirical concept maps (`concept_map.json`). Enforces a strict zero-hallucinated-parameters policy: unmapped parameters raise exceptions unless explicit passthrough is enabled.
 
 ### 3.6. Pure-IR Graph Transformations & Optimizations
@@ -287,7 +287,7 @@ The built-in `compliance` engine scans Python repositories using `ast` without i
 
 The repository exposes a complete CLI (`ml-switcheroo-ir` / `python -m ml_switcheroo_ir`):
 - `validate`: Validate graphs against operator schema registries and custom extensions.
-- `ground`: Audit graphs against `ml-framework-snapshots` manifests for hallucination scoring.
+- `ground`: Audit graphs against `ml-ecosystem-snapshots` manifests for hallucination scoring.
 - `compliance`: Static AST compliance and dialect coverage scan of downstream codebases.
 - `toposort`: Deterministic topological sorting and cycle detection of JSON graphs.
 - `verify-backend`: Validate external classes against `CompilerBackend` interface requirements.
@@ -326,7 +326,7 @@ sequenceDiagram
     deactivate Compiler
 
     activate IR
-    IR->>Grounding: Audit against ml-framework-snapshots
+    IR->>Grounding: Audit against ml-ecosystem-snapshots
     activate Grounding
     Grounding-->>IR: GroundingAuditReport (Hallucination Score = 0%)
     deactivate Grounding
@@ -354,5 +354,5 @@ Every repository across the ecosystem adheres to strict verification gates:
 - **100% Test Coverage:** Branch and statement coverage enforced on every commit (`pytest --cov --cov-branch --cov-fail-under=100`).
 - **100% Documentation Coverage:** Enforced via `interrogate --fail-under=100 src`.
 - **Strict Static Typing:** Verified using `mypy --strict` with zero untyped public APIs.
-- **Zero Runtime Dependencies:** Pure Python standard library implementation.
+- **Minimal Runtime Dependencies:** Relies on a minimal set of core dependencies.
 - **Git Safety Protocol:** Under no circumstances is `git push` executed autonomously.

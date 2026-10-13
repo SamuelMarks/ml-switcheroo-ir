@@ -248,6 +248,26 @@ class ParameterTranslationEngine:
                                         if p not in roles[r_name][fw]:
                                             roles[r_name][fw].append(p)
 
+        # Canonicalize roles
+        ROLE_ALIASES = {"kernel": "weight"}
+        for op_data in self.translations.values():
+            roles = op_data.get("roles", {})
+            for alias, canonical in ROLE_ALIASES.items():
+                if alias in roles and canonical in roles:
+                    # Merge alias into canonical
+                    for fw, fw_params in roles[alias].items():
+                        if fw not in roles[canonical]:
+                            roles[canonical][fw] = list(fw_params)
+                        else:
+                            for p in fw_params:
+                                if p not in roles[canonical][fw]:
+                                    roles[canonical][fw].append(p)
+                    roles[alias] = roles[canonical]
+                elif alias in roles:
+                    roles[canonical] = roles[alias]
+                elif canonical in roles:
+                    roles[alias] = roles[canonical]
+
     def translate_parameter(
         self,
         operation: str,

@@ -128,6 +128,69 @@ def test_parameter_translation_engine_error_branches(tmp_path: Path) -> None:
     assert engine_no_trans.translations == {}
 
 
+def test_translation_engine_merge_roles() -> None:
+    """Test the role merging and alias resolution in ParameterTranslationEngine."""
+    import json
+    from unittest.mock import mock_open, patch
+
+    from ml_switcheroo_ir.translation import ParameterTranslationEngine
+
+    # Mock a concept_map.json and a fallback concept map
+    main_map = {
+        "_parameter_translations": {
+            "matmul": {
+                "roles": {
+                    "weight": {"torch": ["weight"], "tf": ["kernel_main"]},
+                    "bias": {"torch": ["bias"]},
+                }
+            },
+            "op2": {
+                "roles": {
+                    "kernel": {"torch": ["weight_k", "new_k"], "tf": ["k"]},
+                    "weight": {"torch": ["weight_w", "weight_k"], "jax": ["w"]},
+                }
+            },
+            "op3": {"roles": {"weight": {"torch": ["w"]}}},
+            "op4": {"roles": {"kernel": {"torch": ["k"]}}},
+        }
+    }
+
+    fallback_map = {
+        "matmul": {
+            "roles": {
+                "weight": {"tf": ["kernel_fallback"], "jax": ["w"]},
+                "bias": {"torch": ["bias", "b"], "jax": ["b"]},
+                "new_role": {"torch": ["x"]},
+            }
+        }
+    }
+
+    mocked_open = mock_open(read_data=json.dumps(main_map))
+
+    with patch("ml_switcheroo_ir.translation.os.path.isfile", return_value=True), patch(
+        "ml_switcheroo_ir.translation.open", mocked_open
+    ), patch(
+        "ml_switcheroo_ir.translation._CANONICAL_FALLBACK_TRANSLATIONS", fallback_map
+    ):
+        engine = ParameterTranslationEngine()
+
+        # Check that roles were merged correctly
+        op1_roles = engine.translations["matmul"]["roles"]
+        assert "new_role" in op1_roles
+        assert "jax" in op1_roles["weight"]
+        assert "kernel_fallback" in op1_roles["weight"]["tf"]
+        assert "kernel_main" in op1_roles["weight"]["tf"]
+        assert "b" in op1_roles["bias"]["torch"]
+
+        # Check that aliases were canonicalized
+        assert "kernel" in op1_roles
+        assert op1_roles["kernel"] is op1_roles["weight"]
+
+        op2_roles = engine.translations["op2"]["roles"]
+        assert "weight" in op2_roles
+        assert op2_roles["weight"] is op2_roles["kernel"]
+
+
 def test_parameter_translation_engine_bundled_fallback() -> None:
     """Test ParameterTranslationEngine fallback to bundled concept_map when snapshot directory is missing."""
     from unittest.mock import patch

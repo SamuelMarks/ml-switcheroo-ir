@@ -30,7 +30,7 @@ dynamic = ["dependencies", "optional-dependencies"]
 ml-switcheroo-ir = "ml_switcheroo_ir.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/ml-switcheroo/ml-switcheroo-ir"
+Homepage = "https://github.com/SamuelMarks/ml-switcheroo-ir"
 
 [tool.hatch.metadata.hooks.requirements_txt]
 files = ["requirements.txt"]

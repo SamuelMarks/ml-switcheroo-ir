@@ -5,7 +5,7 @@
 [![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)
 [![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)
 
-> The universal, zero-dependency Intermediate Representation (IR), schema validator, and anti-hallucination grounding contract for the `ml-switcheroo` and `zero-*` compilation ecosystem.
+> The universal, minimal-dependency Intermediate Representation (IR), schema validator, and anti-hallucination grounding contract for the `ml-switcheroo` and `zero-*` compilation ecosystem.
 
 `ml-switcheroo-ir` provides the core language-agnostic data structures, multi-dialect schema registries, and interface protocols used to represent, validate, and ground neural network architectures across deep learning frameworks and compiler backends.
 
@@ -69,7 +69,7 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 - **[`SamuelMarks/ml-switcheroo-compiler`](https://github.com/SamuelMarks/ml-switcheroo-compiler)**: The execution and tracing engine. Consumes `ml-switcheroo-ir` data structures, provides concurrent `TracerTape`, `ProxyTensor` tracking, reverse-mode automatic differentiation (`compiler.grad`), topological sorting, VJPs, and Dead Code Elimination (DCE).
 - **[`SamuelMarks/ml-switcheroo`](https://github.com/SamuelMarks/ml-switcheroo)**: The high-level Python source-to-source framework transpiler and framework adapters that emit and ingest `ml-switcheroo-ir` graphs.
 - **[`SamuelMarks/ml-ecosystem-snapshots`](https://github.com/SamuelMarks/ml-ecosystem-snapshots)** (formerly `ml-framework-snapshots`): The ground-truth reference database and Ghost Protocol generator, capturing exact runtime signatures, parameters, and AST definitions from official framework distributions to eliminate compiler hallucinations.
-- **`SamuelMarks/zero-*` Framework Family**: Pure-Python, zero-dependency replicas of major machine learning frameworks:
+- **`SamuelMarks/zero-*` Framework Family**: Pure-Python, minimal-dependency replicas of major machine learning frameworks:
   - **[`zero-jax`](https://github.com/SamuelMarks/zero-jax)**: Mimics `jnp`, `lax`, `jit`, `grad`, and `vmap` with PyTree flattening.
   - **[`zero-flax`](https://github.com/SamuelMarks/zero-flax)**: Neural network layers (`Dense`, `Conv`, `Attention`) and `nnx` state functionalization.
   - **[`zero-pytorch`](https://github.com/SamuelMarks/zero-pytorch)**, **[`zero-keras`](https://github.com/SamuelMarks/zero-keras)**, **[`zero-tensorflow`](https://github.com/SamuelMarks/zero-tensorflow)**, **[`zero-mlx`](https://github.com/SamuelMarks/zero-mlx)**, **[`zero-pax`](https://github.com/SamuelMarks/zero-pax)**: Stateful, object-oriented APIs dynamically lifted to functional IR graphs.
@@ -80,7 +80,7 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 
 ## Key Features
 
-- **Zero External Dependencies:** Implemented entirely with Python standard library modules. Can be vendored or embedded in minimal, air-gapped, or resource-constrained environments.
+- **Minimal External Dependencies:** Relies on a minimal set of core dependencies (`pydantic` and optionally `zstandard`) for maximum portability across air-gapped or resource-constrained environments.
 - **Dual-Mode Graph Topology:** Unified graph representation supporting both implicit input wiring (`LogicalNode.inputs`) and first-class directed edges (`LogicalEdge`). Nodes can be accessed via dictionary lookup (`graph["node_id"]`) or ordered sequences (`graph.nodes_list`).
 - **Multi-Output & SSA Value Support:** Accurate modeling of nodes that emit multiple SSA outputs (e.g., `Split`, `BatchNorm`, `custom_call`, or multi-result MLIR operations) via `LogicalNode.outputs` and `graph.get_output_producer()`.
 - **Nested Subgraphs:** Recursive hierarchical subgraphs in `LogicalNode.subgraphs` supporting control-flow constructs (`Loop`, `If`), custom autodiff (`bwd`, `jvp`), and checkpointed computational regions.
@@ -431,7 +431,7 @@ ml-switcheroo-ir export-schema --typescript --ts-out types.ts
 - **100% Test Coverage:** Line and branch coverage enforced via `pytest --cov --cov-branch --cov-fail-under=100`.
 - **100% Documentation Coverage:** Every public class, method, function, parameter, and return value documented in Google style and verified via `interrogate --fail-under=100`.
 - **Strict Static Typing:** Verified with `mypy --strict`.
-- **Zero Runtime Dependencies:** Pure Python standard library.
+- **Minimal Runtime Dependencies:** Relies on a minimal set of core dependencies.
 
 Run the test suite locally:
 
