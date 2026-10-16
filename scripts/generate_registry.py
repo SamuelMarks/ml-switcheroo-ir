@@ -209,6 +209,86 @@ def parse_onnx_docs(
     return ops
 
 
+_ONNX_REGISTRY_TEMPLATE = '''"""Generated ONNX Operator Registry."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import threading
+from typing import Any
+
+from ml_switcheroo_ir.schema.base import OpAttribute, OpSchema
+
+_LOCK = threading.Lock()
+ONNX_REGISTRY: dict[str, OpSchema] = {}
+
+
+def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema]:
+    """Dynamically load ONNX schemas from onnx_ops.json into ONNX_REGISTRY.
+
+    Args:
+        json_path: Optional custom path to onnx_ops.json.
+
+    Returns:
+        Mapping of operator names to OpSchema objects.
+    """
+    with _LOCK:
+        if ONNX_REGISTRY and json_path is None:
+            return ONNX_REGISTRY
+
+        target = (
+            Path(json_path)
+            if json_path is not None
+            else Path(__file__).parent / "onnx_ops.json"
+        )
+        if not target.exists():
+            return dict(ONNX_REGISTRY) if json_path is not None else ONNX_REGISTRY
+
+        with open(target, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        loaded: dict[str, OpSchema] = {}
+        for op_name, op_data in data.items():
+            attributes = {
+                attr_name: OpAttribute(
+                    name=attr_name,
+                    type=attr_data.get("type", "Any"),
+                    required=attr_data.get("required", False),
+                    default=attr_data.get("default", None),
+                )
+                for attr_name, attr_data in op_data.get("attributes", {}).items()
+            }
+            loaded[op_name] = OpSchema(
+                name=op_name,
+                domain=op_data.get("domain", "ai.onnx"),
+                version=op_data.get("version", 1),
+                attributes=attributes,
+                inputs=op_data.get("inputs", []),
+                outputs=op_data.get("outputs", []),
+            )
+        if json_path is None:
+            ONNX_REGISTRY.clear()
+            ONNX_REGISTRY.update(loaded)
+            return ONNX_REGISTRY
+        return loaded
+
+
+load_onnx_schemas()
+'''
+
+
+def render_registry_module() -> str:
+    """Render and AST-validate the generated onnx_registry.py source code.
+
+    Returns:
+        str: Syntactically validated Python module source string.
+    """
+    parsed_ast = ast.parse(_ONNX_REGISTRY_TEMPLATE)
+    _ = ast.unparse(parsed_ast)
+    return _ONNX_REGISTRY_TEMPLATE
+
+
 def main(
     md_file: str | None = None,
     json_path: str | None = None,
@@ -266,61 +346,7 @@ def main(
 
     print(f"Parsed {len(ops)} operators.")
 
-    loader_code = (
-        '"""Generated ONNX Operator Registry."""\n\n'
-        "from __future__ import annotations\n\n"
-        "import json\n"
-        "from pathlib import Path\n"
-        "import threading\n"
-        "from typing import Any\n\n"
-        "from ml_switcheroo_ir.schema.base import OpAttribute, OpSchema\n\n"
-        "_LOCK = threading.Lock()\n"
-        "ONNX_REGISTRY: dict[str, OpSchema] = {}\n\n\n"
-        "def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema]:\n"
-        '    """Dynamically load ONNX schemas from onnx_ops.json into ONNX_REGISTRY.\n\n'
-        "    Args:\n"
-        "        json_path: Optional custom path to onnx_ops.json.\n\n"
-        "    Returns:\n"
-        "        Mapping of operator names to OpSchema objects.\n"
-        '    """\n'
-        "    with _LOCK:\n"
-        "        if ONNX_REGISTRY and json_path is None:\n"
-        "            return ONNX_REGISTRY\n\n"
-        "        target = (\n"
-        "            Path(json_path)\n"
-        "            if json_path is not None\n"
-        '            else Path(__file__).parent / "onnx_ops.json"\n'
-        "        )\n"
-        "        if not target.exists():\n"
-        "            return dict(ONNX_REGISTRY) if json_path is not None else ONNX_REGISTRY\n\n"
-        '        with open(target, "r", encoding="utf-8") as f:\n'
-        "            data = json.load(f)\n\n"
-        "        loaded: dict[str, OpSchema] = {}\n"
-        "        for op_name, op_data in data.items():\n"
-        "            attributes = {\n"
-        "                attr_name: OpAttribute(\n"
-        "                    name=attr_name,\n"
-        '                    type=attr_data.get("type", "Any"),\n'
-        '                    required=attr_data.get("required", False),\n'
-        '                    default=attr_data.get("default", None),\n'
-        "                )\n"
-        '                for attr_name, attr_data in op_data.get("attributes", {}).items()\n'
-        "            }\n"
-        "            loaded[op_name] = OpSchema(\n"
-        "                name=op_name,\n"
-        '                domain=op_data.get("domain", "ai.onnx"),\n'
-        '                version=op_data.get("version", 1),\n'
-        "                attributes=attributes,\n"
-        '                inputs=op_data.get("inputs", []),\n'
-        '                outputs=op_data.get("outputs", []),\n'
-        "            )\n"
-        "        if json_path is None:\n"
-        "            ONNX_REGISTRY.clear()\n"
-        "            ONNX_REGISTRY.update(loaded)\n"
-        "            return ONNX_REGISTRY\n"
-        "        return loaded\n\n\n"
-        "load_onnx_schemas()\n"
-    )
+    loader_code = render_registry_module()
 
     with open(target_reg, "w", encoding="utf-8") as f:
         f.write(loader_code)

@@ -12,7 +12,11 @@ from ml_switcheroo_ir.export import generate_typescript_definitions
 
 
 def test_typescript_definitions_compile(tmp_path: Path) -> None:
-    """Validate that generate_typescript_definitions compiles without error using tsc."""
+    """Validate that generate_typescript_definitions compiles without error using tsc.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     tsc_path = shutil.which("tsc")
     if tsc_path is None:
         pytest.fail("TypeScript compiler (tsc) is required for schema validation.")

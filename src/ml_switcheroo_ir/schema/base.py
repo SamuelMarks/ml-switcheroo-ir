@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import json
+from collections.abc import Iterator
+import contextlib
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
+import threading
 from typing import Any, Callable, Mapping
 
 from ml_switcheroo_ir.snapshots import find_schema_file
+
+REGISTRY_LOCK = threading.RLock()
 
 
 @dataclass
@@ -219,3 +224,64 @@ def load_op_schema_catalog(
             if on_entry is not None:
                 on_entry(op_data)
     return registry
+
+
+def build_isa_primitive_schemas(
+    primitives: Mapping[str, Mapping[str, Any]],
+    domain: str,
+) -> dict[str, OpSchema]:
+    """Convert raw ISA instruction primitive definitions into OpSchema instances.
+
+    Args:
+        primitives (Mapping[str, Mapping[str, Any]]): Mapping of instruction mnemonics to operand specs.
+        domain (str): Target hardware ISA domain (e.g. 'amd_rdna', 'nvidia_sass').
+
+    Returns:
+        dict[str, OpSchema]: Mapping from instruction mnemonic to OpSchema.
+    """
+    result: dict[str, OpSchema] = {}
+    for op_name, op_info in primitives.items():
+        operands = op_info.get("operands", [])
+        inputs = [str(op) for op in operands if op != "dst"]
+        outputs = ["dst"] if "dst" in operands else []
+        schema = CustomOpSchema(
+            name=op_name,
+            domain=domain,
+            attributes=[],
+            inputs=inputs,
+            outputs=outputs,
+        )
+        result[op_name] = schema.to_op_schema()
+    return result
+
+
+@contextlib.contextmanager
+def override_registry(
+    registry: dict[str, OpSchema],
+    overrides: Mapping[str, OpSchema] | None = None,
+    *,
+    clear: bool = False,
+) -> Iterator[dict[str, OpSchema]]:
+    """Thread-safe context manager to temporarily override or clear a global schema registry.
+
+    Restores the original contents of the registry upon exiting the context block.
+
+    Args:
+        registry (dict[str, OpSchema]): Target global schema registry dictionary.
+        overrides (Optional[Mapping[str, OpSchema]]): Optional mapping of temporary entries to apply.
+        clear (bool): If True, clear existing registry entries before applying overrides.
+
+    Yields:
+        dict[str, OpSchema]: The mutated registry within the lock-protected context.
+    """
+    with REGISTRY_LOCK:
+        saved = dict(registry)
+        try:
+            if clear:
+                registry.clear()
+            if overrides is not None:
+                registry.update(overrides)
+            yield registry
+        finally:
+            registry.clear()
+            registry.update(saved)

@@ -399,7 +399,7 @@ def test_propagate_slice_split_flatten_concat_branches() -> None:
         inputs=["x"],
         attributes={"starts": [2], "ends": [0], "axes": [0], "steps": [-1]},
     )
-    assert _propagate_slice_op(n_sl_step_neg, {"x": n_x}) == (0, 1, 4)
+    assert _propagate_slice_op(n_sl_step_neg, {"x": n_x}) == (2, 1, 4)
 
     n_sl_neg_idx = LogicalNode(
         id="sl_ni",
@@ -475,7 +475,7 @@ def test_propagate_slice_split_flatten_concat_branches() -> None:
     res_split_l = _propagate_split_op(n_split_list, {"sym_in": n_sym})
     assert res_split_l == (si_n, 20)
 
-    # Slice with negative step
+    # Slice with negative step and zero step
     n_sl_neg = LogicalNode(
         id="sl_neg",
         op_type="Slice",
@@ -483,7 +483,19 @@ def test_propagate_slice_split_flatten_concat_branches() -> None:
         attributes={"starts": [10], "ends": [0], "axes": [0], "steps": [-1]},
     )
     res_sl_neg = _propagate_slice_op(n_sl_neg, {"sym_t": n_sym_t})
-    assert res_sl_neg == (-10,)
+    assert res_sl_neg == (10,)
+
+    n_sl_zero = LogicalNode(
+        id="sl_zero",
+        op_type="Slice",
+        inputs=["sym_t"],
+        attributes={"starts": [0], "ends": [10], "axes": [0], "steps": [0]},
+    )
+    assert _propagate_slice_op(n_sl_zero, {"sym_t": n_sym_t}) == (0,)
+    assert _propagate_slice_op(
+        n_sl_zero,
+        {"sym_t": LogicalNode(id="sym_t", op_type="Input", shape_metadata=(20,))},
+    ) == (0,)
 
     # Graph with unshaped nodes across all ops maintaining shape_metadata
     unshaped_ops = [

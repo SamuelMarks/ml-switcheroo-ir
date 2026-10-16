@@ -285,3 +285,32 @@ def test_export_to_python_subgraphs_and_missing_black(
     monkeypatch.setitem(sys.modules, "black", None)
     unformatted_code = export_to_python(graph)
     assert "def build_graph() -> sw_ir.LogicalGraph:" in unformatted_code
+
+
+def test_export_to_python_special_characters_and_sanitization() -> None:
+    """Verify export_to_python handles special characters in node IDs, attributes, and function names."""
+    special_node = sw_ir.LogicalNode(
+        id="node/0:out'\"\\",
+        op_type="Custom",
+        attributes={"z-key'\"": "val\nwith\nnewlines", "a$key": 42},
+    )
+    graph = sw_ir.LogicalGraph(
+        name='Model"""WithQuotes\nAndNewlines',
+        nodes={special_node.id: special_node},
+        outputs=[special_node.id],
+    )
+
+    code_digit = export_to_python(graph, function_name="123-my.func!")
+    compiled = compile(code_digit, "<exported>", "exec")
+    scope: dict[str, object] = {}
+    exec(compiled, scope)  # noqa: S102
+    builder = scope["_123_my_func"]
+    assert callable(builder)
+    reconstructed = builder()
+    assert reconstructed == graph
+
+    code_kw = export_to_python(sw_ir.LogicalGraph(name=""), function_name="return")
+    assert "def return_() -> sw_ir.LogicalGraph:" in code_kw
+
+    code_empty = export_to_python(graph, function_name="!!!")
+    assert "def build_graph() -> sw_ir.LogicalGraph:" in code_empty

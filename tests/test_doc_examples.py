@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from ml_switcheroo_ir import (
     CompilerBackend,
@@ -134,8 +135,12 @@ def test_readme_quickstart_json_serialization() -> None:
     assert restored_graph["attn"].op_type == "FlashAttention"
 
 
-def test_readme_quickstart_transforms_and_translation(tmp_path: object) -> None:
-    """Test README Quick Starts 4 (compressed I/O), 5 (transforms), and 6 (translation)."""
+def test_readme_quickstart_transforms_and_translation(tmp_path: Path) -> None:
+    """Test README Quick Starts 4 (compressed I/O), 5 (transforms), and 6 (translation).
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     from ml_switcheroo_ir import (
         eliminate_common_subexpressions,
         eliminate_dead_nodes,
@@ -483,6 +488,7 @@ def test_usage_nested_subgraphs() -> None:
     )
     control_graph = LogicalGraph(nodes={"loop1": loop_node})
     assert "body" in control_graph["loop1"].subgraphs
+    assert isinstance(control_graph["loop1"].subgraphs["body"], LogicalGraph)
     assert control_graph["loop1"].subgraphs["body"].name == "LoopBody"
 
 
@@ -628,8 +634,12 @@ def test_usage_hardware_isa_validation() -> None:
     assert len(hazards) == 1
 
 
-def test_usage_schema_export_and_typescript(tmp_path: object) -> None:
-    """Test USAGE.md Section 1.14: Programmatic Schema Export & TypeScript Generation."""
+def test_usage_schema_export_and_typescript(tmp_path: Path) -> None:
+    """Test USAGE.md Section 1.14: Programmatic Schema Export & TypeScript Generation.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     from ml_switcheroo_ir import (
         export_schemas,
         generate_typescript_definitions,

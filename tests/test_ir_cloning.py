@@ -65,6 +65,8 @@ def test_node_clone_defaults_and_isolation() -> None:
     cloned.output_specs[0].shape = (2, 64)
     assert orig.output_specs[0].shape == (1, 32, 64, 64)
 
+    assert isinstance(cloned.subgraphs["body"], LogicalGraph)
+    assert isinstance(orig.subgraphs["body"], LogicalGraph)
     cloned.subgraphs["body"].name = "MutatedInner"
     assert orig.subgraphs["body"].name == "Inner"
 
@@ -166,6 +168,7 @@ def test_graph_clone_complete_isolation() -> None:
     cloned.outputs.append("n3_out")
     assert graph.outputs == ["n2_out"]
 
+    assert isinstance(cloned.initializers["w"], list)
     cloned.initializers["w"].append(3.0)
     assert graph.initializers["w"] == [1.0, 2.0]
 
@@ -188,7 +191,9 @@ def test_graph_clone_with_pipeline_topology() -> None:
     g.set_pipeline_topology(topo)
 
     cloned = g.clone()
-    assert hasattr(cloned, "pipeline_topology")
+    assert cloned is not g
     assert cloned.pipeline_topology is not None
+    assert cloned.pipeline_topology is not g.pipeline_topology
+    assert cloned.pipeline_topology == g.pipeline_topology
     assert cloned.pipeline_topology.microbatch_splitting.num_microbatches == 4
     assert cloned.pipeline_topology.mesh_mapping.devices_per_stage == 1

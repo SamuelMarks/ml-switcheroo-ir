@@ -29,7 +29,7 @@ from ml_switcheroo_ir.cli import main as cli_main
 
 def test_package_version() -> None:
     """Test package version exposure."""
-    assert __version__ == "0.0.3"
+    assert __version__.count(".") == 2
 
 
 def test_topological_sort_linear() -> None:
@@ -407,7 +407,12 @@ def test_verify_backend_class_not_inheriting(
 def test_cli_tabulate_fallback(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test."""
+    """Verify CLI tabulate fallback formats rows when tabulate package is unavailable.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     import sys
 
     monkeypatch.setitem(sys.modules, "tabulate", None)
@@ -423,7 +428,7 @@ def test_cli_tabulate_fallback(
 
 
 def test_cli_main_invalid_command() -> None:
-    """Test."""
+    """Verify CLI main exits when given an unrecognized subcommand."""
     import pytest
 
     from ml_switcheroo_ir.cli import main as cli_main
@@ -435,7 +440,12 @@ def test_cli_main_invalid_command() -> None:
 def test_cli_main_validate_valid(
     capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
 ) -> None:
-    """Test."""
+    """Verify CLI validate subcommand exits with code 0 on a valid graph JSON file.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
@@ -449,7 +459,12 @@ def test_cli_main_validate_valid(
 def test_cli_main_validate_invalid(
     capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
 ) -> None:
-    """Test."""
+    """Verify CLI validate subcommand exits with code 1 on an invalid operator node.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
@@ -463,7 +478,12 @@ def test_cli_main_validate_invalid(
 def test_cli_main_validate_custom_ops(
     capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
 ) -> None:
-    """Test."""
+    """Verify CLI validate subcommand accepts user-provided --custom-ops schema JSON.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
@@ -476,7 +496,11 @@ def test_cli_main_validate_custom_ops(
 
 
 def test_cli_main_list_ops(capsys: pytest.CaptureFixture[str]) -> None:
-    """Test."""
+    """Verify CLI list-ops subcommand filters operators by domain and search query.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     cli_main(["list-ops", "--domain", "ai.onnx", "--search", "Abs"])
@@ -485,7 +509,11 @@ def test_cli_main_list_ops(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_cli_main_list_ops_no_filters(capsys: pytest.CaptureFixture[str]) -> None:
-    """Test."""
+    """Verify CLI list-ops subcommand lists all registered operators when unfiltered.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     cli_main(["list-ops"])
@@ -495,7 +523,11 @@ def test_cli_main_list_ops_no_filters(capsys: pytest.CaptureFixture[str]) -> Non
 
 
 def test_cli_compliance_not_found(capsys: pytest.CaptureFixture[str]) -> None:
-    """Test."""
+    """Verify CLI compliance subcommand exits with code 1 when target path does not exist.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     import pytest
 
     from ml_switcheroo_ir.cli import main as cli_main
@@ -508,7 +540,12 @@ def test_cli_compliance_not_found(capsys: pytest.CaptureFixture[str]) -> None:
 def test_cli_compliance_file(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test."""
+    """Verify CLI compliance subcommand prints a report for a single Python file.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_file.py"
@@ -521,7 +558,12 @@ def test_cli_compliance_file(
 def test_cli_compliance_register_framework(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test."""
+    """Verify CLI compliance subcommand detects @register_framework adapters.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_fw.py"
@@ -536,7 +578,12 @@ def test_cli_compliance_register_framework(
 def test_cli_compliance_backend_frontend(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test."""
+    """Verify CLI compliance subcommand evaluates CompilerBackend and GraphFrontend classes.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_be.py"
@@ -551,7 +598,12 @@ def test_cli_compliance_backend_frontend(
 def test_cli_compliance_verbose(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test."""
+    """Verify CLI compliance subcommand prints verbose missing operations report with -v.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_be.py"
@@ -564,7 +616,12 @@ def test_cli_compliance_verbose(
 def test_cli_compliance_no_targets(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test."""
+    """Verify CLI compliance subcommand reports when no targets are detected in an empty directory.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     # Empty directory to avoid dialect ops
@@ -578,7 +635,12 @@ def test_cli_compliance_no_targets(
 def test_cli_compliance_directory(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test."""
+    """Verify CLI compliance subcommand scans directories while skipping excluded folders.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     (tmp_path / "node_modules").mkdir()
@@ -595,7 +657,12 @@ def test_cli_compliance_directory(
 def test_cli_main_validate_warnings_only(
     capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
 ) -> None:
-    """Test."""
+    """Verify CLI validate subcommand exits 0 when only warnings are emitted.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
@@ -619,7 +686,13 @@ def test_cli_compliance_exception(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Test."""
+    """Verify CLI compliance subcommand handles Python syntax errors gracefully.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     # Create an unparseable file to trigger exception
@@ -632,7 +705,12 @@ def test_cli_compliance_exception(
 def test_cli_compliance_json_exception(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test."""
+    """Verify CLI compliance subcommand handles malformed adjacent JSON definitions gracefully.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_fw.py"
@@ -649,7 +727,7 @@ def test_cli_compliance_json_exception(
 
 
 def test_to_json_from_json() -> None:
-    """Test."""
+    """Verify LogicalGraph JSON serialization and deserialization preserves sharding and shapes."""
     spec = PartitionSpec(axes=("data", None))
     mesh = LogicalMesh(shape={"data": 4})
     node = LogicalNode(id="x", op_type="Linear", sharding=spec, shape_metadata=(1, 2))

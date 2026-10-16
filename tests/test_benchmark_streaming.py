@@ -147,7 +147,11 @@ def test_streaming_zstd_missing_dependency(
 
 
 def test_streaming_json_roundtrip_50_nodes(tmp_path: Path) -> None:
-    """Fast version of streaming JSON benchmark for CI."""
+    """Fast version of streaming JSON benchmark for CI.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     from ml_switcheroo_ir import LogicalGraph, LogicalNode
 
     graph = LogicalGraph(
@@ -161,7 +165,11 @@ def test_streaming_json_roundtrip_50_nodes(tmp_path: Path) -> None:
 
 
 def test_streaming_zstd_roundtrip_50_nodes(tmp_path: Path) -> None:
-    """Fast version of streaming ZSTD benchmark for CI."""
+    """Fast version of streaming ZSTD benchmark for CI.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     from ml_switcheroo_ir import LogicalGraph, LogicalNode
 
     graph = LogicalGraph(

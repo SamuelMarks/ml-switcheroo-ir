@@ -50,7 +50,11 @@ def test_validator_stablehlo_custom_registry_and_dict_attr() -> None:
 
 
 def test_grounding_validator_edge_branches(tmp_path: Path) -> None:
-    """Test GroundingValidator branch conditions."""
+    """Test GroundingValidator branch conditions.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     # Non-existent file path
     gv_bad_path = GroundingValidator(
         snapshot_manifest=str(tmp_path / "non_existent.json")

@@ -124,3 +124,7 @@ def test_custom_op_dict_op_attributes() -> None:
     assert "named_custom" in op_schema.attributes
     assert op_schema.attributes["direct_op_attr"].type == "int"
     assert op_schema.attributes["named_custom"].default == 1.0
+
+    reg = Registry()
+    reg.register(op_schema)
+    assert reg.schemas["OpWithAttrs"] is op_schema

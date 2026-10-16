@@ -202,7 +202,11 @@ def test_validate_kind_unknown_ops_across_low_level_domains() -> None:
 
 
 def test_missing_schema_json_files(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify graceful handling when bundled low-level JSON schema files do not exist."""
+    """Verify graceful handling when bundled low-level JSON schema files do not exist.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
     from pathlib import Path
 
     import ml_switcheroo_ir.schema.low_level_registries as ll_mod

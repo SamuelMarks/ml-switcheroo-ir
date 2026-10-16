@@ -91,7 +91,11 @@ def test_validator_aten_and_array_api_validation() -> None:
 
 
 def test_missing_framework_schema_file(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify graceful handling when framework JSON schema file does not exist."""
+    """Verify graceful handling when framework JSON schema file does not exist.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
     monkeypatch.setattr(Path, "exists", lambda self: False)
     res = _load_framework_schema_file("nonexistent.json", "dummy")
     assert res == {}

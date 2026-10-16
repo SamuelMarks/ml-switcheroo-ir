@@ -109,7 +109,7 @@ def test_get_doc_coverage() -> None:
         mock_run_no_match.return_value.stdout = "no match in output\n"
         assert get_doc_coverage() == 100.0
 
-    with patch("subprocess.run", side_effect=Exception("Failed")):
+    with patch("subprocess.run", side_effect=RuntimeError("Failed")):
         assert get_doc_coverage() == 100.0
 
 
@@ -210,7 +210,7 @@ def test_get_test_coverage_success() -> None:
 
 def test_get_test_coverage_failure() -> None:
     """Test get_test_coverage returns 0.0 on missing or invalid file."""
-    with patch("subprocess.run", side_effect=Exception("Failed")):
+    with patch("subprocess.run", side_effect=RuntimeError("Failed")):
         val = get_test_coverage(coverage_json_path="/nonexistent/path/coverage.json")
         assert val == 0.0
 
@@ -1875,7 +1875,11 @@ def test_verify_grounding_main_ecosystem_and_strict() -> None:
 
 
 def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
-    """Test exhaustive stablehlo paths in verify_stablehlo_grounding."""
+    """Test exhaustive stablehlo paths in verify_stablehlo_grounding.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     from scripts.verify_grounding import verify_stablehlo_grounding
 
     with patch("scripts.verify_grounding.STABLEHLO_REGISTRY", {}):
@@ -1889,3 +1893,40 @@ def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
         fw_dir.mkdir(parents=True, exist_ok=True)
         (fw_dir / "stablehlo_exhaustive.json").write_text("{}", encoding="utf-8")
         assert verify_stablehlo_grounding(tmp_path) == []
+        (fw_dir / "stablehlo_exhaustive.json").unlink()
+
+        # 3. Installed package fallback when path contains ml-ecosystem-snapshots
+        eco_snap_dir = tmp_path / "ml-ecosystem-snapshots" / "snapshots"
+        eco_snap_dir.mkdir(parents=True, exist_ok=True)
+        assert verify_stablehlo_grounding(eco_snap_dir) == []
+        with patch.dict("sys.modules", {"ml_ecosystem_snapshots.frameworks": None}):
+            assert verify_stablehlo_grounding(eco_snap_dir) == []
+        with patch(
+            "ml_ecosystem_snapshots.frameworks.__file__",
+            str(tmp_path / "nonexistent_pkg" / "__init__.py"),
+        ):
+            assert verify_stablehlo_grounding(eco_snap_dir) == []
+
+        # 4. Populated nested_eco in resolve_snapshots_path
+        from ml_switcheroo_ir.snapshots import resolve_snapshots_path
+
+        eco_repo = tmp_path / "eco_repo_populated"
+        pop_eco = eco_repo / "src" / "ml_ecosystem_snapshots" / "snapshots"
+        pop_eco.mkdir(parents=True, exist_ok=True)
+        (pop_eco / "onnx.json").write_text("{}", encoding="utf-8")
+        assert resolve_snapshots_path(eco_repo) == pop_eco.resolve()
+
+        ws_pop = tmp_path / "ws_pop"
+        pop_sibling = (
+            ws_pop
+            / "ml-ecosystem-snapshots"
+            / "src"
+            / "ml_ecosystem_snapshots"
+            / "snapshots"
+        )
+        pop_sibling.mkdir(parents=True, exist_ok=True)
+        (pop_sibling / "onnx.json").write_text("{}", encoding="utf-8")
+        assert (
+            resolve_snapshots_path(ws_pop / "ml-framework-snapshots")
+            == pop_sibling.resolve()
+        )

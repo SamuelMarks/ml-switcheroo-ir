@@ -522,10 +522,17 @@ def test_find_schema_file_all_branches(tmp_path: Path) -> None:
     # 3. Non-existent filename anywhere
     assert find_schema_file("completely_unknown_file_12345.json") is None
 
-    # 4. Parent candidate
-    with mock.patch("pathlib.Path.is_file", side_effect=[False, True]):
+    # 4. Parent candidate via real directory hierarchy
+    parent_dir = tmp_path / "snap_root"
+    snap_subdir = parent_dir / "snapshots"
+    snap_subdir.mkdir(parents=True)
+    parent_file = parent_dir / "parent_candidate_dummy.json"
+    parent_file.write_text("{}", encoding="utf-8")
+    with mock.patch(
+        "ml_switcheroo_ir.snapshots.DEFAULT_SNAPSHOT_DIR", str(snap_subdir)
+    ):
         parent_res = find_schema_file("parent_candidate_dummy.json")
-        assert parent_res is not None
+        assert parent_res == parent_file
 
 
 def test_translation_engine_corrupt_file_handling(tmp_path: Path) -> None:
@@ -576,3 +583,27 @@ def test_verify_stablehlo_grounding_discovery_branches(tmp_path: Path) -> None:
     errs_fw = verify_stablehlo_grounding(snaps_sub)
     assert len(errs_fw) == len(stablehlo.STABLEHLO_REGISTRY)
     assert any("is not grounded in" in err for err in errs_fw)
+
+
+def test_override_registry_context_manager() -> None:
+    """Verify thread-safe override_registry context manager restores registries cleanly."""
+    from ml_switcheroo_ir.schema.base import OpSchema, override_registry
+
+    dummy_op = OpSchema(
+        name="TempOp",
+        domain="ai.onnx",
+        version=1,
+        attributes={},
+        inputs=["x"],
+        outputs=["y"],
+    )
+    orig_len = len(onnx_registry.ONNX_REGISTRY)
+    with override_registry(onnx_registry.ONNX_REGISTRY, {"TempOp": dummy_op}) as reg:
+        assert "TempOp" in reg
+        assert len(reg) == orig_len + 1
+    assert "TempOp" not in onnx_registry.ONNX_REGISTRY
+    assert len(onnx_registry.ONNX_REGISTRY) == orig_len
+
+    with override_registry(onnx_registry.ONNX_REGISTRY, clear=True) as reg:
+        assert len(reg) == 0
+    assert len(onnx_registry.ONNX_REGISTRY) == orig_len

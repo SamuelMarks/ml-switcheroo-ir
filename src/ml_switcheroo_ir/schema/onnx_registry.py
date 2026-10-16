@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from pathlib import Path
 from typing import Any
 
-from ml_switcheroo_ir.schema.base import OpAttribute, OpSchema
+from ml_switcheroo_ir.schema.base import REGISTRY_LOCK, OpAttribute, OpSchema
 from ml_switcheroo_ir.snapshots import find_schema_file
+
+_logger = logging.getLogger(__name__)
+_REGISTRY_LOCK = REGISTRY_LOCK
 
 __all__ = ["ONNX_REGISTRY", "OpAttribute", "OpSchema", "load_onnx_schemas"]
 
@@ -146,8 +150,8 @@ def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema
                         schema_version=int(raw_sv) if isinstance(raw_sv, int) else ver,
                         deprecated=bool(op_data.get("deprecated", False)),
                     )
-            except (ImportError, AttributeError, ValueError, OSError):
-                pass
+            except (ImportError, AttributeError, ValueError, OSError) as exc:
+                _logger.debug("Fallback ONNX schema loading skipped: %s", exc)
 
         if json_path is None:
             ONNX_REGISTRY.clear()

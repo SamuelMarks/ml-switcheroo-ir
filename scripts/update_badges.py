@@ -97,7 +97,15 @@ def get_coverage_metrics(
                 (cov_branches / num_branches * 100.0) if num_branches > 0 else 100.0
             )
             return overall, stmt_cov, branch_cov
-    except Exception:  # noqa: BLE001
+    except (
+        subprocess.SubprocessError,
+        OSError,
+        json.JSONDecodeError,
+        KeyError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+    ):
         return 0.0, 0.0, 0.0
     finally:
         if is_temp and os.path.exists(actual_path):
@@ -147,7 +155,7 @@ def get_doc_coverage() -> float:
         match = re.search(r"actual:\s*([0-9.]+)%", res.stdout)
         if match:
             return float(match.group(1))
-    except Exception:  # noqa: BLE001, S110
+    except (subprocess.SubprocessError, OSError, ValueError, TypeError, RuntimeError):
         pass
     return 100.0
 

@@ -14,7 +14,12 @@ from ml_switcheroo_ir.cli import main as cli_main
 def test_cli_ground_fully_grounded(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test CLI ground command on fully grounded graph."""
+    """Test CLI ground command on fully grounded graph.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     snapshot_file = tmp_path / "snapshot.json"
     snapshot_data = {
         "torch.relu": {
@@ -43,7 +48,12 @@ def test_cli_ground_fully_grounded(
 def test_cli_ground_with_diagnostics(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test CLI ground command with ungrounded nodes reporting errors."""
+    """Test CLI ground command with ungrounded nodes reporting errors.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     snapshot_file = tmp_path / "snapshot.json"
     snapshot_data = {
         "torch.relu": {
@@ -75,7 +85,12 @@ def test_cli_ground_with_diagnostics(
 def test_cli_ground_directory_path(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test CLI ground command when --snapshots-dir points to a directory of snapshots."""
+    """Test CLI ground command when --snapshots-dir points to a directory of snapshots.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     snap_dir = tmp_path / "snaps"
     snap_dir.mkdir()
     (snap_dir / "s1.json").write_text(

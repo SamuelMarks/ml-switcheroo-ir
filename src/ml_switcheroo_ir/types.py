@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
@@ -11,12 +12,35 @@ from typing import (
     Iterator,
     List,
     Mapping,
+    Protocol,
     Sequence,
+    Tuple,
     Union,
 )
+from typing_extensions import TypeAlias
 
 if TYPE_CHECKING:
-    from ml_switcheroo_ir import NoTangent, ZeroTangent
+    from ml_switcheroo_ir.sentinels import NoTangent, ZeroTangent
+
+    InitializerValue: TypeAlias = Union[
+        int,
+        float,
+        bool,
+        str,
+        bytes,
+        List["InitializerValue"],
+        Dict[str, "InitializerValue"],
+    ]
+else:
+    InitializerValue = Union[
+        int,
+        float,
+        bool,
+        str,
+        bytes,
+        List[Any],
+        Dict[str, Any],
+    ]
 
 from ml_switcheroo_ir.shapes import (
     DimensionType,
@@ -28,9 +52,12 @@ from ml_switcheroo_ir.shapes import (
 
 __all__ = [
     "AttributeValue",
+    "AutodiffSentinelProtocol",
     "DType",
     "DimensionType",
+    "InitializerValue",
     "NoTangent",
+    "ShapeMetadataType",
     "TensorShape",
     "TensorSpec",
     "ZeroTangent",
@@ -49,6 +76,20 @@ AttributeValue = Union[
     Mapping[str, Any],
     Any,
 ]
+
+
+class AutodiffSentinelProtocol(Protocol):
+    """Protocol representing autodiff sentinel nodes (ZeroTangent, NoTangent).
+
+    Attributes:
+        id (str): Unique node identifier.
+        op_type (str): Sentinel operation type ('ZeroTangent' or 'NoTangent').
+        domain (str): Operator domain ('ml.switcheroo.ad').
+    """
+
+    id: str
+    op_type: str
+    domain: str
 
 
 class DType(str, Enum):
@@ -99,7 +140,6 @@ class DType(str, Enum):
             ValueError: If the string cannot be resolved to a known DType.
         """
         clean = val.strip().lower()
-        # Normalization map for common framework variations
         mapping: dict[str, DType] = {
             "float": cls.float32,
             "double": cls.float64,
@@ -191,15 +231,12 @@ class TensorShape:
         """
         if isinstance(dims, tuple):
             self.dims = dims
-        elif isinstance(dims, (list, Sequence)):
-            self.dims = tuple(dims)
         elif hasattr(dims, "dims"):
             self.dims = tuple(dims.dims)
+        elif isinstance(dims, Iterable):
+            self.dims = tuple(dims)
         else:
-            try:
-                self.dims = tuple(dims)
-            except TypeError:
-                self.dims = (dims,)
+            self.dims = (dims,)
 
     @property
     def rank(self) -> int:
@@ -340,6 +377,13 @@ class TensorShape:
         return False
 
 
+ShapeMetadataType: TypeAlias = Union[
+    Tuple[DimensionType, ...],
+    TensorShape,
+    None,
+]
+
+
 @dataclass
 class TensorSpec:
     """Specification for tensor values including shape, dtype, and sparsity.
@@ -443,21 +487,21 @@ class TensorSpec:
 
 
 def __getattr__(name: str) -> Any:
-    """Lazily export ZeroTangent and NoTangent from ml_switcheroo_ir.
+    """Lazily resolve ZeroTangent and NoTangent from ml_switcheroo_ir.sentinels.
 
     Args:
         name (str): Attribute name to retrieve.
 
     Returns:
-        Any: Exported object.
+        Any: Exported sentinel class.
 
     Raises:
         AttributeError: If attribute is not found.
     """
     if name in ("ZeroTangent", "NoTangent"):
-        import ml_switcheroo_ir
+        from ml_switcheroo_ir import sentinels
 
-        val = getattr(ml_switcheroo_ir, name)
+        val = getattr(sentinels, name)
         globals()[name] = val
         return val
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

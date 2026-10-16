@@ -53,7 +53,11 @@ def validator() -> Validator:
 
 
 def test_validator_valid_gemm(validator: Validator) -> None:
-    """Test a fully compliant Gemm node returning no errors."""
+    """Test a fully compliant Gemm node returning no errors.
+
+    Args:
+        validator (Validator): Mock-registry Validator fixture.
+    """
     node = LogicalNode(id="gemm1", op_type="Gemm", attributes={"alpha": 2.0})
 
     errors = validator.validate_kind(node)
@@ -67,7 +71,11 @@ def test_validator_valid_gemm(validator: Validator) -> None:
 
 
 def test_validator_missing_required_attr(validator: Validator) -> None:
-    """Test a Conv node lacking kernel_shape asserting a specific ValidationError."""
+    """Test a Conv node lacking kernel_shape asserting a specific ValidationError.
+
+    Args:
+        validator (Validator): Mock-registry Validator fixture.
+    """
     node = LogicalNode(id="conv1", op_type="Conv", attributes={"strides": [2, 2]})
 
     errors = validator.validate_required_attributes(node)
@@ -77,7 +85,11 @@ def test_validator_missing_required_attr(validator: Validator) -> None:
 
 
 def test_validator_invalid_type(validator: Validator) -> None:
-    """Test providing a string '1' when an integer 1 is required."""
+    """Test providing a string '1' when an integer 1 is required.
+
+    Args:
+        validator (Validator): Mock-registry Validator fixture.
+    """
     node = LogicalNode(
         id="conv1", op_type="Conv", attributes={"group": "1", "kernel_shape": [3, 3]}
     )
@@ -90,7 +102,11 @@ def test_validator_invalid_type(validator: Validator) -> None:
 
 
 def test_validator_default_population(validator: Validator) -> None:
-    """Test to ensure missing optional attributes are injected."""
+    """Test to ensure missing optional attributes are injected.
+
+    Args:
+        validator (Validator): Mock-registry Validator fixture.
+    """
     node = LogicalNode(id="conv1", op_type="Conv", attributes={"kernel_shape": [3, 3]})
     validator.populate_defaults(node)
 
@@ -101,7 +117,11 @@ def test_validator_default_population(validator: Validator) -> None:
 
 
 def test_validator_invalid_edge(validator: Validator) -> None:
-    """Test for dangling edge references."""
+    """Test for dangling edge references.
+
+    Args:
+        validator (Validator): Mock-registry Validator fixture.
+    """
     node1 = LogicalNode(id="n1", op_type="Gemm", inputs=["n0", "n2"])
     graph = LogicalGraph(nodes={"n1": node1})
 
@@ -112,7 +132,11 @@ def test_validator_invalid_edge(validator: Validator) -> None:
 
 
 def test_validator_unknown_kind(validator: Validator) -> None:
-    """Test validating an unknown operator."""
+    """Test validating an unknown operator.
+
+    Args:
+        validator (Validator): Mock-registry Validator fixture.
+    """
     node = LogicalNode(id="n1", op_type="UnknownOp")
     errors = validator.validate_kind(node)
     assert len(errors) == 1
@@ -121,7 +145,11 @@ def test_validator_unknown_kind(validator: Validator) -> None:
 
 
 def test_validator_unknown_attribute(validator: Validator) -> None:
-    """Test providing an unregistered attribute issues a warning."""
+    """Test providing an unregistered attribute issues a warning.
+
+    Args:
+        validator (Validator): Mock-registry Validator fixture.
+    """
     node = LogicalNode(id="gemm1", op_type="Gemm", attributes={"unknown_attr": 42})
     errors = validator.validate_attribute_types(node)
     assert len(errors) == 1
@@ -130,7 +158,11 @@ def test_validator_unknown_attribute(validator: Validator) -> None:
 
 
 def test_validator_graph_integration(validator: Validator) -> None:
-    """Test the integrated validate_graph method."""
+    """Test the integrated validate_graph method.
+
+    Args:
+        validator (Validator): Mock-registry Validator fixture.
+    """
     node1 = LogicalNode(id="n1", op_type="Gemm", attributes={"alpha": 2.0})
     node2 = LogicalNode(
         id="n2", op_type="Conv", inputs=["n1", "n3"]
@@ -171,7 +203,11 @@ def test_validator_default_registry() -> None:
 
 
 def test_validator_list_type_check_errors(validator: Validator) -> None:
-    """Test invalid list items."""
+    """Test invalid list items.
+
+    Args:
+        validator (Validator): Mock-registry Validator fixture.
+    """
     node = LogicalNode(
         id="conv1", op_type="Conv", attributes={"kernel_shape": [3, "3"]}
     )
@@ -288,6 +324,12 @@ def test_validator_edge_source_idx_out_of_bounds() -> None:
     graph = LogicalGraph(nodes={"prod": producer, "cons": consumer}, edges=[edge])
 
     validator = Validator()
+    errors = validator.validate_graph(graph)
+
+    assert any("out of bounds" in str(e.message) for e in errors), (
+        f"Errors were: {errors}"
+    )
+
     from unittest import mock
 
     with mock.patch(
@@ -296,8 +338,5 @@ def test_validator_edge_source_idx_out_of_bounds() -> None:
         mock_edges.return_value = [
             LogicalEdge(source="prod", target="cons", source_idx=2)
         ]
-        errors = validator.validate_graph(graph)
-
-    assert any("out of bounds" in str(e.message) for e in errors), (
-        f"Errors were: {errors}"
-    )
+        errors_direct = validator.validate_graph(graph)
+    assert any("out of bounds" in str(e.message) for e in errors_direct)

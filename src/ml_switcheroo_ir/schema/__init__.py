@@ -1,5 +1,9 @@
 """Schema and validation for ml_switcheroo_ir."""
 
+from ml_switcheroo_ir.schema.base import (
+    REGISTRY_LOCK,
+    override_registry,
+)
 from ml_switcheroo_ir.schema.custom_ops import (
     CUSTOM_OPS_REGISTRY,
     STATE_OPS_REGISTRY,
@@ -66,6 +70,7 @@ __all__ = [
     "RDNA_REGISTRY",
     "RDNA_TO_VOPD_MAP",
     "RDNA_VOPD_SLOTS",
+    "REGISTRY_LOCK",
     "SASS_PIPELINE_LATENCIES",
     "SASS_REGISTRY",
     "STABLEHLO_REGISTRY",
@@ -96,4 +101,5 @@ __all__ = [
     "get_abstract_op",
     "migrate_ghost_ref",
     "migrate_ghost_ref_v2",
+    "override_registry",
 ]

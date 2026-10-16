@@ -22,6 +22,9 @@ from ml_switcheroo_ir.validation.grounding import (
     GroundingDiagnostic,
     GroundingReport,
     GroundingSeverity,
+    GroundingValidator,
+    audit_graph_grounding,
+    audit_grounding,
 )
 from ml_switcheroo_ir.validation.hardware import (
     _extract_dst_vgpr,
@@ -32,6 +35,10 @@ from ml_switcheroo_ir.validation.hardware import (
     validate_vopd_pairing,
 )
 from ml_switcheroo_ir.validation.quantization import validate_quantization_node
+from ml_switcheroo_ir.validation.schema_validator import (
+    MultiDialectValidator,
+    Validator,
+)
 
 __all__ = [
     "CORE_MLIR_DIALECTS",
@@ -40,12 +47,17 @@ __all__ = [
     "GroundingDiagnostic",
     "GroundingReport",
     "GroundingSeverity",
+    "GroundingValidator",
     "KNOWN_SYNONYMS",
+    "MultiDialectValidator",
     "ValidationError",
     "ValidationLevel",
+    "Validator",
     "_extract_dst_vgpr",
     "_extract_sass_registers",
     "_extract_vgpr_indices",
+    "audit_graph_grounding",
+    "audit_grounding",
     "compute_levenshtein",
     "estimate_communication_volume",
     "estimate_graph_communication_volume",

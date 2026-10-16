@@ -2,25 +2,30 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from collections import defaultdict, deque
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 import copy
+from dataclasses import asdict, dataclass, field
 import gzip
 import io
 import json
 import os
-import warnings
-from abc import ABC, abstractmethod
-from collections import defaultdict, deque
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import IO, Any, BinaryIO, Iterator, Mapping, Sequence, TextIO, overload
+import string
+from typing import IO, Any, BinaryIO, TextIO, cast, overload
+import warnings
 
 from ml_switcheroo_ir.distributed import (
     PipelineTopologyConfig,
     WebRTCSignalingTopology,
 )
+from ml_switcheroo_ir.shapes import DimensionType
 from ml_switcheroo_ir.types import (
     AttributeValue,
     DType,
+    InitializerValue,
+    ShapeMetadataType,
     TensorShape,
     TensorSpec,
 )
@@ -53,9 +58,11 @@ __all__ = [
     "LogicalMesh",
     "LogicalNode",
     "NoTangent",
+    "NodeDict",
     "PartitionSpec",
     "ZeroTangent",
     "_load_zstandard",
+    "_stream_parse_graph",
     "topological_sort",
     "zstandard",
 ]
@@ -130,20 +137,20 @@ class CyclicGraphError(Exception):
     """Raised when a cycle is detected in a graph during topological sorting."""
 
 
-_UNSET_OP_TYPE: Any = object()
+_UNSET_OP_TYPE: object = object()
 _CLONE_UNSET: Any = object()
 
 
 def _normalize_shape_metadata(
-    shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any,
-) -> Any:
+    shape_metadata: ShapeMetadataType | Sequence[DimensionType] | object,
+) -> ShapeMetadataType:
     """Normalize arbitrary shape_metadata input into a canonical tuple or object.
 
     Args:
-        shape_metadata (Any): Raw shape metadata argument.
+        shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object): Raw shape metadata argument.
 
     Returns:
-        Any: Normalized tuple of dimensions or preserved custom metadata object.
+        ShapeMetadataType: Normalized tuple of dimensions or preserved custom metadata object.
     """
     if shape_metadata is None:
         return None
@@ -153,29 +160,28 @@ def _normalize_shape_metadata(
         return tuple(shape_metadata)
     if hasattr(shape_metadata, "shape"):
         return _normalize_shape_metadata(shape_metadata.shape)
-    if not isinstance(shape_metadata, (str, bytes, dict)):
-        try:
-            return tuple(shape_metadata)
-        except TypeError:
-            return shape_metadata
-    return shape_metadata
+    if not isinstance(shape_metadata, (str, bytes, dict)) and isinstance(
+        shape_metadata, Iterable
+    ):
+        return tuple(shape_metadata)
+    return cast("ShapeMetadataType", shape_metadata)
 
 
-def _normalize_node_init_args(
-    op_type: Any,
-    domain: Any,
-    attributes: Mapping[str, Any] | None,
+def _normalize_legacy_node_args(
+    op_type: object,
+    domain: object,
+    attributes: Mapping[str, AttributeValue] | None,
     kind: str | None,
-    metadata: Mapping[str, Any] | None,
+    metadata: Mapping[str, AttributeValue] | None,
 ) -> tuple[str, str, dict[str, AttributeValue]]:
-    """Normalize canonical and legacy LogicalNode constructor arguments.
+    """Resolve legacy LogicalNode constructor parameters and emit deprecation warnings.
 
     Args:
-        op_type (Any): Canonical operation type or sentinel.
-        domain (Any): Domain identifier string or legacy attribute dictionary.
-        attributes (Optional[Mapping[str, Any]]): Canonical attributes dictionary.
+        op_type (object): Canonical operation type or sentinel.
+        domain (object): Domain identifier string or legacy attribute mapping.
+        attributes (Optional[Mapping[str, AttributeValue]]): Canonical attributes mapping.
         kind (Optional[str]): Deprecated alias for op_type.
-        metadata (Optional[Mapping[str, Any]]): Deprecated alias for attributes.
+        metadata (Optional[Mapping[str, AttributeValue]]): Deprecated alias for attributes.
 
     Returns:
         tuple[str, str, dict[str, AttributeValue]]: Resolved (op_type, domain, attributes).
@@ -187,13 +193,13 @@ def _normalize_node_init_args(
         warnings.warn(
             "The 'kind' parameter is deprecated; use 'op_type' instead.",
             DeprecationWarning,
-            stacklevel=3,
+            stacklevel=4,
         )
     if metadata is not None:
         warnings.warn(
             "The 'metadata' parameter is deprecated; use 'attributes' instead.",
             DeprecationWarning,
-            stacklevel=3,
+            stacklevel=4,
         )
 
     if op_type is _UNSET_OP_TYPE and kind is None:
@@ -218,7 +224,12 @@ def _normalize_node_init_args(
 
     resolved_domain = "ai.onnx"
     resolved_attributes: dict[str, AttributeValue] = {}
-    if isinstance(domain, dict):
+    if isinstance(domain, Mapping):
+        warnings.warn(
+            "Passing a mapping as 'domain' is deprecated; use 'attributes' instead.",
+            DeprecationWarning,
+            stacklevel=4,
+        )
         resolved_attributes.update(domain)
     else:
         resolved_domain = str(domain)
@@ -229,6 +240,45 @@ def _normalize_node_init_args(
         resolved_attributes.update(attributes)
 
     return resolved_op_type, resolved_domain, resolved_attributes
+
+
+def _normalize_node_init_args(
+    op_type: object,
+    domain: object,
+    attributes: Mapping[str, AttributeValue] | None,
+    kind: str | None,
+    metadata: Mapping[str, AttributeValue] | None,
+) -> tuple[str, str, dict[str, AttributeValue]]:
+    """Normalize canonical and legacy LogicalNode constructor arguments.
+
+    Separates the fast canonical construction path from legacy positional/mapping
+    coercion and deprecated alias resolution.
+
+    Args:
+        op_type (object): Canonical operation type or sentinel.
+        domain (object): Domain identifier string or legacy attribute dictionary.
+        attributes (Optional[Mapping[str, AttributeValue]]): Canonical attributes dictionary.
+        kind (Optional[str]): Deprecated alias for op_type.
+        metadata (Optional[Mapping[str, AttributeValue]]): Deprecated alias for attributes.
+
+    Returns:
+        tuple[str, str, dict[str, AttributeValue]]: Resolved (op_type, domain, attributes).
+
+    Raises:
+        ValueError: If neither op_type nor kind is provided, or if both conflict.
+    """
+    if (
+        kind is None
+        and metadata is None
+        and isinstance(op_type, str)
+        and isinstance(domain, str)
+    ):
+        return (
+            op_type,
+            domain,
+            dict(attributes) if attributes is not None else {},
+        )
+    return _normalize_legacy_node_args(op_type, domain, attributes, kind, metadata)
 
 
 @dataclass
@@ -243,12 +293,12 @@ class LogicalNode:
         attributes (Dict[str, AttributeValue]): Dictionary of configuration parameters (e.g. ``kernel_size=3``).
         inputs (List[str]): Ordered list of upstream LogicalNode IDs.
         outputs (List[str]): Ordered list of output names/SSA value identifiers produced by this node.
-        shape_metadata (Optional[Tuple[Union[int, str], ...]]): Tuple of integers or string symbols ("B", "T").
+        shape_metadata (ShapeMetadataType): Tuple of dimensions or TensorShape.
         source_ast_ref (Optional[str]): Traceback to exact file path, line number, and cdd-python AST node ID.
         sharding (Optional[PartitionSpec]): Optional layout specification for distributed placement of this node's output.
         dtype (Optional[DType]): Data type of the node computation or primary output.
         output_specs (List[TensorSpec]): Explicit tensor specifications for all node outputs.
-        subgraphs (Dict[str, Any]): Nested subgraphs for control flow, autodiff, and checkpointing.
+        subgraphs (Dict[str, Union[LogicalGraph, AttributeValue]]): Nested subgraphs for control flow and autodiff.
         device (Optional[str]): Target device placement string (e.g., 'cuda:0', 'cpu').
         stream (Optional[str]): Asynchronous execution stream name.
 
@@ -261,12 +311,12 @@ class LogicalNode:
     attributes: dict[str, AttributeValue] = field(default_factory=dict)
     inputs: list[str] = field(default_factory=list)
     outputs: list[str] = field(default_factory=list)
-    shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None
+    shape_metadata: ShapeMetadataType = None
     source_ast_ref: str | None = None
     sharding: PartitionSpec | None = None
     dtype: DType | None = None
     output_specs: list[TensorSpec] = field(default_factory=list)
-    subgraphs: dict[str, Any] = field(default_factory=dict)
+    subgraphs: dict[str, LogicalGraph | AttributeValue] = field(default_factory=dict)
     device: str | None = None
     stream: str | None = None
 
@@ -275,17 +325,17 @@ class LogicalNode:
         self,
         id: str,
         op_type: str = ...,
-        domain: Mapping[str, Any] | str = "ai.onnx",
+        domain: Mapping[str, AttributeValue] | str = "ai.onnx",
         version: int = 1,
-        attributes: Mapping[str, Any] | None = None,
+        attributes: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
         outputs: list[str] | None = None,
-        shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None,
+        shape_metadata: ShapeMetadataType | Sequence[DimensionType] | object = None,
         source_ast_ref: str | None = None,
         sharding: PartitionSpec | None = None,
         dtype: DType | None = None,
         output_specs: list[TensorSpec] | None = None,
-        subgraphs: dict[str, Any] | None = None,
+        subgraphs: Mapping[str, LogicalGraph | AttributeValue] | None = None,
         device: str | None = None,
         stream: str | None = None,
     ) -> None:
@@ -294,19 +344,17 @@ class LogicalNode:
         Args:
             id (str): Unique identifier for the node.
             op_type (str): Operation type.
-            domain (Union[Mapping[str, Any], str]): Operator domain or attributes mapping.
+            domain (Union[Mapping[str, AttributeValue], str]): Operator domain or attributes mapping.
             version (int): Operator version (default: 1).
-            attributes (Optional[Mapping[str, Any]]): Operator attributes.
+            attributes (Optional[Mapping[str, AttributeValue]]): Operator attributes.
             inputs (Optional[List[str]]): Ordered list of upstream input IDs.
             outputs (Optional[List[str]]): Ordered list of output SSA names.
-            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Tensor
-                shape metadata, accepting standard integer/string dimension tuples/lists, duck-typed metadata
-                objects defining a `.shape` attribute, or arbitrary custom non-iterable objects.
+            shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object): Tensor shape metadata.
             source_ast_ref (Optional[str]): Source AST trace reference.
             sharding (Optional[PartitionSpec]): Distributed partition layout.
             dtype (Optional[DType]): Data type of the node.
             output_specs (Optional[List[TensorSpec]]): Explicit output tensor specs.
-            subgraphs (Optional[Dict[str, Any]]): Nested subgraphs dictionary.
+            subgraphs (Optional[Mapping[str, Union[LogicalGraph, AttributeValue]]]): Nested subgraphs dictionary.
             device (Optional[str]): Target device placement.
             stream (Optional[str]): Target stream identifier.
         """
@@ -317,17 +365,17 @@ class LogicalNode:
         id: str,
         *,
         kind: str,
-        domain: Mapping[str, Any] | str = "ai.onnx",
+        domain: Mapping[str, AttributeValue] | str = "ai.onnx",
         version: int = 1,
-        metadata: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
         outputs: list[str] | None = None,
-        shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None,
+        shape_metadata: ShapeMetadataType | Sequence[DimensionType] | object = None,
         source_ast_ref: str | None = None,
         sharding: PartitionSpec | None = None,
         dtype: DType | None = None,
         output_specs: list[TensorSpec] | None = None,
-        subgraphs: dict[str, Any] | None = None,
+        subgraphs: Mapping[str, LogicalGraph | AttributeValue] | None = None,
         device: str | None = None,
         stream: str | None = None,
     ) -> None:
@@ -336,19 +384,17 @@ class LogicalNode:
         Args:
             id (str): Unique identifier for the node.
             kind (str): Alternative alias for op_type (deprecated).
-            domain (Union[Mapping[str, Any], str]): Operator domain or attributes mapping.
+            domain (Union[Mapping[str, AttributeValue], str]): Operator domain or attributes mapping.
             version (int): Operator version (default: 1).
-            metadata (Optional[Mapping[str, Any]]): Alternative alias for attributes (deprecated).
+            metadata (Optional[Mapping[str, AttributeValue]]): Alternative alias for attributes (deprecated).
             inputs (Optional[List[str]]): Ordered list of upstream input IDs.
             outputs (Optional[List[str]]): Ordered list of output SSA names.
-            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Tensor
-                shape metadata, accepting standard integer/string dimension tuples/lists, duck-typed metadata
-                objects defining a `.shape` attribute, or arbitrary custom non-iterable objects.
+            shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object): Tensor shape metadata.
             source_ast_ref (Optional[str]): Source AST trace reference.
             sharding (Optional[PartitionSpec]): Distributed partition layout.
             dtype (Optional[DType]): Data type of the node.
             output_specs (Optional[List[TensorSpec]]): Explicit output tensor specs.
-            subgraphs (Optional[Dict[str, Any]]): Nested subgraphs dictionary.
+            subgraphs (Optional[Mapping[str, Union[LogicalGraph, AttributeValue]]]): Nested subgraphs dictionary.
             device (Optional[str]): Target device placement.
             stream (Optional[str]): Target stream identifier.
         """
@@ -358,90 +404,86 @@ class LogicalNode:
         self,
         id: str,
         op_type: str | None = None,
-        domain: Mapping[str, Any] | str = "ai.onnx",
+        domain: Mapping[str, AttributeValue] | str = "ai.onnx",
         version: int = 1,
-        attributes: Mapping[str, Any] | None = None,
+        attributes: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
         outputs: list[str] | None = None,
-        shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None,
+        shape_metadata: ShapeMetadataType | Sequence[DimensionType] | object = None,
         source_ast_ref: str | None = None,
         sharding: PartitionSpec | None = None,
         dtype: DType | None = None,
         output_specs: list[TensorSpec] | None = None,
-        subgraphs: dict[str, Any] | None = None,
+        subgraphs: Mapping[str, LogicalGraph | AttributeValue] | None = None,
         device: str | None = None,
         stream: str | None = None,
         *,
         kind: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, AttributeValue] | None = None,
     ) -> None:
         """Initialize LogicalNode with flexible parameter naming conventions.
 
         Args:
             id (str): Unique identifier for the node.
             op_type (Optional[str]): Operation type.
-            domain (Union[Mapping[str, Any], str]): Operator domain or attributes mapping.
+            domain (Union[Mapping[str, AttributeValue], str]): Operator domain or attributes mapping.
             version (int): Operator version (default: 1).
-            attributes (Optional[Mapping[str, Any]]): Operator attributes.
+            attributes (Optional[Mapping[str, AttributeValue]]): Operator attributes.
             inputs (Optional[List[str]]): Ordered list of upstream input IDs.
             outputs (Optional[List[str]]): Ordered list of output SSA names.
-            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Tensor
-                shape metadata, accepting standard integer/string dimension tuples/lists, duck-typed metadata
-                objects defining a `.shape` attribute, or arbitrary custom non-iterable objects.
+            shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object): Tensor shape metadata.
             source_ast_ref (Optional[str]): Source AST trace reference.
             sharding (Optional[PartitionSpec]): Distributed partition layout.
             dtype (Optional[DType]): Data type of the node.
             output_specs (Optional[List[TensorSpec]]): Explicit output tensor specs.
-            subgraphs (Optional[Dict[str, Any]]): Nested subgraphs dictionary.
+            subgraphs (Optional[Mapping[str, Union[LogicalGraph, AttributeValue]]]): Nested subgraphs dictionary.
             device (Optional[str]): Target device placement.
             stream (Optional[str]): Target stream identifier.
             kind (Optional[str]): Alternative alias for op_type (deprecated).
-            metadata (Optional[Mapping[str, Any]]): Alternative alias for attributes (deprecated).
+            metadata (Optional[Mapping[str, AttributeValue]]): Alternative alias for attributes (deprecated).
         """
 
     def __init__(
         self,
         id: str,
-        op_type: Any = _UNSET_OP_TYPE,
-        domain: Any = "ai.onnx",
+        op_type: object = _UNSET_OP_TYPE,
+        domain: object = "ai.onnx",
         version: int = 1,
-        attributes: Mapping[str, Any] | None = None,
+        attributes: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
         outputs: list[str] | None = None,
-        shape_metadata: tuple[int | str, ...] | Sequence[int | str] | Any = None,
+        shape_metadata: ShapeMetadataType | Sequence[DimensionType] | object = None,
         source_ast_ref: str | None = None,
         sharding: PartitionSpec | None = None,
         dtype: DType | None = None,
         output_specs: list[TensorSpec] | None = None,
-        subgraphs: dict[str, Any] | None = None,
+        subgraphs: Mapping[str, LogicalGraph | AttributeValue] | None = None,
         device: str | None = None,
         stream: str | None = None,
         *,
         kind: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, AttributeValue] | None = None,
     ) -> None:
         """Initialize a LogicalNode instance with dual parameter naming support.
 
         Args:
             id (str): Unique identifier for the node.
-            op_type (Any): Operation type (e.g. 'Conv', 'Relu').
-            domain (Any): Operator domain or dictionary of attributes for 3-arg legacy signature.
+            op_type (object): Operation type (e.g. 'Conv', 'Relu').
+            domain (object): Operator domain or dictionary of attributes for 3-arg legacy signature.
             version (int): Operator set version (default: 1).
-            attributes (Optional[Dict[str, AttributeValue]]): Operator configuration attributes.
+            attributes (Optional[Mapping[str, AttributeValue]]): Operator configuration attributes.
             inputs (Optional[List[str]]): Ordered list of upstream LogicalNode IDs.
             outputs (Optional[List[str]]): Ordered list of output SSA names.
-            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Tensor
-                shape metadata, accepting standard integer/string dimension tuples/lists, duck-typed metadata
-                objects defining a `.shape` attribute, or arbitrary custom non-iterable objects.
+            shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object): Tensor shape metadata.
             source_ast_ref (Optional[str]): Source AST trace reference.
             sharding (Optional[PartitionSpec]): Distributed partition layout.
             dtype (Optional[DType]): Data type of the node.
             output_specs (Optional[List[TensorSpec]]): Explicit output tensor specs.
-            subgraphs (Optional[Dict[str, Any]]): Nested subgraphs dictionary.
+            subgraphs (Optional[Mapping[str, Union[LogicalGraph, AttributeValue]]]): Nested subgraphs dictionary.
             device (Optional[str]): Target device placement.
             stream (Optional[str]): Target stream identifier.
             kind (Optional[str]): Alternative alias for op_type (deprecated).
-            metadata (Optional[Dict[str, AttributeValue]]): Alternative alias for attributes (deprecated).
+            metadata (Optional[Mapping[str, AttributeValue]]): Alternative alias for attributes (deprecated).
 
         Raises:
             ValueError: If neither op_type nor kind is provided, or if both are provided with conflicting values.
@@ -455,9 +497,7 @@ class LogicalNode:
         self.version = version
         self.attributes = resolved_attrs
         self.inputs = list(inputs) if inputs is not None else []
-        self.outputs = (
-            list(outputs) if outputs is not None and len(outputs) > 0 else [id]
-        )
+        self.outputs = list(outputs) if outputs is not None else [id]
         self.shape_metadata = _normalize_shape_metadata(shape_metadata)
         self.source_ast_ref = source_ast_ref
         self.sharding = sharding
@@ -496,11 +536,11 @@ class LogicalNode:
         self.op_type = value
 
     @property
-    def metadata(self) -> dict[str, Any]:
+    def metadata(self) -> dict[str, AttributeValue]:
         """Alias for attributes for backward compatibility.
 
         Returns:
-            dict[str, Any]: Dictionary of attribute metadata.
+            dict[str, AttributeValue]: Dictionary of attribute metadata.
         """
         warnings.warn(
             "The 'metadata' property is deprecated and will be removed in version 0.1.0; use 'attributes' instead.",
@@ -510,11 +550,11 @@ class LogicalNode:
         return self.attributes
 
     @metadata.setter
-    def metadata(self, value: dict[str, Any]) -> None:
+    def metadata(self, value: Mapping[str, AttributeValue]) -> None:
         """Set attributes via metadata alias.
 
         Args:
-            value (dict[str, Any]): Dictionary of attribute metadata.
+            value (Mapping[str, AttributeValue]): Dictionary of attribute metadata.
         """
         warnings.warn(
             "The 'metadata' setter is deprecated and will be removed in version 0.1.0; use 'attributes' instead.",
@@ -537,18 +577,18 @@ class LogicalNode:
         return TensorShape(self.shape_metadata)
 
     @shape.setter
-    def shape(self, val: Any) -> None:
+    def shape(self, val: ShapeMetadataType | Sequence[DimensionType] | object) -> None:
         """Set shape metadata via shape property.
 
         Args:
-            val (Any): Shape dimensions or TensorShape instance.
+            val (ShapeMetadataType | Sequence[DimensionType] | object): Shape dimensions or TensorShape instance.
         """
         if isinstance(val, TensorShape):
             self.shape_metadata = val.dims
         elif isinstance(val, (tuple, list)):
             self.shape_metadata = tuple(val)
         else:
-            self.shape_metadata = val
+            self.shape_metadata = cast("ShapeMetadataType", val)
 
     @property
     def static_shape(self) -> tuple[int, ...]:
@@ -603,20 +643,20 @@ class LogicalNode:
         op_type: str | None = None,
         domain: str | None = None,
         version: int | None = None,
-        attributes: dict[str, AttributeValue] | None = None,
+        attributes: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
         outputs: list[str] | None = None,
-        shape_metadata: tuple[int | str, ...]
-        | Sequence[int | str]
-        | Any = _CLONE_UNSET,
+        shape_metadata: ShapeMetadataType
+        | Sequence[DimensionType]
+        | object = _CLONE_UNSET,
         source_ast_ref: str | None = _CLONE_UNSET,
         sharding: PartitionSpec | None = _CLONE_UNSET,
         dtype: DType | None = _CLONE_UNSET,
         output_specs: list[TensorSpec] | None = None,
-        subgraphs: dict[str, Any] | None = None,
+        subgraphs: Mapping[str, LogicalGraph | AttributeValue] | None = None,
         device: str | None = _CLONE_UNSET,
         stream: str | None = _CLONE_UNSET,
-        **kwargs: Any,
+        **kwargs: AttributeValue,
     ) -> LogicalNode:
         """Create a deep clone of this LogicalNode with optional keyword overrides.
 
@@ -625,19 +665,18 @@ class LogicalNode:
             op_type (Optional[str]): Override operation type.
             domain (Optional[str]): Override operator domain.
             version (Optional[int]): Override operator version.
-            attributes (Optional[Dict[str, AttributeValue]]): Override attributes dictionary.
+            attributes (Optional[Mapping[str, AttributeValue]]): Override attributes dictionary.
             inputs (Optional[List[str]]): Override input IDs.
             outputs (Optional[List[str]]): Override output names.
-            shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]):
-                Override tensor shape metadata.
+            shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object): Override tensor shape metadata.
             source_ast_ref (Optional[str]): Override source AST reference.
             sharding (Optional[PartitionSpec]): Override partition specification.
             dtype (Optional[DType]): Override data type.
             output_specs (Optional[List[TensorSpec]]): Override output tensor specifications.
-            subgraphs (Optional[Dict[str, Any]]): Override nested subgraphs dictionary.
+            subgraphs (Optional[Mapping[str, Union[LogicalGraph, AttributeValue]]]): Override nested subgraphs.
             device (Optional[str]): Override target device placement.
             stream (Optional[str]): Override asynchronous execution stream.
-            **kwargs (Any): Additional attribute overrides.
+            **kwargs (AttributeValue): Additional attribute overrides.
 
         Returns:
             LogicalNode: A cloned LogicalNode with deep-copied collections and applied overrides.
@@ -647,13 +686,13 @@ class LogicalNode:
         cloned_domain = domain if domain is not None else self.domain
         cloned_version = version if version is not None else self.version
         cloned_attrs = copy.deepcopy(
-            attributes if attributes is not None else self.attributes
+            dict(attributes) if attributes is not None else self.attributes
         )
         if kwargs:
             cloned_attrs.update(kwargs)
 
         raw_subgraphs = subgraphs if subgraphs is not None else self.subgraphs
-        cloned_subgraphs = {
+        cloned_subgraphs: dict[str, LogicalGraph | AttributeValue] = {
             k: v.clone() if hasattr(v, "clone") else copy.deepcopy(v)
             for k, v in raw_subgraphs.items()
         }
@@ -713,73 +752,8 @@ class LogicalNode:
         return len(self.outputs) > 1 or len(self.output_specs) > 1
 
 
-@dataclass
-class ZeroTangent(LogicalNode):
-    """Represents a mathematically zero tangent vector with explicit shape and dtype.
-
-    Attributes:
-        id (str): Unique node identifier.
-        shape_metadata (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]):
-            Shape of the zero tangent vector.
-        dtype (Optional[DType]): Data type of the zero tangent vector.
-    """
-
-    def __init__(
-        self,
-        id: str,
-        shape: tuple[int | str, ...] | Sequence[int | str] | Any = None,
-        dtype: DType | None = DType.float32,
-        **kwargs: Any,
-    ) -> None:
-        """Initialize ZeroTangent sentinel node.
-
-        Args:
-            id (str): Unique node identifier.
-            shape (Optional[Union[Tuple[Union[int, str], ...], Sequence[Union[int, str]], Any]]): Vector shape.
-            dtype (Optional[DType]): Tensor data type.
-            **kwargs (Any): Additional node keyword arguments.
-        """
-        kwargs.pop("op_type", None)
-        kwargs.pop("domain", None)
-        shape_val = kwargs.pop("shape_metadata", shape)
-        dtype_val = kwargs.pop("dtype", dtype)
-        super().__init__(
-            id=id,
-            op_type="ZeroTangent",
-            domain="ml.switcheroo.ad",
-            shape_metadata=shape_val,
-            dtype=dtype_val,
-            **kwargs,
-        )
-
-
-@dataclass
-class NoTangent(LogicalNode):
-    """Represents a non-differentiable or structurally missing cotangent path.
-
-    Attributes:
-        id (str): Unique node identifier.
-    """
-
-    def __init__(
-        self,
-        id: str,
-        **kwargs: Any,
-    ) -> None:
-        """Initialize NoTangent sentinel node.
-
-        Args:
-            id (str): Unique node identifier.
-            **kwargs (Any): Additional node keyword arguments.
-        """
-        kwargs.pop("op_type", None)
-        kwargs.pop("domain", None)
-        super().__init__(
-            id=id,
-            op_type="NoTangent",
-            domain="ml.switcheroo.ad",
-            **kwargs,
-        )
+class NodeDict(dict[str, LogicalNode]):
+    """Strictly typed mapping from node identifiers to LogicalNode instances."""
 
 
 class EdgeList(list["LogicalEdge"]):
@@ -787,37 +761,37 @@ class EdgeList(list["LogicalEdge"]):
 
 
 def _normalize_graph_nodes(
-    nodes: dict[str, Any] | list[LogicalNode] | None,
-) -> dict[str, Any]:
-    """Normalize graph nodes argument from None, list, or dict into a node dictionary.
+    nodes: Mapping[str, LogicalNode] | list[LogicalNode] | None,
+) -> NodeDict:
+    """Normalize graph nodes argument from None, list, or mapping into a NodeDict.
 
     Args:
-        nodes (Optional[Union[Dict[str, Any], List[LogicalNode]]]): Input nodes collection.
+        nodes (Optional[Union[Mapping[str, LogicalNode], List[LogicalNode]]]): Input nodes collection.
 
     Returns:
-        dict[str, Any]: Mapping from node IDs to LogicalNode instances.
+        NodeDict: Mapping from node IDs to LogicalNode instances.
     """
     if nodes is None:
-        return {}
+        return NodeDict()
     if isinstance(nodes, list):
         warnings.warn(
             "Passing a list of nodes to LogicalGraph is deprecated and will be removed in version 0.1.0; provide a dict[str, LogicalNode] instead.",
             DeprecationWarning,
             stacklevel=3,
         )
-        return {node.id: node for node in nodes}
-    return dict(nodes)
+        return NodeDict({node.id: node for node in nodes})
+    return NodeDict(nodes)
 
 
 def _auto_detect_input_pseudo_nodes(
-    nodes: dict[str, Any],
+    nodes: dict[str, LogicalNode],
     inputs: list[str],
     input_specs: dict[str, TensorSpec],
 ) -> None:
     """Populate graph inputs and input_specs from legacy Input pseudo-nodes.
 
     Args:
-        nodes (dict[str, Any]): Graph node dictionary.
+        nodes (dict[str, LogicalNode]): Graph node dictionary.
         inputs (list[str]): Graph input list to update in place.
         input_specs (dict[str, TensorSpec]): Graph input_specs dictionary to update in place.
     """
@@ -839,13 +813,13 @@ def _auto_detect_input_pseudo_nodes(
 
 
 def _infer_graph_outputs(
-    nodes: dict[str, Any],
+    nodes: dict[str, LogicalNode],
     explicit_outputs: list[str] | None,
 ) -> list[str]:
     """Resolve explicit graph outputs or infer leaf/Output nodes when omitted.
 
     Args:
-        nodes (dict[str, Any]): Graph node dictionary.
+        nodes (dict[str, LogicalNode]): Graph node dictionary.
         explicit_outputs (Optional[list[str]]): Explicit output list if provided.
 
     Returns:
@@ -908,7 +882,7 @@ def _parse_node_dict(
 def _parse_subgraphs_from_node_dict(
     ndata_copy: dict[str, Any],
     graph_cls: type[LogicalGraph],
-) -> dict[str, Any]:
+) -> dict[str, LogicalGraph | AttributeValue]:
     """Extract and deserialize nested subgraphs from node dictionary and legacy attributes.
 
     Args:
@@ -916,9 +890,9 @@ def _parse_subgraphs_from_node_dict(
         graph_cls (type[LogicalGraph]): LogicalGraph class for recursive deserialization.
 
     Returns:
-        dict[str, Any]: Mapping of subgraph names to LogicalGraph instances.
+        dict[str, LogicalGraph | AttributeValue]: Mapping of subgraph names to LogicalGraph instances.
     """
-    resolved_subgraphs: dict[str, Any] = {}
+    resolved_subgraphs: dict[str, LogicalGraph | AttributeValue] = {}
     subgraphs_data = ndata_copy.get("subgraphs")
     if subgraphs_data and isinstance(subgraphs_data, dict):
         for sub_k, sub_v in subgraphs_data.items():
@@ -990,6 +964,254 @@ def _parse_input_specs_dict(
     return input_specs
 
 
+def _read_next_chunk(stream: IO[Any], chunk_size: int) -> str:
+    """Read up to chunk_size from a text or binary stream as a UTF-8 string.
+
+    Args:
+        stream (IO[Any]): Readable text or binary stream.
+        chunk_size (int): Maximum number of characters/bytes to read.
+
+    Returns:
+        str: Decoded string chunk, or empty string on EOF.
+    """
+    raw = stream.read(chunk_size)
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8")
+    return str(raw)
+
+
+def _skip_ws_and_tokens(
+    buf: str,
+    pos: int,
+    stream: IO[Any],
+    chunk_size: int,
+    tokens: str,
+) -> tuple[str, int]:
+    """Advance buffer cursor past whitespace and delimiter characters, refilling from stream as needed.
+
+    Args:
+        buf (str): Current active buffer slice.
+        pos (int): Current index within buf.
+        stream (IO[Any]): Source input stream.
+        chunk_size (int): Chunk size for incremental reads and compaction.
+        tokens (str): Characters to skip over.
+
+    Returns:
+        tuple[str, int]: Updated (buf, pos) positioned at the next non-skipped character or EOF.
+    """
+    if pos >= chunk_size:
+        buf = buf[pos:]
+        pos = 0
+    while True:
+        while pos < len(buf) and buf[pos] in tokens:
+            pos += 1
+        if pos < len(buf):
+            return buf, pos
+        chunk = _read_next_chunk(stream, chunk_size)
+        if not chunk:
+            return buf, pos
+        buf = buf[pos:] + chunk
+        pos = 0
+
+
+_WS = string.whitespace
+_WS_COMMA = string.whitespace + ","
+_WS_COLON = string.whitespace + ":"
+
+
+def _decode_next_json_value(
+    decoder: json.JSONDecoder,
+    buf: str,
+    pos: int,
+    stream: IO[Any],
+    chunk_size: int,
+) -> tuple[Any, str, int]:
+    """Decode a single JSON value starting at pos, incrementally reading chunks on boundary straddles.
+
+    Args:
+        decoder (json.JSONDecoder): Reusable JSONDecoder instance.
+        buf (str): Current buffer slice.
+        pos (int): Current position within buf.
+        stream (IO[Any]): Source input stream.
+        chunk_size (int): Chunk size for incremental reads.
+
+    Returns:
+        tuple[Any, str, int]: Decoded Python value and updated (buf, next_pos).
+
+    Raises:
+        json.JSONDecodeError: If the stream ends before a complete JSON value can be decoded.
+    """
+    buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS)
+    while True:
+        try:
+            val, next_pos = decoder.raw_decode(buf, pos)
+            return val, buf, next_pos
+        except json.JSONDecodeError:
+            chunk = _read_next_chunk(stream, chunk_size)
+            if not chunk:
+                raise
+            buf = buf[pos:] + chunk
+            pos = 0
+
+
+def _stream_parse_nodes_section(
+    decoder: json.JSONDecoder,
+    buf: str,
+    pos: int,
+    stream: IO[Any],
+    chunk_size: int,
+    graph_cls: type[LogicalGraph],
+) -> tuple[NodeDict, str, int]:
+    """Incrementally parse the 'nodes' JSON object or array one LogicalNode at a time.
+
+    Ensures peak memory during node deserialization is O(max_node_size) rather than
+    allocating all raw node dictionaries simultaneously.
+
+    Args:
+        decoder (json.JSONDecoder): Reusable JSONDecoder instance.
+        buf (str): Current buffer slice.
+        pos (int): Current index within buf.
+        stream (IO[Any]): Source input stream.
+        chunk_size (int): Chunk size for incremental reads.
+        graph_cls (type[LogicalGraph]): LogicalGraph class for recursive subgraph parsing.
+
+    Returns:
+        tuple[NodeDict, str, int]: Populated NodeDict and updated (buf, pos).
+
+    Raises:
+        json.JSONDecodeError: If the nodes section is not a JSON object or array.
+    """
+    nodes = NodeDict()
+    buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS)
+    if pos >= len(buf) or buf[pos] not in ("{", "["):
+        raise json.JSONDecodeError("Expected '{' or '[' for nodes section", buf, pos)
+
+    opener = buf[pos]
+    pos += 1
+    if opener == "{":
+        while True:
+            buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COMMA)
+            if pos >= len(buf):
+                raise json.JSONDecodeError("Unterminated nodes object", buf, pos)
+            if buf[pos] == "}":
+                return nodes, buf, pos + 1
+            nid, buf, pos = _decode_next_json_value(
+                decoder, buf, pos, stream, chunk_size
+            )
+            buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COLON)
+            ndata, buf, pos = _decode_next_json_value(
+                decoder, buf, pos, stream, chunk_size
+            )
+            nodes[str(nid)] = _parse_node_dict(ndata, graph_cls)
+    else:
+        while True:
+            buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COMMA)
+            if pos >= len(buf):
+                raise json.JSONDecodeError("Unterminated nodes array", buf, pos)
+            if buf[pos] == "]":
+                return nodes, buf, pos + 1
+            ndata, buf, pos = _decode_next_json_value(
+                decoder, buf, pos, stream, chunk_size
+            )
+            node = _parse_node_dict(ndata, graph_cls)
+            nodes[node.id] = node
+
+
+def _build_graph_from_parsed_sections(
+    graph_cls: type[LogicalGraph],
+    nodes: NodeDict,
+    meta: Mapping[str, Any],
+) -> LogicalGraph:
+    """Assemble a LogicalGraph from parsed nodes and top-level metadata sections.
+
+    Args:
+        graph_cls (type[LogicalGraph]): Target LogicalGraph class.
+        nodes (NodeDict): Deserialized nodes dictionary.
+        meta (Mapping[str, Any]): Top-level graph metadata fields.
+
+    Returns:
+        LogicalGraph: Constructed LogicalGraph instance.
+    """
+    edges_data = meta.get("edges")
+    if edges_data and isinstance(edges_data, list):
+        for edge_item in edges_data:
+            src = edge_item.get("source")
+            tgt = edge_item.get("target")
+            if tgt and tgt in nodes and src and src not in nodes[tgt].inputs:
+                nodes[tgt].inputs.append(src)
+
+    pipe_topo_raw = meta.get("pipeline_topology")
+    pipe_topo = (
+        PipelineTopologyConfig.from_dict(pipe_topo_raw)
+        if pipe_topo_raw is not None
+        else None
+    )
+    inputs_data = meta.get("inputs")
+    return graph_cls(
+        name=meta.get("name", "Model"),
+        nodes=nodes,
+        inputs=list(inputs_data) if inputs_data is not None else [],
+        input_specs=_parse_input_specs_dict(meta.get("input_specs")),
+        outputs=meta.get("outputs"),
+        initializers=meta.get("initializers", {}),
+        mesh=_parse_mesh_dict(meta.get("mesh")),
+        pipeline_topology=pipe_topo,
+    )
+
+
+def _stream_parse_graph(
+    stream: IO[Any],
+    graph_cls: type[LogicalGraph],
+    chunk_size: int = 65536,
+) -> LogicalGraph:
+    """Incrementally parse a LogicalGraph from a JSON stream using chunked token scanning.
+
+    Maintains O(max_node_size) peak buffer memory by scanning the top-level JSON object
+    and decoding each node in the 'nodes' section individually.
+
+    Args:
+        stream (IO[Any]): Readable text or binary stream containing JSON.
+        graph_cls (type[LogicalGraph]): LogicalGraph class to instantiate.
+        chunk_size (int): Read chunk size in bytes/characters (default: 65536).
+
+    Returns:
+        LogicalGraph: Deserialized LogicalGraph instance.
+
+    Raises:
+        json.JSONDecodeError: If the stream does not contain a valid JSON object.
+    """
+    decoder = json.JSONDecoder()
+    buf = ""
+    pos = 0
+    buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS)
+    if pos >= len(buf) or buf[pos] != "{":
+        raise json.JSONDecodeError("Expected top-level JSON object '{'", buf, pos)
+    pos += 1
+
+    nodes = NodeDict()
+    meta: dict[str, Any] = {}
+
+    while True:
+        buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COMMA)
+        if pos >= len(buf):
+            raise json.JSONDecodeError("Unterminated top-level JSON object", buf, pos)
+        if buf[pos] == "}":
+            break
+        key, buf, pos = _decode_next_json_value(decoder, buf, pos, stream, chunk_size)
+        buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COLON)
+        if key == "nodes":
+            nodes, buf, pos = _stream_parse_nodes_section(
+                decoder, buf, pos, stream, chunk_size, graph_cls
+            )
+        else:
+            val, buf, pos = _decode_next_json_value(
+                decoder, buf, pos, stream, chunk_size
+            )
+            meta[str(key)] = val
+
+    return _build_graph_from_parsed_sections(graph_cls, nodes, meta)
+
+
 @dataclass
 class LogicalGraph:
     """Represents a computational model or function definition.
@@ -1000,17 +1222,18 @@ class LogicalGraph:
         inputs (List[str]): Ordered list of graph input variable names.
         input_specs (Dict[str, TensorSpec]): Type and shape specifications for graph inputs.
         outputs (List[str]): Ordered list of graph output identifiers or SSA names.
-        initializers (Dict[str, Any]): Constant parameters and weights keyed by tensor name.
+        initializers (Dict[str, InitializerValue]): Constant parameters and weights keyed by tensor name.
         mesh (Optional[LogicalMesh]): Optional logical device mesh for distributed execution.
+        pipeline_topology (Optional[PipelineTopologyConfig]): Optional distributed pipeline topology.
 
     """
 
     name: str = "Model"
-    nodes: dict[str, Any] = field(default_factory=dict)
+    nodes: dict[str, LogicalNode] = field(default_factory=NodeDict)
     inputs: list[str] = field(default_factory=list)
     input_specs: dict[str, TensorSpec] = field(default_factory=dict)
     outputs: list[str] = field(default_factory=list)
-    initializers: dict[str, Any] = field(default_factory=dict)
+    initializers: dict[str, InitializerValue] = field(default_factory=dict)
     mesh: LogicalMesh | None = None
     pipeline_topology: PipelineTopologyConfig | None = None
 
@@ -1018,12 +1241,12 @@ class LogicalGraph:
     def __init__(
         self,
         name: str = "Model",
-        nodes: dict[str, Any] | None = None,
+        nodes: Mapping[str, LogicalNode] | None = None,
         outputs: list[str] | None = None,
         mesh: LogicalMesh | None = None,
         inputs: list[str] | None = None,
-        input_specs: dict[str, TensorSpec] | None = None,
-        initializers: dict[str, Any] | None = None,
+        input_specs: Mapping[str, TensorSpec] | None = None,
+        initializers: Mapping[str, InitializerValue] | None = None,
         *,
         edges: list[LogicalEdge] | None = None,
         pipeline_topology: PipelineTopologyConfig | None = None,
@@ -1032,12 +1255,12 @@ class LogicalGraph:
 
         Args:
             name (str): Name of the graph model/class.
-            nodes (Optional[Dict[str, LogicalNode]]): Mapping of node IDs to LogicalNode instances.
+            nodes (Optional[Mapping[str, LogicalNode]]): Mapping of node IDs to LogicalNode instances.
             outputs (Optional[List[str]]): List of explicit output IDs.
             mesh (Optional[LogicalMesh]): Optional logical device mesh.
             inputs (Optional[List[str]]): List of graph input variable names.
-            input_specs (Optional[Dict[str, TensorSpec]]): Mapping of input names to TensorSpecs.
-            initializers (Optional[Dict[str, Any]]): Constant tensor initializers.
+            input_specs (Optional[Mapping[str, TensorSpec]]): Mapping of input names to TensorSpecs.
+            initializers (Optional[Mapping[str, InitializerValue]]): Constant tensor initializers.
             edges (Optional[List[LogicalEdge]]): Optional list of directed edges to populate.
             pipeline_topology (Optional[PipelineTopologyConfig]): Optional distributed pipeline topology.
         """
@@ -1050,8 +1273,8 @@ class LogicalGraph:
         outputs: list[str] | None = None,
         mesh: LogicalMesh | None = None,
         inputs: list[str] | None = None,
-        input_specs: dict[str, TensorSpec] | None = None,
-        initializers: dict[str, Any] | None = None,
+        input_specs: Mapping[str, TensorSpec] | None = None,
+        initializers: Mapping[str, InitializerValue] | None = None,
         *,
         edges: list[LogicalEdge] | None = None,
         pipeline_topology: PipelineTopologyConfig | None = None,
@@ -1064,8 +1287,8 @@ class LogicalGraph:
             outputs (Optional[List[str]]): List of explicit output IDs.
             mesh (Optional[LogicalMesh]): Optional logical device mesh.
             inputs (Optional[List[str]]): List of graph input variable names.
-            input_specs (Optional[Dict[str, TensorSpec]]): Mapping of input names to TensorSpecs.
-            initializers (Optional[Dict[str, Any]]): Constant tensor initializers.
+            input_specs (Optional[Mapping[str, TensorSpec]]): Mapping of input names to TensorSpecs.
+            initializers (Optional[Mapping[str, InitializerValue]]): Constant tensor initializers.
             edges (Optional[List[LogicalEdge]]): Optional list of directed edges to populate.
             pipeline_topology (Optional[PipelineTopologyConfig]): Optional distributed pipeline topology.
         """
@@ -1073,12 +1296,12 @@ class LogicalGraph:
     def __init__(
         self,
         name: str = "Model",
-        nodes: dict[str, Any] | list[LogicalNode] | None = None,
+        nodes: Mapping[str, LogicalNode] | list[LogicalNode] | None = None,
         outputs: list[str] | None = None,
         mesh: LogicalMesh | None = None,
         inputs: list[str] | None = None,
-        input_specs: dict[str, TensorSpec] | None = None,
-        initializers: dict[str, Any] | None = None,
+        input_specs: Mapping[str, TensorSpec] | None = None,
+        initializers: Mapping[str, InitializerValue] | None = None,
         *,
         edges: list[LogicalEdge] | None = None,
         pipeline_topology: PipelineTopologyConfig | None = None,
@@ -1087,14 +1310,14 @@ class LogicalGraph:
 
         Args:
             name (str): Name of the graph model or class (default: 'Model').
-            nodes (Optional[Union[Dict[str, LogicalNode], List[LogicalNode]]]): Mapping of node IDs
+            nodes (Optional[Union[Mapping[str, LogicalNode], List[LogicalNode]]]): Mapping of node IDs
                 to LogicalNode instances, or a list of LogicalNode instances.
             outputs (Optional[List[str]]): List of explicit output IDs. If omitted, deduced from
                 nodes with out-degree zero (leaf nodes).
             mesh (Optional[LogicalMesh]): Optional logical device mesh for distributed execution.
             inputs (Optional[List[str]]): List of graph input variable names.
-            input_specs (Optional[Dict[str, TensorSpec]]): Mapping of input names to TensorSpecs.
-            initializers (Optional[Dict[str, Any]]): Constant tensor initializers.
+            input_specs (Optional[Mapping[str, TensorSpec]]): Mapping of input names to TensorSpecs.
+            initializers (Optional[Mapping[str, InitializerValue]]): Constant tensor initializers.
             edges (Optional[List[LogicalEdge]]): Optional list of directed edges to populate
                 directly into each target node's inputs list.
             pipeline_topology (Optional[PipelineTopologyConfig]): Optional distributed pipeline topology.
@@ -1109,7 +1332,14 @@ class LogicalGraph:
 
         if edges is not None:
             for edge in edges:
-                self.add_edge(edge.source, edge.target)
+                src_name = edge.source
+                if (
+                    edge.source in self.nodes
+                    and edge.source_idx is not None
+                    and edge.source_idx != 0
+                ):
+                    src_name = self.nodes[edge.source].get_output_name(edge.source_idx)
+                self.add_edge(src_name, edge.target)
 
         self.outputs = _infer_graph_outputs(self.nodes, outputs)
         self.mesh = mesh
@@ -1135,7 +1365,14 @@ class LogicalGraph:
         Returns:
             tuple[LogicalNode, int] | None: Producing node and 0-based output index, or None.
         """
-        return self._output_map.get(output_name)
+        res = self._output_map.get(output_name)
+        if res is not None:
+            return res
+        if ":" in output_name:
+            node_part, idx_part = output_name.rsplit(":", 1)
+            if node_part in self.nodes and idx_part.lstrip("-").isdigit():
+                return self.nodes[node_part], int(idx_part)
+        return None
 
     @property
     def edges(self) -> list[LogicalEdge]:
@@ -1145,10 +1382,9 @@ class LogicalGraph:
             list[LogicalEdge]: List of directed edges from upstream inputs to target nodes.
         """
         result: list[LogicalEdge] = []
-        out_map = self._output_map
         for target_node in self.nodes.values():
             for target_idx, src in enumerate(target_node.inputs):
-                prod_info = out_map.get(src)
+                prod_info = self.get_producing_output_index(src)
                 src_idx = prod_info[1] if prod_info is not None else 0
                 result.append(
                     LogicalEdge(
@@ -1322,9 +1558,7 @@ class LogicalGraph:
         Returns:
             LogicalNode: The requested node.
         """
-        from typing import cast
-
-        return cast("LogicalNode", self.nodes[node_id])
+        return self.nodes[node_id]
 
     def to_dict(self, format: str = "canonical") -> dict[str, Any]:
         """Convert LogicalGraph to a serializable dictionary.
@@ -1395,9 +1629,6 @@ class LogicalGraph:
             ImportError: If zstandard is requested but the library is not installed.
             ValueError: If an unsupported compression algorithm is specified.
         """
-        import ml_switcheroo_ir
-
-        zstd_mod = getattr(ml_switcheroo_ir, "zstandard", zstandard)
         path_str = str(path)
         comp = compression.lower() if compression else None
         if comp in ("gzip", "gz") or (comp is None and path_str.endswith(".gz")):
@@ -1406,9 +1637,9 @@ class LogicalGraph:
         elif comp in ("zstd", "zst") or (
             comp is None and path_str.endswith((".zst", ".zstd"))
         ):
-            if zstd_mod is None:
+            if zstandard is None:
                 raise ImportError("zstandard library is required for .zst compression.")
-            cctx = zstd_mod.ZstdCompressor()
+            cctx = zstandard.ZstdCompressor()
             with open(path, "wb") as raw_f, cctx.stream_writer(raw_f) as compressor:
                 text_wrapper = io.TextIOWrapper(compressor, encoding="utf-8")
                 self.to_stream(text_wrapper, format=format, indent=indent)
@@ -1420,11 +1651,11 @@ class LogicalGraph:
             raise ValueError(f"Unsupported compression format: {compression}")
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> LogicalGraph:
+    def from_dict(cls, data: Mapping[str, Any]) -> LogicalGraph:
         """Deserialize a graph from a dictionary representation.
 
         Args:
-            data (Dict[str, Any]): Dictionary containing graph fields.
+            data (Mapping[str, Any]): Dictionary containing graph fields.
 
         Returns:
             LogicalGraph: Deserialized graph instance.
@@ -1435,37 +1666,10 @@ class LogicalGraph:
             if isinstance(raw_nodes, list)
             else raw_nodes
         )
-        nodes: dict[str, Any] = {
-            nid: _parse_node_dict(ndata, cls) for nid, ndata in nodes_map.items()
-        }
-
-        edges_data = data.get("edges")
-        if edges_data and isinstance(edges_data, list):
-            for edge_item in edges_data:
-                src = edge_item.get("source")
-                tgt = edge_item.get("target")
-                if tgt and tgt in nodes and src and src not in nodes[tgt].inputs:
-                    nodes[tgt].inputs.append(src)
-
-        pipe_topo_raw = data.get("pipeline_topology")
-        pipe_topo = (
-            PipelineTopologyConfig.from_dict(pipe_topo_raw)
-            if pipe_topo_raw is not None
-            else None
+        nodes = NodeDict(
+            {nid: _parse_node_dict(ndata, cls) for nid, ndata in nodes_map.items()}
         )
-        inputs_data = data.get("inputs")
-        graph = cls(
-            name=data.get("name", "Model"),
-            nodes=nodes,
-            inputs=list(inputs_data) if inputs_data is not None else [],
-            input_specs=_parse_input_specs_dict(data.get("input_specs")),
-            outputs=data.get("outputs"),
-            initializers=data.get("initializers", {}),
-            mesh=_parse_mesh_dict(data.get("mesh")),
-        )
-        if pipe_topo is not None:
-            graph.pipeline_topology = pipe_topo
-        return graph
+        return _build_graph_from_parsed_sections(cls, nodes, data)
 
     @classmethod
     def from_file(
@@ -1476,7 +1680,7 @@ class LogicalGraph:
         """Deserialize graph directly from a file or compressed archive.
 
         Supports streaming deserialization from uncompressed JSON, gzip (.gz),
-        and zstandard (.zst) formats without intermediate string allocations.
+        and zstandard (.zst) formats without intermediate full-file string allocations.
 
         Args:
             path (str | Path): Path to the input file.
@@ -1490,28 +1694,25 @@ class LogicalGraph:
             ImportError: If zstandard is requested but the library is not installed.
             ValueError: If an unsupported compression algorithm is specified.
         """
-        import ml_switcheroo_ir
-
-        zstd_mod = getattr(ml_switcheroo_ir, "zstandard", zstandard)
         path_str = str(path)
         comp = compression.lower() if compression else None
         if comp in ("gzip", "gz") or (comp is None and path_str.endswith(".gz")):
             with gzip.open(path, "rt", encoding="utf-8") as f:
-                return cls.from_json(f)
+                return _stream_parse_graph(f, cls)
         elif comp in ("zstd", "zst") or (
             comp is None and path_str.endswith((".zst", ".zstd"))
         ):
-            if zstd_mod is None:
+            if zstandard is None:
                 raise ImportError(
                     "zstandard library is required for .zst decompression."
                 )
-            dctx = zstd_mod.ZstdDecompressor()
+            dctx = zstandard.ZstdDecompressor()
             with open(path, "rb") as raw_f, dctx.stream_reader(raw_f) as reader:
                 text_wrapper = io.TextIOWrapper(reader, encoding="utf-8")
-                return cls.from_json(text_wrapper)
+                return _stream_parse_graph(text_wrapper, cls)
         elif comp is None or comp in ("none", "identity"):
             with open(path, "r", encoding="utf-8") as f:
-                return cls.from_json(f)
+                return _stream_parse_graph(f, cls)
         else:
             raise ValueError(f"Unsupported compression format: {compression}")
 
@@ -1522,7 +1723,7 @@ class LogicalGraph:
     ) -> LogicalGraph:
         """Deserialize a graph from a JSON string, stream, or file path.
 
-        Supports streaming deserialization from file-like objects (streams)
+        Supports chunked incremental streaming deserialization from file-like objects
         without allocating intermediate full-graph string representations.
 
         Args:
@@ -1538,14 +1739,14 @@ class LogicalGraph:
         if isinstance(json_str, Path):
             return cls.from_file(json_str)
         if hasattr(json_str, "read"):
-            data = json.load(json_str)
-        elif isinstance(json_str, bytes):
+            return _stream_parse_graph(cast("IO[Any]", json_str), cls)
+        if isinstance(json_str, bytes):
             data = json.loads(json_str.decode("utf-8"))
         elif isinstance(json_str, str):
             stripped = json_str.strip()
             if (
                 not stripped.startswith(("{", "["))
-                and "\n" not in json_str
+                and len(json_str.splitlines()) <= 1
                 and os.path.exists(json_str)
             ):
                 return cls.from_file(json_str)
@@ -1650,3 +1851,6 @@ class GraphFrontend(BaseFrontend):
 
         """
         raise NotImplementedError
+
+
+from ml_switcheroo_ir.sentinels import NoTangent, ZeroTangent  # noqa: E402

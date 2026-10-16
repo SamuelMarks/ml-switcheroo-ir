@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ml_switcheroo_ir.schema.base import (
-    CustomOpSchema,
     OpSchema,
+    build_isa_primitive_schemas,
     load_op_schema_catalog,
 )
 from ml_switcheroo_ir.snapshots import find_schema_file
@@ -51,19 +51,9 @@ def _load_sass_schemas(json_path: Path | str | None = None) -> None:
         )
 
         SASS_PIPELINE_LATENCIES.update(GHOST_LATENCIES)
-
-        for op_name, op_info in GHOST_PRIMITIVES.items():
-            operands = op_info.get("operands", [])
-            inputs = [op for op in operands if op != "dst"]
-            outputs = ["dst"] if "dst" in operands else []
-            schema = CustomOpSchema(
-                name=op_name,
-                domain="nvidia_sass",
-                attributes=[],
-                inputs=inputs,
-                outputs=outputs,
-            )
-            SASS_REGISTRY[op_name] = schema.to_op_schema()
+        SASS_REGISTRY.update(
+            build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="nvidia_sass")
+        )
 
 
 _load_sass_schemas()

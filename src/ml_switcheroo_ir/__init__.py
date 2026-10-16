@@ -15,10 +15,12 @@ from ml_switcheroo_ir.distributed import (
     MicrobatchSplittingConfig,
     PipelineScheduleConfig,
     PipelineTopologyConfig,
+    PipelineTopologyDict,
     SchedulePhaseConfig,
     StageCommunicationConfig,
     WebRTCPeerConfig,
     WebRTCSignalingTopology,
+    WebRTCSignalingTopologyDict,
 )
 from ml_switcheroo_ir.export import (
     export_schemas,
@@ -37,9 +39,8 @@ from ml_switcheroo_ir.graph import (
     LogicalGraph,
     LogicalMesh,
     LogicalNode,
-    NoTangent,
+    NodeDict,
     PartitionSpec,
-    ZeroTangent,
     _load_zstandard,
     topological_sort,
     zstandard,
@@ -49,6 +50,10 @@ from ml_switcheroo_ir.schema.framework_registries import (
     ATEN_REGISTRY,
     ODL_CATALOG,
     get_abstract_op,
+)
+from ml_switcheroo_ir.sentinels import (
+    NoTangent,
+    ZeroTangent,
 )
 from ml_switcheroo_ir.shapes import (
     DimensionType,
@@ -78,7 +83,10 @@ from ml_switcheroo_ir.transforms import (
 from ml_switcheroo_ir.translation import ParameterTranslationEngine
 from ml_switcheroo_ir.types import (
     AttributeValue,
+    AutodiffSentinelProtocol,
     DType,
+    InitializerValue,
+    ShapeMetadataType,
     TensorShape,
     TensorSpec,
 )
@@ -90,13 +98,14 @@ from ml_switcheroo_ir.validator import (
     estimate_graph_communication_volume,
 )
 
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 
 __all__ = [
     "ARRAY_API_REGISTRY",
     "ATEN_REGISTRY",
     "ODL_CATALOG",
     "AttributeValue",
+    "AutodiffSentinelProtocol",
     "BaseFrontend",
     "CompilerBackend",
     "CyclicGraphError",
@@ -108,6 +117,7 @@ __all__ = [
     "GraphFrontend",
     "GroundingDiagnostic",
     "GroundingReport",
+    "InitializerValue",
     "LogicalAxis",
     "LogicalEdge",
     "LogicalGraph",
@@ -116,12 +126,15 @@ __all__ = [
     "MeshMappingConfig",
     "MicrobatchSplittingConfig",
     "NoTangent",
+    "NodeDict",
     "ParameterTranslationEngine",
     "PartitionSpec",
     "PipelineScheduleConfig",
     "PipelineTopologyConfig",
+    "PipelineTopologyDict",
     "Polynomial",
     "SchedulePhaseConfig",
+    "ShapeMetadataType",
     "ShapeMismatchError",
     "ShapeTracker",
     "StageCommunicationConfig",
@@ -139,6 +152,7 @@ __all__ = [
     "TensorSpec",
     "WebRTCPeerConfig",
     "WebRTCSignalingTopology",
+    "WebRTCSignalingTopologyDict",
     "ZeroTangent",
     "__version__",
     "_load_zstandard",

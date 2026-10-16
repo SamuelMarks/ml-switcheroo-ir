@@ -63,6 +63,13 @@ def test_get_producing_output_index() -> None:
     assert res2[0].id == "split_node"
     assert res2[1] == 1
 
+    # 3. Output port by 'node_id:idx' notation
+    res3 = graph.get_producing_output_index("split_node:2")
+    assert res3 is not None
+    assert res3[0].id == "split_node"
+    assert res3[1] == 2
+
     # 4. Unknown output name
     assert graph.get_producing_output_index("non_existent_output") is None
     assert graph.get_producing_output_index("missing_node:0") is None
+    assert graph.get_producing_output_index("split_node:not_int") is None

@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ml_switcheroo_ir.schema.base import (
-    CustomOpSchema,
     OpSchema,
+    build_isa_primitive_schemas,
     load_op_schema_catalog,
 )
 from ml_switcheroo_ir.snapshots import find_schema_file
@@ -66,19 +66,9 @@ def _load_rdna_schemas(json_path: Path | str | None = None) -> None:
             RDNA_VOPD_SLOTS[op_name] = slot_str
 
         RDNA_TO_VOPD_MAP.update(GHOST_VOPD_MAP)
-
-        for op_name, op_info in GHOST_PRIMITIVES.items():
-            operands = op_info.get("operands", [])
-            inputs = [op for op in operands if op != "dst"]
-            outputs = ["dst"] if "dst" in operands else []
-            schema = CustomOpSchema(
-                name=op_name,
-                domain="amd_rdna",
-                attributes=[],
-                inputs=inputs,
-                outputs=outputs,
-            )
-            RDNA_REGISTRY[op_name] = schema.to_op_schema()
+        RDNA_REGISTRY.update(
+            build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="amd_rdna")
+        )
 
 
 _load_rdna_schemas()

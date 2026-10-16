@@ -1,4 +1,4 @@
-"""Tests module."""
+"""Tests for CLI compliance scanning on mock framework adapters and AST branches."""
 
 import pathlib
 
@@ -10,7 +10,12 @@ from ml_switcheroo_ir.cli import main as cli_main
 def test_cli_compliance_framework_adapter(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test compliance subcommand scanning mock framework adapters."""
+    """Test compliance subcommand scanning mock framework adapters.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     import json
 
     workspace = tmp_path / "workspace"
@@ -56,7 +61,13 @@ def test_cli_compliance_branch_coverage(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test compliance subcommand branch coverage."""
+    """Test compliance subcommand branch coverage across Python and JSON files.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
     import json
 
     from ml_switcheroo_ir.cli import main as cli_main

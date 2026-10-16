@@ -10,6 +10,7 @@ from ml_switcheroo_ir.schema.base import (
     CustomOpSchema as CustomOpSchema,
     OpSchema as OpSchema,
     load_op_schema_catalog as load_op_schema_catalog,
+    parse_op_schema_entry as parse_op_schema_entry,
 )
 
 
@@ -55,25 +56,13 @@ class Registry:
             data = json.load(f)
 
         for op_data in data.get("ops", []):
-            attrs = []
-            for attr_data in op_data.get("attributes", []):
-                attrs.append(
-                    CustomAttributeSchema(
-                        name=attr_data["name"],
-                        type=attr_data["type"],
-                        required=attr_data.get("required", False),
-                        default=attr_data.get("default", None),
-                    )
+            self.register(
+                parse_op_schema_entry(
+                    op_data,
+                    domain_default="ai.custom",
+                    attr_type_default="Any",
                 )
-
-            schema = CustomOpSchema(
-                name=op_data["name"],
-                domain=op_data.get("domain", "ai.custom"),
-                attributes=attrs,
-                inputs=op_data.get("inputs", []),
-                outputs=op_data.get("outputs", []),
             )
-            self.register_custom_op(schema)
 
 
 RMSNORM_SCHEMA = CustomOpSchema(

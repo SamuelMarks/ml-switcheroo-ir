@@ -147,6 +147,7 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
         initializers=dict(graph.initializers),
         mesh=graph.mesh,
         edges=new_edges,
+        pipeline_topology=graph.pipeline_topology,
     )
 
 
@@ -222,6 +223,13 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
 
             sig_map[sig] = node.id
 
+        transformed_subgraphs: dict[str, Any] = {}
+        for sub_k, sub_v in node.subgraphs.items():
+            if isinstance(sub_v, LogicalGraph):
+                transformed_subgraphs[sub_k] = eliminate_common_subexpressions(sub_v)
+            else:
+                transformed_subgraphs[sub_k] = sub_v
+
         new_node = LogicalNode(
             id=node.id,
             op_type=node.op_type,
@@ -233,7 +241,7 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
             sharding=node.sharding,
             dtype=node.dtype,
             output_specs=list(node.output_specs),
-            subgraphs=dict(node.subgraphs),
+            subgraphs=transformed_subgraphs,
             device=node.device,
             stream=node.stream,
         )
@@ -267,6 +275,7 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
         initializers=dict(graph.initializers),
         mesh=graph.mesh,
         edges=new_edges,
+        pipeline_topology=graph.pipeline_topology,
     )
 
 
@@ -665,15 +674,23 @@ def _propagate_slice_op(
                             en_norm = en + dim_len if en < 0 else en
                             st_norm = max(0, min(dim_len, st_norm))
                             en_norm = max(0, min(dim_len, en_norm))
-                            s[norm_ax] = (
-                                max(0, (en_norm - st_norm + sp - 1) // sp)
-                                if sp > 0
-                                else 0
-                            )
+                            if sp > 0:
+                                s[norm_ax] = max(0, (en_norm - st_norm + sp - 1) // sp)
+                            elif sp < 0:
+                                abs_sp = -sp
+                                s[norm_ax] = max(
+                                    0, (st_norm - en_norm + abs_sp - 1) // abs_sp
+                                )
+                            else:
+                                s[norm_ax] = 0
                         else:
-                            s[norm_ax] = (
-                                max(0, (en - st + sp - 1) // sp) if sp > 0 else en - st
-                            )
+                            if sp > 0:
+                                s[norm_ax] = max(0, (en - st + sp - 1) // sp)
+                            elif sp < 0:
+                                abs_sp = -sp
+                                s[norm_ax] = max(0, (st - en + abs_sp - 1) // abs_sp)
+                            else:
+                                s[norm_ax] = 0
                 return tuple(s)
     return None
 
@@ -973,4 +990,5 @@ def propagate_shapes_and_constants(graph: LogicalGraph) -> LogicalGraph:
         initializers=dict(graph.initializers),
         mesh=graph.mesh,
         edges=list(graph.edges),
+        pipeline_topology=graph.pipeline_topology,
     )

@@ -160,9 +160,23 @@ def test_eliminate_common_subexpressions_basic() -> None:
 
 
 def test_eliminate_common_subexpressions_preserves_side_effects() -> None:
-    """Verify that duplicate side-effecting operations are NOT merged."""
+    """Verify that duplicate side-effecting operations are NOT merged and subgraphs are traversed."""
+    sub_graph = LogicalGraph(
+        name="Sub",
+        nodes={
+            "s_in": LogicalNode(id="s_in", op_type="Input"),
+            "s_r1": LogicalNode(id="s_r1", op_type="Relu", inputs=["s_in"]),
+            "s_r2": LogicalNode(id="s_r2", op_type="Relu", inputs=["s_in"]),
+        },
+        outputs=["s_r1", "s_r2"],
+    )
     n_in = LogicalNode(id="in1", op_type="Input")
-    p1 = LogicalNode(id="p1", op_type="Print", inputs=["in1"])
+    p1 = LogicalNode(
+        id="p1",
+        op_type="Print",
+        inputs=["in1"],
+        subgraphs={"body": sub_graph, "tag": "raw_str"},
+    )
     p2 = LogicalNode(id="p2", op_type="Print", inputs=["in1"])
     graph = LogicalGraph(nodes={n.id: n for n in [n_in, p1, p2]}, outputs=["p1", "p2"])
 
@@ -170,6 +184,9 @@ def test_eliminate_common_subexpressions_preserves_side_effects() -> None:
     assert len(cse_graph.nodes) == 3
     assert "p1" in cse_graph.nodes
     assert "p2" in cse_graph.nodes
+    assert isinstance(cse_graph.nodes["p1"].subgraphs["body"], LogicalGraph)
+    assert len(cse_graph.nodes["p1"].subgraphs["body"].nodes) == 2
+    assert cse_graph.nodes["p1"].subgraphs["tag"] == "raw_str"
 
 
 def test_propagate_shapes_and_constants() -> None:

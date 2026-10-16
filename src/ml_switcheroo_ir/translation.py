@@ -2,13 +2,66 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+import copy
 import json
+import logging
 import os
-from typing import Any
+from typing import Any, Protocol, Union, runtime_checkable
 
+from ml_switcheroo_ir.types import AttributeValue
 from ml_switcheroo_ir.validator import DEFAULT_SNAPSHOT_DIR
 
-_CANONICAL_FALLBACK_TRANSLATIONS: dict[str, Any] = {
+_logger = logging.getLogger(__name__)
+
+RoleFrameworkMap = dict[str, list[str]]
+OperationTranslationSpec = dict[str, dict[str, RoleFrameworkMap]]
+TranslationMap = dict[str, OperationTranslationSpec]
+
+
+@runtime_checkable
+class TensorLikeProtocol(Protocol):
+    """Structural protocol for tensor-like objects supporting layout and shape permutations.
+
+    Attributes:
+        shape (Sequence[int]): Tensor dimensions.
+    """
+
+    shape: Sequence[int]
+
+    def transpose(self, *axes: Any) -> Any:
+        """Return tensor with permuted dimensions.
+
+        Args:
+            *axes (Any): Target axis permutation.
+
+        Returns:
+            Any: Transposed tensor-like object.
+        """
+
+    def reshape(self, *shape: Any) -> Any:
+        """Return tensor reshaped to target dimensions.
+
+        Args:
+            *shape (Any): Target dimensions.
+
+        Returns:
+            Any: Reshaped tensor-like object.
+        """
+
+
+TensorLike = Union[TensorLikeProtocol, Sequence[Any], object]
+
+__all__ = [
+    "OperationTranslationSpec",
+    "ParameterTranslationEngine",
+    "RoleFrameworkMap",
+    "TensorLike",
+    "TensorLikeProtocol",
+    "TranslationMap",
+]
+
+_CANONICAL_FALLBACK_TRANSLATIONS: TranslationMap = {
     "matmul": {
         "roles": {
             "lhs": {
@@ -191,16 +244,16 @@ class ParameterTranslationEngine:
 
     def __init__(
         self,
-        translations: dict[str, Any] | None = None,
+        translations: TranslationMap | None = None,
         concept_map_path: str | None = None,
     ) -> None:
         """Initialize translation engine with parameter translation mapping.
 
         Args:
-            translations (Optional[dict[str, Any]]): Pre-loaded parameter translations mapping.
+            translations (Optional[TranslationMap]): Pre-loaded parameter translations mapping.
             concept_map_path (Optional[str]): Path to concept_map.json file.
         """
-        self.translations: dict[str, Any] = translations or {}
+        self.translations: TranslationMap = translations or {}
         if not self.translations:
             self._load_default_translations(concept_map_path)
 
@@ -208,12 +261,12 @@ class ParameterTranslationEngine:
         """Merge canonical fallback translations into self.translations without overwriting."""
         for op, op_dict in _CANONICAL_FALLBACK_TRANSLATIONS.items():
             if op not in self.translations:
-                self.translations[op] = op_dict
+                self.translations[op] = copy.deepcopy(op_dict)
                 continue
             roles = self.translations[op].setdefault("roles", {})
             for r_name, r_map in op_dict.get("roles", {}).items():
                 if r_name not in roles:
-                    roles[r_name] = r_map
+                    roles[r_name] = copy.deepcopy(r_map)
                 else:
                     for fw, fw_params in r_map.items():
                         if fw not in roles[r_name]:
@@ -266,8 +319,10 @@ class ParameterTranslationEngine:
                     ):
                         self.translations.update(data["_parameter_translations"])
                         break
-                except (json.JSONDecodeError, OSError):
-                    pass
+                except (json.JSONDecodeError, OSError) as exc:
+                    _logger.debug(
+                        "Skipping invalid concept_map candidate %s: %s", cand, exc
+                    )
         if path is None:
             self._merge_fallback_translations()
         self._canonicalize_role_aliases()
@@ -317,28 +372,28 @@ class ParameterTranslationEngine:
     def translate_attributes(
         self,
         operation: str,
-        attributes: dict[str, Any],
+        attributes: Mapping[str, AttributeValue],
         source_framework: str,
         target_framework: str,
         allow_passthrough: bool = False,
-    ) -> dict[str, Any]:
+    ) -> dict[str, AttributeValue]:
         """Translate all attributes/keyword arguments from source framework to target framework.
 
         Args:
             operation (str): Canonical operation name.
-            attributes (dict[str, Any]): Dictionary of parameter names and values.
+            attributes (Mapping[str, AttributeValue]): Mapping of parameter names and values.
             source_framework (str): Source framework identifier.
             target_framework (str): Target framework identifier.
             allow_passthrough (bool): If True, parameters without translation are kept; if False,
                 unrecognized parameters raise ValueError (zero-hallucination policy).
 
         Returns:
-            dict[str, Any]: Translated attributes dictionary.
+            dict[str, AttributeValue]: Translated attributes dictionary.
 
         Raises:
             ValueError: If unknown parameter is encountered and allow_passthrough is False.
         """
-        result: dict[str, Any] = {}
+        result: dict[str, AttributeValue] = {}
         for k, v in attributes.items():
             try:
                 translated_key = self.translate_parameter(
@@ -396,7 +451,7 @@ class ParameterTranslationEngine:
 
     def permute_conv_weights(
         self,
-        weights: Any,
+        weights: TensorLike,
         source_format: str,
         target_format: str,
     ) -> Any:
@@ -406,7 +461,7 @@ class ParameterTranslationEngine:
         and TensorFlow/JAX format (HWIO / [H, W, in_channels, out_channels]) or HWOI.
 
         Args:
-            weights (Any): Weight array, list, or tensor object with shape and transpose attributes.
+            weights (TensorLike): Weight array, list, or tensor object with shape and transpose attributes.
             source_format (str): Source layout string (e.g. 'OIHW', 'HWIO', 'HWOI').
             target_format (str): Target layout string (e.g. 'OIHW', 'HWIO', 'HWOI').
 
@@ -436,7 +491,7 @@ class ParameterTranslationEngine:
 
     def split_qkv_weights(
         self,
-        qkv_weight: Any,
+        qkv_weight: TensorLike,
         num_heads: int,
         head_dim: int,
         split_dim: int = 0,
@@ -444,7 +499,7 @@ class ParameterTranslationEngine:
         """Split combined QKV projection weights into separate Q, K, and V weights.
 
         Args:
-            qkv_weight (Any): Combined QKV weight array or sequence.
+            qkv_weight (TensorLike): Combined QKV weight array or sequence.
             num_heads (int): Number of attention heads.
             head_dim (int): Dimensionality of each attention head.
             split_dim (int): Dimension along which to split (default 0).
@@ -473,17 +528,17 @@ class ParameterTranslationEngine:
 
     def merge_qkv_weights(
         self,
-        q_weight: Any,
-        k_weight: Any,
-        v_weight: Any,
+        q_weight: TensorLike,
+        k_weight: TensorLike,
+        v_weight: TensorLike,
         concat_dim: int = 0,
     ) -> Any:
         """Merge separate Q, K, and V projection weights into a single combined QKV tensor.
 
         Args:
-            q_weight (Any): Query projection weight.
-            k_weight (Any): Key projection weight.
-            v_weight (Any): Value projection weight.
+            q_weight (TensorLike): Query projection weight.
+            k_weight (TensorLike): Key projection weight.
+            v_weight (TensorLike): Value projection weight.
             concat_dim (int): Dimension along which to concatenate (default 0).
 
         Returns:

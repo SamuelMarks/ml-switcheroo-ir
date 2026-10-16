@@ -570,10 +570,10 @@ def test_polynomial_and_parser_edge_cases() -> None:
     assert _tokenize_expr("x ! 5") == ["x", "!", "5"]
     assert _tokenize_expr("") == []
     assert isinstance(_parse_sym_str("   "), SymVar)
-    assert _parse_sym_str("x *").eval({"x": 5}) == 0
+    assert isinstance(_parse_sym_str("x *"), SymVar)
     assert isinstance(_parse_sym_str("x + 1 extra_token"), SymVar)
     n_unclosed = _parse_sym_str("(x + 1")
-    assert n_unclosed.eval({"x": 5}) == 6
+    assert isinstance(n_unclosed, SymVar)
     n_paren_pow = _parse_sym_str("(x + 1) ** 2")
     assert n_paren_pow.eval({"x": 3}) == 16
 
@@ -807,9 +807,12 @@ def test_sym_irreducible_and_piecewise_branches() -> None:
     assert SymUnaryOp("-", SymUnaryOp("abs", vx)).simplify() == SymUnaryOp(
         "-", SymUnaryOp("abs", vx)
     )
-    assert SymPiecewise([(123, SymConst(5))], default=SymConst(0)).eval({}) == 0
+    with pytest.raises(TypeError, match="Unsupported SymPiecewise condition type"):
+        SymPiecewise([(123, SymConst(5))], default=SymConst(0)).eval({})
     assert SymPiecewise([], default=SymConst(0)).free_vars() == set()
     assert SymUnaryOp("abs", vx).simplify() == SymUnaryOp("abs", vx)
+    assert hash(SymInt("x + 1")) == hash(SymInt("1 + x"))
+    assert hash(SymInt(5)) == hash(5)
 
     pw_non_sym = SymPiecewise([(True, vx), (lambda env: True, vy)], default=c0)
     assert pw_non_sym.free_vars() == {"x", "y"}

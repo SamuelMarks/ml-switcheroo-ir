@@ -317,6 +317,67 @@ def test_logical_node_scalar_and_none_shapes() -> None:
     node_none = LogicalNode(id="n2", op_type="Constant", shape_metadata=None)
     assert node_none.shape_metadata is None
 
-    node_dict_domain = LogicalNode(id="n3", op_type="Add", domain={"axis": 1})
+    with pytest.deprecated_call(match="Passing a mapping as 'domain' is deprecated"):
+        node_dict_domain = LogicalNode(id="n3", op_type="Add", domain={"axis": 1})
     assert node_dict_domain.domain == "ai.onnx"
     assert node_dict_domain.attributes["axis"] == 1
+
+    node_zero_out = LogicalNode(id="sink", op_type="Barrier", outputs=[])
+    assert node_zero_out.outputs == []
+
+
+def test_stream_parse_graph_chunked_boundaries() -> None:
+    """Test chunked incremental streaming JSON parser with small chunk boundaries and error paths."""
+    import io
+    import json
+
+    from ml_switcheroo_ir.graph import _stream_parse_graph
+
+    raw_dict_nodes = (
+        '{"name": "ChunkedModel", "nodes": {"n1": {"id": "n1", "op_type": "Relu"}, '
+        '"n2": {"id": "n2", "op_type": "Add", "inputs": []}}, '
+        '"edges": [{"source": "n1", "target": "n2"}], "outputs": ["n2"]}'
+    )
+    g1 = _stream_parse_graph(io.StringIO(raw_dict_nodes), LogicalGraph, chunk_size=8)
+    assert g1.name == "ChunkedModel"
+    assert list(g1.nodes.keys()) == ["n1", "n2"]
+    assert g1.nodes["n2"].inputs == ["n1"]
+
+    raw_list_nodes = b'{"name": "ListModel", "nodes": [{"id": "n1", "op_type": "Relu"}], "outputs": ["n1"]}'
+    g2 = _stream_parse_graph(io.BytesIO(raw_list_nodes), LogicalGraph, chunk_size=7)
+    assert g2.name == "ListModel"
+    assert "n1" in g2.nodes
+
+    with pytest.raises(json.JSONDecodeError, match="Expected top-level JSON object"):
+        _stream_parse_graph(io.StringIO("   [1, 2]"), LogicalGraph, chunk_size=4)
+
+    with pytest.raises(
+        json.JSONDecodeError, match="Unterminated top-level JSON object"
+    ):
+        _stream_parse_graph(io.StringIO('{"name": "X"'), LogicalGraph, chunk_size=4)
+
+    with pytest.raises(
+        json.JSONDecodeError, match="Expected '\\{' or '\\[' for nodes section"
+    ):
+        _stream_parse_graph(io.StringIO('{"nodes": 123}'), LogicalGraph, chunk_size=4)
+
+    with pytest.raises(json.JSONDecodeError, match="Unterminated nodes object"):
+        _stream_parse_graph(
+            io.StringIO('{"nodes": {"n1": {"id": "n1", "op_type": "Relu"}'),
+            LogicalGraph,
+            chunk_size=8,
+        )
+
+    with pytest.raises(json.JSONDecodeError, match="Unterminated nodes array"):
+        _stream_parse_graph(
+            io.StringIO('{"nodes": [{"id": "n1", "op_type": "Relu"}'),
+            LogicalGraph,
+            chunk_size=8,
+        )
+
+    with pytest.raises(json.JSONDecodeError):
+        _stream_parse_graph(
+            io.StringIO('{"name": "unterminated_str'),
+            LogicalGraph,
+            chunk_size=4,
+        )

@@ -226,7 +226,11 @@ def test_grounding_validator_dict_manifest() -> None:
 
 
 def test_grounding_validator_file_audit(tmp_path: Path) -> None:
-    """Test audit_graph_grounding with JSON file snapshot."""
+    """Test audit_graph_grounding with JSON file snapshot.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     manifest_file = tmp_path / "snapshot_audit.json"
     data = {
         "linalg.matmul": {

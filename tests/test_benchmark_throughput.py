@@ -315,6 +315,7 @@ def test_file_io_error_handling(
 
     # Missing zstandard library on module attribute
     monkeypatch.setattr("ml_switcheroo_ir.zstandard", None)
+    monkeypatch.setattr("ml_switcheroo_ir.graph.zstandard", None)
 
     with pytest.raises(ImportError, match="zstandard library is required"):
         graph.to_file(tmp_path / "test.zst")
@@ -403,7 +404,11 @@ def test_benchmark_10000_node_transformer_throughput(tmp_path: Path) -> None:
 
 
 def test_benchmark_50_node_transformer_throughput(tmp_path: Path) -> None:
-    """Fast version of transformer throughput benchmark for CI."""
+    """Fast version of transformer throughput benchmark for CI.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     from ml_switcheroo_ir import LogicalGraph, LogicalNode
 
     graph = LogicalGraph(

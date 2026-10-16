@@ -223,6 +223,42 @@ def _extract_known_attributes(sym_record: dict[str, Any]) -> set[str]:
     return known
 
 
+def _find_stablehlo_snapshot_file(snapshots_dir: Path) -> Path | None:
+    """Locate the StableHLO snapshot or exhaustive JSON file.
+
+    Args:
+        snapshots_dir (Path): Path to framework snapshots directory.
+
+    Returns:
+        Optional[Path]: Resolved Path to StableHLO JSON file if found, or None.
+    """
+    exhaustive_candidate = snapshots_dir / "stablehlo_exhaustive.json"
+    if exhaustive_candidate.is_file():
+        return exhaustive_candidate
+
+    fw_exhaustive = snapshots_dir.parent / "frameworks" / "stablehlo_exhaustive.json"
+    if fw_exhaustive.is_file():
+        return fw_exhaustive
+
+    candidates = sorted(snapshots_dir.glob("stablehlo*.json"))
+    if candidates:
+        return candidates[-1]
+
+    if "ml-ecosystem-snapshots" in str(
+        snapshots_dir
+    ) or "ml_framework_snapshots" in str(snapshots_dir):
+        try:
+            from ml_ecosystem_snapshots.frameworks import __file__ as pkg_fw_file
+
+            pkg_exhaustive = Path(pkg_fw_file).parent / "stablehlo_exhaustive.json"
+            if pkg_exhaustive.is_file():
+                return pkg_exhaustive
+        except (ImportError, AttributeError, TypeError):
+            pass
+
+    return None
+
+
 def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
     """Verify all StableHLO registry schemas against stablehlo snapshot.
 
@@ -232,24 +268,12 @@ def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: List of error diagnostic messages for any ungrounded symbols.
     """
-    exhaustive_candidate = snapshots_dir / "stablehlo_exhaustive.json"
-    if exhaustive_candidate.is_file():
-        stablehlo_file = exhaustive_candidate
-    else:
-        fw_exhaustive = (
-            snapshots_dir.parent / "frameworks" / "stablehlo_exhaustive.json"
+    stablehlo_file = _find_stablehlo_snapshot_file(snapshots_dir)
+    if stablehlo_file is None:
+        print(
+            f"[WARNING] StableHLO snapshot file not found in {snapshots_dir}. Skipping StableHLO checks."
         )
-        if fw_exhaustive.is_file():
-            stablehlo_file = fw_exhaustive
-        else:
-            candidates = sorted(snapshots_dir.glob("stablehlo*.json"))
-            if candidates:
-                stablehlo_file = candidates[-1]
-            else:
-                print(
-                    f"[WARNING] StableHLO snapshot file not found in {snapshots_dir}. Skipping StableHLO checks."
-                )
-                return []
+        return []
 
     gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
     errors: list[str] = []

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import json
+import keyword
 from pathlib import Path
+import re
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -56,10 +58,12 @@ def get_json_schema(target: str = "LogicalGraph") -> dict[str, Any]:
     target_clean = target.strip()
     if target_clean == "LogicalGraph":
         schema: dict[str, Any] = TypeAdapter(LogicalGraph).json_schema()
+        schema.update(schema.get("$defs", {}).get("LogicalGraph", {}))
         schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
         return schema
     if target_clean == "LogicalNode":
         schema = TypeAdapter(LogicalNode).json_schema()
+        schema.update(schema.get("$defs", {}).get("LogicalNode", {}))
         schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
         return schema
     if target_clean == "SnapshotEnvelope":
@@ -403,6 +407,26 @@ def _format_graph_expr(graph: LogicalGraph, indent: int = 8) -> str:
     return f"sw_ir.LogicalGraph.from_dict({graph.to_dict()!r})"
 
 
+def _sanitize_python_identifier(name: str, fallback: str = "build_graph") -> str:
+    """Sanitize an arbitrary string into a valid, non-keyword Python identifier.
+
+    Args:
+        name (str): Candidate function or variable identifier.
+        fallback (str): Fallback identifier if sanitized name is empty.
+
+    Returns:
+        str: Valid Python identifier string.
+    """
+    cleaned = re.sub(r"\W+", "_", name.strip()).strip("_")
+    if not cleaned:
+        cleaned = fallback
+    if cleaned[0].isdigit():
+        cleaned = f"_{cleaned}"
+    if keyword.iskeyword(cleaned):
+        cleaned = f"{cleaned}_"
+    return cleaned
+
+
 def export_to_python(
     graph: LogicalGraph,
     function_name: str = "build_graph",
@@ -422,6 +446,12 @@ def export_to_python(
     Returns:
         str: Formatted Python source code.
     """
+    safe_fn_name = _sanitize_python_identifier(function_name)
+    safe_doc_name = (
+        graph.name.replace("\\", "\\\\").replace('"""', "'''").splitlines()[0]
+        if graph.name
+        else "Model"
+    )
     lines: list[str] = [
         '"""Auto-generated LogicalGraph definition.',
         "",
@@ -433,8 +463,8 @@ def export_to_python(
         "import ml_switcheroo_ir as sw_ir",
         "",
         "",
-        f"def {function_name}() -> sw_ir.LogicalGraph:",
-        f'    """Construct and return the {graph.name} LogicalGraph.',
+        f"def {safe_fn_name}() -> sw_ir.LogicalGraph:",
+        f'    """Construct and return the {safe_doc_name} LogicalGraph.',
         "",
         "    Returns:",
         "        sw_ir.LogicalGraph: Reconstructed computational graph.",
@@ -507,8 +537,9 @@ def export_to_python(
             f"[{', '.join(_format_tensor_spec(s) for s in node.output_specs)}]"
         )
 
+        sorted_attrs = dict(sorted(node.attributes.items(), key=lambda kv: str(kv[0])))
         subgraphs_entries: list[str] = []
-        for sub_k, sub_v in node.subgraphs.items():
+        for sub_k, sub_v in sorted(node.subgraphs.items(), key=lambda kv: str(kv[0])):
             if isinstance(sub_v, LogicalGraph):
                 subgraphs_entries.append(f"{sub_k!r}: {_format_graph_expr(sub_v)}")
             else:
@@ -520,7 +551,7 @@ def export_to_python(
         lines.append(f"            op_type={node.op_type!r},")
         lines.append(f"            domain={node.domain!r},")
         lines.append(f"            version={node.version},")
-        lines.append(f"            attributes={node.attributes!r},")
+        lines.append(f"            attributes={sorted_attrs!r},")
         lines.append(f"            inputs={node.inputs!r},")
         lines.append(f"            outputs={node.outputs!r},")
         lines.append(f"            shape_metadata={shape_meta_str},")
@@ -552,7 +583,7 @@ def export_to_python(
                 "",
                 "",
                 'if __name__ == "__main__":',
-                f"    graph = {function_name}()",
+                f"    graph = {safe_fn_name}()",
                 "    print(f'Constructed graph {graph.name} with {len(graph.nodes)} nodes.')",
             ]
         )

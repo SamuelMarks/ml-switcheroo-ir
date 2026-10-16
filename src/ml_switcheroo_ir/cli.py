@@ -100,7 +100,15 @@ def _verify_backend(file_path: str, class_name: str) -> None:
     try:
         spec.loader.exec_module(module)
         checks["Module loaded"] = True
-    except Exception as e:  # noqa: BLE001
+    except (
+        OSError,
+        SyntaxError,
+        ImportError,
+        AttributeError,
+        TypeError,
+        ValueError,
+        RuntimeError,
+    ) as e:
         print(f"Error executing module: {e}")
         print_report()
         return

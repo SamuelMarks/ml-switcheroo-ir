@@ -1,4 +1,4 @@
-"""Tests module."""
+"""Tests for verbose missing operations reporting and API mapping in CLI compliance."""
 
 from __future__ import annotations
 
@@ -14,7 +14,13 @@ def test_cli_compliance_verbose(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test compliance subcommand verbose output."""
+    """Test compliance subcommand verbose output.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
     import ml_switcheroo_ir.compliance
     from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 
@@ -121,7 +127,12 @@ def test_cli_compliance_verbose_mapping(
 def test_cli_compliance_verbose_mapping_empty(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Test compliance subcommand verbose output with empty mapping."""
+    """Test compliance subcommand verbose output with empty mapping.
+
+    Args:
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     import json
 
     dialect_file = tmp_path / "my_dialect.py"

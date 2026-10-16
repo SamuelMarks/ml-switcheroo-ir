@@ -229,7 +229,12 @@ def test_shape_tracker_inference_and_feedback() -> None:
             node_id: str,
             shape: tuple[object, ...] | None,
         ) -> None:
-            """Initialize mock node with id and shape."""
+            """Initialize mock node with id and shape.
+
+            Args:
+                node_id (str): Identifier for the mock node.
+                shape (Optional[tuple[object, ...]]): Shape tuple or None.
+            """
             self.id = node_id
             self.shape_metadata = shape
             self.shape = shape
@@ -238,7 +243,11 @@ def test_shape_tracker_inference_and_feedback() -> None:
         """Mock graph containing nodes."""
 
         def __init__(self, nodes: Sequence[_MockNodeProto]) -> None:
-            """Initialize mock graph with node list."""
+            """Initialize mock graph with node list.
+
+            Args:
+                nodes (Sequence[_MockNodeProto]): Sequence of mock nodes.
+            """
             self.nodes = {n.id: n for n in nodes}
 
     si_b = SymInt("batch")
@@ -279,7 +288,12 @@ def test_shape_tracker_inference_and_feedback() -> None:
         """Mock node with only shape attribute."""
 
         def __init__(self, node_id: str, shape: tuple[object, ...]) -> None:
-            """Initialize mock node with shape."""
+            """Initialize mock node with shape.
+
+            Args:
+                node_id (str): Identifier for the mock node.
+                shape (tuple[object, ...]): Shape tuple.
+            """
             self.id = node_id
             self.shape = shape
 
@@ -320,7 +334,11 @@ def test_shape_tracker_inference_and_feedback() -> None:
         """Mock graph with nodes as a list."""
 
         def __init__(self, nodes_list: list[MockNode]) -> None:
-            """Initialize mock graph with list."""
+            """Initialize mock graph with list.
+
+            Args:
+                nodes_list (list[MockNode]): List of mock nodes.
+            """
             self.nodes = nodes_list
 
     n_list = MockNode("n_list", (si_b, "dynamic_axis", 64))
@@ -348,7 +366,12 @@ def test_shape_tracker_inference_and_feedback() -> None:
         """Mock node with shape_metadata only."""
 
         def __init__(self, node_id: str, shape_meta: tuple[object, ...]) -> None:
-            """Initialize mock node with shape_metadata."""
+            """Initialize mock node with shape_metadata.
+
+            Args:
+                node_id (str): Identifier for the mock node.
+                shape_meta (tuple[object, ...]): Shape metadata tuple.
+            """
             self.id = node_id
             self.shape_metadata = shape_meta
 

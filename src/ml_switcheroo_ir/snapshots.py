@@ -129,6 +129,20 @@ def get_default_snapshots_dir() -> str:
 DEFAULT_SNAPSHOT_DIR: str = get_default_snapshots_dir()
 
 
+def _has_snapshot_files(directory: Path) -> bool:
+    """Return True if the directory exists and contains at least one JSON snapshot file.
+
+    Args:
+        directory (Path): Directory path to inspect.
+
+    Returns:
+        bool: True if at least one .json or .json.gz file is present.
+    """
+    return directory.is_dir() and any(
+        f.name.endswith((".json", ".json.gz")) for f in directory.iterdir()
+    )
+
+
 def resolve_snapshots_path(override_path: Path | str) -> Path | None:
     """Resolve an explicit snapshots directory path, supporting repo-root and sibling layouts.
 
@@ -140,23 +154,34 @@ def resolve_snapshots_path(override_path: Path | str) -> Path | None:
     """
     p = Path(override_path).resolve()
     if p.is_dir():
+        nested_eco = p / "src" / "ml_ecosystem_snapshots" / "snapshots"
         nested_fw = p / "src" / "ml_framework_snapshots" / "snapshots"
+        if _has_snapshot_files(nested_eco):
+            return nested_eco
         if nested_fw.is_dir():
             return nested_fw
-        nested_eco = p / "src" / "ml_ecosystem_snapshots" / "snapshots"
         if nested_eco.is_dir():
             return nested_eco
         return p
     if p.name == "ml-framework-snapshots":
-        unified_sibling = (
+        unified_eco = (
+            p.parent
+            / "ml-ecosystem-snapshots"
+            / "src"
+            / "ml_ecosystem_snapshots"
+            / "snapshots"
+        )
+        if _has_snapshot_files(unified_eco):
+            return unified_eco
+        unified_fw = (
             p.parent
             / "ml-ecosystem-snapshots"
             / "src"
             / "ml_framework_snapshots"
             / "snapshots"
         )
-        if unified_sibling.is_dir():
-            return unified_sibling
+        if unified_fw.is_dir():
+            return unified_fw
     return None
 
 

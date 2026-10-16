@@ -119,7 +119,7 @@ def parse_json_file(filepath: str, dialect_ops: set[str]) -> set[str]:
                 for k in data:
                     if k in dialect_ops:
                         implemented.add(k)
-    except Exception:  # noqa: BLE001, S110
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
         pass
     return implemented
 
@@ -305,7 +305,7 @@ def analyze_python_file(filepath: str, dialect_ops: set[str]) -> dict[str, Any]:
         with open(filepath, "r", encoding="utf-8") as f:
             source = f.read()
         tree = ast.parse(source)
-    except Exception:  # noqa: BLE001
+    except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
         return result
 
     is_ir, ir_score = _score_ir_classes(tree)
@@ -383,7 +383,14 @@ def _render_verbose_missing_report(
                         docstring = doc.strip().split("\n\n")[0].replace("\n", " ")
                         if len(docstring) > 150:
                             docstring = docstring[:147] + "..."
-                except Exception:  # noqa: BLE001, S110
+                except (
+                    ImportError,
+                    AttributeError,
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    RuntimeError,
+                ):
                     pass
 
                 table_data.append(
