@@ -737,7 +737,14 @@ has been available since version 1.
             self.outputs: list[Any] = []
             self.domain = domain
 
-    with patch("onnx.defs.get_all_schemas", return_value=[FakeSchema("")]):
+    fake_onnx_defs = MagicMock()
+    fake_onnx_defs.get_all_schemas = MagicMock(return_value=[FakeSchema("")])
+    fake_onnx_pkg = MagicMock()
+    fake_onnx_pkg.defs = fake_onnx_defs
+
+    with patch.dict(
+        "sys.modules", {"onnx": fake_onnx_pkg, "onnx.defs": fake_onnx_defs}
+    ):
         test_ops = {
             "FakeOp": {
                 "domain": "ai.onnx",
@@ -758,7 +765,10 @@ has been available since version 1.
     s_v5 = FakeSchema("ai.onnx.custom")
     s_v5.since_version = 5
 
-    with patch("onnx.defs.get_all_schemas", return_value=[s_v10, s_v5]):
+    fake_onnx_defs.get_all_schemas = MagicMock(return_value=[s_v10, s_v5])
+    with patch.dict(
+        "sys.modules", {"onnx": fake_onnx_pkg, "onnx.defs": fake_onnx_defs}
+    ):
         test_ops2 = {
             "FakeOp": {
                 "domain": "ai.onnx",
@@ -903,7 +913,7 @@ def test_verify_grounding_find_snapshots_directory() -> None:
     """Test find_snapshots_directory resolution and fallbacks."""
     with TemporaryDirectory() as tmpdir:
         # Override path that is a dir
-        assert find_snapshots_directory(tmpdir) is not None
+        assert find_snapshots_directory(tmpdir) == Path(tmpdir).resolve()
 
         # Override path that is not a dir
         non_existent = os.path.join(tmpdir, "does_not_exist")
@@ -926,43 +936,28 @@ def test_verify_grounding_find_snapshots_directory() -> None:
         ):
             assert find_snapshots_directory() == Path(tmpdir).resolve()
 
-        # Without override, should find existing DEFAULT_SNAPSHOT_DIR or fallback
+        # Without override, should find existing DEFAULT_SNAPSHOT_DIR
         with patch.dict(os.environ, {}, clear=True), patch(
             "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir
         ):
             assert find_snapshots_directory() == Path(tmpdir).resolve()
 
-    # Test cache and fallback branches
-    with patch.dict(os.environ, {}, clear=True), patch(
-        "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"
-    ):
-        with patch("pathlib.Path.is_dir", side_effect=[False, True]):
-            assert find_snapshots_directory() is not None
-
-        with patch("pathlib.Path.is_dir", side_effect=[False, False, True]):
-            assert find_snapshots_directory() is not None
-
-        with patch("pathlib.Path.is_dir", side_effect=[False, False, False, True]):
-            assert find_snapshots_directory() is not None
-
-        with patch(
-            "pathlib.Path.is_dir", side_effect=[False, False, False, False, True]
+        # When DEFAULT_SNAPSHOT_DIR is non-existent, falls back to get_default_snapshots_dir()
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"
+        ), patch(
+            "ml_switcheroo_ir.snapshots.get_default_snapshots_dir",
+            return_value=tmpdir,
         ):
-            assert find_snapshots_directory() is not None
+            assert find_snapshots_directory() == Path(tmpdir).resolve()
 
-        with patch(
-            "pathlib.Path.is_dir", side_effect=[False, False, False, False, False, True]
+        # When both DEFAULT_SNAPSHOT_DIR and get_default_snapshots_dir() are non-existent
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"
+        ), patch(
+            "ml_switcheroo_ir.snapshots.get_default_snapshots_dir",
+            return_value="/nonexistent/fallback",
         ):
-            assert find_snapshots_directory() is not None
-
-        with patch(
-            "pathlib.Path.is_dir",
-            side_effect=[False, False, False, False, False, False, True],
-        ):
-            assert find_snapshots_directory() is not None
-
-        # All is_dir return False
-        with patch("pathlib.Path.is_dir", return_value=False):
             assert find_snapshots_directory() is None
 
 
@@ -1119,6 +1114,7 @@ def test_verify_grounding_main_paths() -> None:
 
     # When snapshots directory found and all schemas valid
     with TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "snapshot.json").write_text("{}", encoding="utf-8")
         with patch(
             "scripts.verify_grounding.find_snapshots_directory",
             return_value=Path(tmpdir),
@@ -1852,9 +1848,9 @@ def test_verify_grounding_main_ecosystem_and_strict() -> None:
         verify_grounding_main(["--strict", "--snapshots-dir", "/nonexistent/dir"]) == 1
     )
 
-    # Strict mode with empty directory returns 0 when explicit target_dir is passed and all files are missing
+    # Strict mode with empty directory returns 1 even when explicit target_dir is passed
     with TemporaryDirectory() as empty_dir:
-        assert verify_grounding_main(["--strict", "--snapshots-dir", empty_dir]) == 0
+        assert verify_grounding_main(["--strict", "--snapshots-dir", empty_dir]) == 1
 
         # Strict mode when target_dir is None and empty snapshots_dir
         with patch(
@@ -1865,13 +1861,21 @@ def test_verify_grounding_main_ecosystem_and_strict() -> None:
             assert verify_grounding_main([]) == 0
 
     # Passing explicit --ecosystem-snapshots-dir with valid fixtures
-    if Path(fixtures_dir).exists() and any(Path(fixtures_dir).glob("stablehlo*.json")):
+    if Path(fixtures_dir).exists() and any(Path(fixtures_dir).glob("*.json")):
         assert (
             verify_grounding_main(
                 ["--strict", "--ecosystem-snapshots-dir", fixtures_dir]
             )
             == 0
         )
+
+    # Zero-mock end-to-end verification against ../ml-framework-snapshots
+    assert (
+        verify_grounding_main(
+            ["--strict", "--snapshots-dir", "../ml-framework-snapshots"]
+        )
+        == 0
+    )
 
 
 def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:

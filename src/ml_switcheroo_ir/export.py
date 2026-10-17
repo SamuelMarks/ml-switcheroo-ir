@@ -36,7 +36,7 @@ from ml_switcheroo_ir.shapes import (
     SymUnaryOp,
     SymVar,
 )
-from ml_switcheroo_ir.types import TensorShape, TensorSpec
+from ml_switcheroo_ir.types import DType, TensorShape, TensorSpec
 
 DRAFT_2020_12_SCHEMA_URI: str = "https://json-schema.org/draft/2020-12/schema"
 
@@ -109,42 +109,18 @@ def generate_typescript_definitions() -> str:
     Returns:
         str: TypeScript interface definitions.
     """
-    return """/**
+    dtype_literals = "\n".join(f'  | "{dt.value}"' for dt in DType)
+    return (
+        (
+            """/**
  * ML-Switcheroo IR - Canonical TypeScript Definitions
  * Auto-generated for Abstract ML Machine Compiler Ecosystem (Tier 1)
  */
 
 export type DType =
-  | "float32"
-  | "float16"
-  | "bfloat16"
-  | "float64"
-  | "int8"
-  | "int16"
-  | "int32"
-  | "int64"
-  | "uint8"
-  | "uint16"
-  | "uint32"
-  | "uint64"
-  | "bool"
-  | "string"
-  | "object"
-  | "complex64"
-  | "complex128"
-  | "float8_e4m3fn"
-  | "float8_e4m3b11fnuz"
-  | "float8_e5m2"
-  | "fp8_e4m3fn"
-  | "fp8_e4m3fnuz"
-  | "fp8_e5m2"
-  | "fp8_e5m2fnuz"
-  | "int4"
-  | "uint4"
-  | "int2"
-  | "qint8"
-  | "quint8"
-  | "qint4"
+"""
+            + dtype_literals
+            + """
   | string;
 
 export type AttributeValue =
@@ -153,7 +129,9 @@ export type AttributeValue =
   | boolean
   | null
   | AttributeValue[]
-  | { [key: string]: AttributeValue };
+  | { [key: string]: AttributeValue };"""
+        )
+        + """
 
 export interface PartitionSpec {
   axes: (string | string[] | null)[];
@@ -214,7 +192,9 @@ export interface SymUnaryOp {
 
 export interface SymPiecewise {
   type: "piecewise";
-  conditions: [SymNode, string][];
+  cases?: [SymNode | string | boolean, SymNode][];
+  conditions?: [SymNode, string][];
+  default?: SymNode;
 }
 
 export type SymNode =
@@ -326,6 +306,7 @@ export interface SnapshotEnvelope {
   categories?: Record<string, unknown>;
 }
 """
+    )
 
 
 def _format_sym_node(node: DimensionType | object) -> str:

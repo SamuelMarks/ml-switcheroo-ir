@@ -566,7 +566,15 @@ def test_pipeline_and_checkpointing_validation() -> None:
     v = Validator(level=ValidationLevel.STRICT)
 
     # 1. Valid activation checkpointing tags
-    for tag in ["recompute", "offload", "save", "full", True, False]:
+    valid_tags: tuple[str | bool, ...] = (
+        "recompute",
+        "offload",
+        "save",
+        "full",
+        True,
+        False,
+    )
+    for tag in valid_tags:
         node = LogicalNode(
             id="chk_node",
             op_type="Relu",

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ml_switcheroo_ir.schema.base import (
+    REGISTRY_LOCK,
     OpSchema,
     build_isa_primitive_schemas,
     load_op_schema_catalog,
@@ -38,37 +39,40 @@ def _load_rdna_schemas(json_path: Path | str | None = None) -> None:
         if vopd_target:
             RDNA_TO_VOPD_MAP[name] = str(vopd_target)
 
-    loaded = load_op_schema_catalog(
-        "rdna_ops.json",
-        domain_default="amd_rdna",
-        json_path=json_path,
-        find_file_fn=find_schema_file,
-        on_entry=_record_rdna_metadata,
-    )
-    if loaded:
-        RDNA_REGISTRY.update(loaded)
-    elif json_path is None:
-        from ml_switcheroo_ir.schema.ghost import (
-            RDNA3_VOPD_OPERATORS as GHOST_VOPD_OPS,
+    with REGISTRY_LOCK:
+        loaded = load_op_schema_catalog(
+            "rdna_ops.json",
+            domain_default="amd_rdna",
+            json_path=json_path,
+            find_file_fn=find_schema_file,
+            on_entry=_record_rdna_metadata,
         )
-        from ml_switcheroo_ir.schema.ghost import (
-            RDNA_INSTRUCTION_PRIMITIVES as GHOST_PRIMITIVES,
-        )
-        from ml_switcheroo_ir.schema.ghost import (
-            RDNA_TO_VOPD_MAP as GHOST_VOPD_MAP,
-        )
-
-        for op_name, op_info in GHOST_VOPD_OPS.items():
-            slots = op_info.get("slots", [])
-            slot_str = (
-                "BOTH" if set(slots) == {"X", "Y"} else (slots[0] if slots else "BOTH")
+        if loaded:
+            RDNA_REGISTRY.update(loaded)
+        elif json_path is None:
+            from ml_switcheroo_ir.schema.ghost import (
+                RDNA3_VOPD_OPERATORS as GHOST_VOPD_OPS,
             )
-            RDNA_VOPD_SLOTS[op_name] = slot_str
+            from ml_switcheroo_ir.schema.ghost import (
+                RDNA_INSTRUCTION_PRIMITIVES as GHOST_PRIMITIVES,
+            )
+            from ml_switcheroo_ir.schema.ghost import (
+                RDNA_TO_VOPD_MAP as GHOST_VOPD_MAP,
+            )
 
-        RDNA_TO_VOPD_MAP.update(GHOST_VOPD_MAP)
-        RDNA_REGISTRY.update(
-            build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="amd_rdna")
-        )
+            for op_name, op_info in GHOST_VOPD_OPS.items():
+                slots = op_info.get("slots", [])
+                slot_str = (
+                    "BOTH"
+                    if set(slots) == {"X", "Y"}
+                    else (slots[0] if slots else "BOTH")
+                )
+                RDNA_VOPD_SLOTS[op_name] = slot_str
+
+            RDNA_TO_VOPD_MAP.update(GHOST_VOPD_MAP)
+            RDNA_REGISTRY.update(
+                build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="amd_rdna")
+            )
 
 
 _load_rdna_schemas()

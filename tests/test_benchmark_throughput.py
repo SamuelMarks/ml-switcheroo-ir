@@ -325,7 +325,6 @@ def test_file_io_error_handling(
 
 
 @pytest.mark.benchmark
-@pytest.mark.benchmark
 def test_benchmark_10000_node_transformer_throughput(tmp_path: Path) -> None:
     """Benchmark serialization and deserialization throughput with 10,000+ nodes.
 

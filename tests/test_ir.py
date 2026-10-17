@@ -703,11 +703,14 @@ def test_cli_compliance_exception(
 
 
 def test_cli_compliance_json_exception(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Verify CLI compliance subcommand handles malformed adjacent JSON definitions gracefully.
 
     Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
         tmp_path (pathlib.Path): Pytest temporary directory fixture.
         capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
     """
@@ -720,7 +723,6 @@ def test_cli_compliance_json_exception(
     # Create invalid json file
     j = tmp_path / "my_adapter.json"
     j.write_text("invalid json")
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.chdir(tmp_path)
     cli_main(["compliance", "test_fw.py"])
     assert "Compliance Report" in capsys.readouterr().out

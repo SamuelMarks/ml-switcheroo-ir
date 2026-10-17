@@ -47,13 +47,13 @@ class MockAdapter:
 
     # Assert Framework tracking
     assert "FrameworkAdapter Compliance:" in captured.out
-    # assert "mockfw.py" in captured.out
+    assert "workspace" in captured.out
     assert "100%" in captured.out
     assert "4/4" in captured.out
 
     # Assert Dialect tracking picked up from dynamic definitions
     assert "DIALECT Compliance" in captured.out
-    # assert "mockfw.py" in captured.out
+    assert "workspace" in captured.out
 
 
 def test_cli_compliance_branch_coverage(

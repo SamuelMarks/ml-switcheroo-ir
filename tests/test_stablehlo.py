@@ -41,30 +41,26 @@ def test_find_schema_file_branches() -> None:
         assert find_schema_file("dummy_ops.json", override_path=non_existent) is None
 
         # 3. Candidate path exists in DEFAULT_SNAPSHOT_DIR
+        snap_sub = tmppath / "snapshots_dir"
+        snap_sub.mkdir(parents=True, exist_ok=True)
+        cand_file = snap_sub / "cand_ops.json"
+        cand_file.write_text("{}", encoding="utf-8")
         with mock.patch(
-            "pathlib.Path.is_file",
-            side_effect=lambda: True,
+            "ml_switcheroo_ir.snapshots.DEFAULT_SNAPSHOT_DIR", str(snap_sub)
         ):
-            res = find_schema_file("dummy_ops.json")
-            assert res is not None
+            assert find_schema_file("cand_ops.json") == cand_file
 
-        # 4. Sibling schema path fallback
-        def mock_is_file_sibling(self: Path) -> bool:
-            """Check if path string contains schema.
+            # 4. Parent candidate path exists in DEFAULT_SNAPSHOT_DIR.parent
+            parent_file = tmppath / "parent_ops.json"
+            parent_file.write_text("{}", encoding="utf-8")
+            assert find_schema_file("parent_ops.json") == parent_file
 
-            Args:
-                self (Path): Candidate path instance.
-
-            Returns:
-                bool: True if 'schema' is in the path string.
-            """
-            return "schema" in str(self)
-
-        with mock.patch.object(Path, "is_file", mock_is_file_sibling):
-            res_sibling = find_schema_file("dummy_ops.json")
-            assert res_sibling is not None
-            assert "schema" in str(res_sibling)
-
-        # 5. Neither candidate nor sibling exists
-        with mock.patch.object(Path, "is_file", return_value=False):
-            assert find_schema_file("nonexistent_schema.json") is None
+            # 5. Sibling schema path fallback when not in DEFAULT_SNAPSHOT_DIR or parent
+            fake_pkg_init = tmppath / "pkg" / "snapshots.py"
+            sibling_schema_dir = tmppath / "pkg" / "schema"
+            sibling_schema_dir.mkdir(parents=True, exist_ok=True)
+            sibling_file = sibling_schema_dir / "sibling_ops.json"
+            sibling_file.write_text("{}", encoding="utf-8")
+            with mock.patch("ml_switcheroo_ir.snapshots.__file__", str(fake_pkg_init)):
+                assert find_schema_file("sibling_ops.json") == sibling_file
+                assert find_schema_file("nonexistent_schema.json") is None

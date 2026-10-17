@@ -395,3 +395,154 @@ def test_transforms_edge_cases() -> None:
     assert res_shape.nodes["r_conc"].shape_metadata == (4, 4)
     assert res_shape.nodes["b_shape"].shape_metadata == (2, 8, 16)
     assert res_shape.nodes["t_bad"].shape_metadata == (2, 8)
+
+
+def test_dce_and_cse_multi_output_and_self_edges() -> None:
+    """Verify DCE and CSE preserve multi-output SSA producers, self-edges, version, and source_ast_ref."""
+    n_in = LogicalNode(
+        id="in0",
+        op_type="Input",
+        version=7,
+        source_ast_ref="model.py:10",
+    )
+    n_split1 = LogicalNode(
+        id="split1",
+        op_type="Split",
+        version=13,
+        inputs=["in0"],
+        outputs=["q1", "k1"],
+        source_ast_ref="model.py:20",
+    )
+    n_split2 = LogicalNode(
+        id="split2",
+        op_type="Split",
+        version=13,
+        inputs=["in0"],
+        outputs=["q2", "k2"],
+        source_ast_ref="model.py:21",
+    )
+    n_add = LogicalNode(
+        id="self_add",
+        op_type="Add",
+        version=14,
+        inputs=["k2", "k2"],
+        outputs=["sum_out"],
+        source_ast_ref="model.py:30",
+    )
+    n_dead = LogicalNode(
+        id="dead_op",
+        op_type="Relu",
+        inputs=["q1"],
+    )
+
+    graph = LogicalGraph(
+        name="MultiOutSelfEdgeGraph",
+        nodes={
+            "in0": n_in,
+            "split1": n_split1,
+            "split2": n_split2,
+            "self_add": n_add,
+            "dead_op": n_dead,
+        },
+        inputs=["in0"],
+        outputs=["sum_out"],
+    )
+
+    cse_graph = eliminate_common_subexpressions(graph)
+    assert "split1" in cse_graph.nodes
+    assert "split2" not in cse_graph.nodes
+    assert cse_graph.nodes["self_add"].inputs == ["k1", "k1"]
+    assert len([e for e in cse_graph.edges if e.target == "self_add"]) == 2
+    assert cse_graph.nodes["self_add"].version == 14
+    assert cse_graph.nodes["self_add"].source_ast_ref == "model.py:30"
+
+    dce_graph = eliminate_dead_nodes(cse_graph)
+    assert "dead_op" not in dce_graph.nodes
+    assert "split1" in dce_graph.nodes
+    assert "in0" in dce_graph.nodes
+    assert "self_add" in dce_graph.nodes
+    assert dce_graph.outputs == ["sum_out"]
+    assert dce_graph.nodes["split1"].version == 13
+    assert dce_graph.nodes["split1"].source_ast_ref == "model.py:20"
+
+    # CSE on control-flow nodes with distinct vs identical subgraphs
+    sub_a = LogicalGraph(
+        name="sub_a",
+        nodes={"op1": LogicalNode(id="op1", op_type="Relu", inputs=["x"])},
+        inputs=["x"],
+        outputs=["op1"],
+    )
+    sub_b = LogicalGraph(
+        name="sub_b",
+        nodes={"op1": LogicalNode(id="op1", op_type="Sigmoid", inputs=["x"])},
+        inputs=["x"],
+        outputs=["op1"],
+    )
+    cf_g = LogicalGraph(
+        nodes={
+            "x": LogicalNode(id="x", op_type="Input"),
+            "if1": LogicalNode(
+                id="if1",
+                op_type="If",
+                inputs=["x"],
+                subgraphs={"then_branch": sub_a},
+            ),
+            "if2": LogicalNode(
+                id="if2",
+                op_type="If",
+                inputs=["x"],
+                subgraphs={"then_branch": sub_b},
+            ),
+            "if3": LogicalNode(
+                id="if3",
+                op_type="If",
+                inputs=["x"],
+                subgraphs={"then_branch": sub_a},
+            ),
+        },
+        inputs=["x"],
+        outputs=["if1", "if2", "if3"],
+    )
+    cse_cf = eliminate_common_subexpressions(cf_g)
+    assert "if1" in cse_cf.nodes
+    assert "if2" in cse_cf.nodes
+    assert "if3" not in cse_cf.nodes
+    assert cse_cf.outputs == ["if1", "if2", "if1"]
+
+    # Multi-output Split shape propagation populates output_specs for unequal splits
+    split_g = LogicalGraph(
+        nodes={
+            "x": LogicalNode(id="x", op_type="Input", shape_metadata=(4, 30)),
+            "sp": LogicalNode(
+                id="sp",
+                op_type="Split",
+                inputs=["x"],
+                outputs=["sp0", "sp1"],
+                attributes={"axis": 1, "split": [10, 20]},
+            ),
+        },
+        inputs=["x"],
+        outputs=["sp0", "sp1"],
+    )
+    prop_sp = propagate_shapes_and_constants(split_g)
+    assert len(prop_sp.nodes["sp"].output_specs) == 2
+    assert prop_sp.nodes["sp"].output_specs[0].shape == (4, 10)
+    assert prop_sp.nodes["sp"].output_specs[1].shape == (4, 20)
+
+    # Multi-output Split with num_outputs (no split list attribute)
+    split_num_g = LogicalGraph(
+        nodes={
+            "x": LogicalNode(id="x", op_type="Input", shape_metadata=(4, 30)),
+            "sp_n": LogicalNode(
+                id="sp_n",
+                op_type="Split",
+                inputs=["x"],
+                outputs=["sp0", "sp1"],
+                attributes={"axis": 1, "num_outputs": 2},
+            ),
+        },
+        inputs=["x"],
+        outputs=["sp0", "sp1"],
+    )
+    prop_sp_n = propagate_shapes_and_constants(split_num_g)
+    assert prop_sp_n.nodes["sp_n"].shape_metadata == (4, 15)

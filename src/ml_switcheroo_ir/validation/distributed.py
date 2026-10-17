@@ -2,18 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict
 
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalMesh, LogicalNode
 from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel
 
 __all__ = [
+    "CommunicationVolumeReport",
     "estimate_communication_volume",
     "estimate_graph_communication_volume",
     "validate_pipeline_and_checkpointing_graph",
     "validate_sharding_node",
     "validate_sharding_propagation_graph",
 ]
+
+
+class CommunicationVolumeReport(TypedDict):
+    """Typed dictionary reporting analytical collective communication volume.
+
+    Attributes:
+        total_volume_bytes (int): Total bytes transferred across all collective nodes.
+        by_axis (dict[str, int]): Breakdown of communication volume in bytes per mesh axis.
+        by_op (dict[str, int]): Breakdown of communication volume in bytes per operator type.
+    """
+
+    total_volume_bytes: int
+    by_axis: dict[str, int]
+    by_op: dict[str, int]
 
 
 def estimate_communication_volume(
@@ -77,14 +92,14 @@ def estimate_communication_volume(
 
 def estimate_graph_communication_volume(
     graph: LogicalGraph,
-) -> dict[str, Any]:
+) -> CommunicationVolumeReport:
     """Aggregate analytical communication volume across all collective operators in a graph.
 
     Args:
         graph (LogicalGraph): The computational graph to analyze.
 
     Returns:
-        dict[str, Any]: Dictionary with total communication volume in bytes,
+        CommunicationVolumeReport: Dictionary with total communication volume in bytes,
             and breakdowns by mesh axis and operator type.
     """
     total_bytes = 0

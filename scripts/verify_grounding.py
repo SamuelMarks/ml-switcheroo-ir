@@ -45,17 +45,9 @@ def _resolve_override_snapshots_path(override_path: str) -> Path | None:
 def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     """Locate the ground-truth snapshots directory.
 
-    Checks:
-        1. Explicit override_path argument (including ../ml-framework-snapshots resolution).
-        2. ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable.
-        3. ML_FRAMEWORK_SNAPSHOTS_DIR environment variable.
-        4. DEFAULT_SNAPSHOT_DIR from validator.
-        5. Sibling directory ../ml-ecosystem-snapshots/src/ml_framework_snapshots/snapshots/
-           and ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/.
-        6. User cache directory (~/.cache/ml_ecosystem_snapshots).
-        7. User cache directory (~/.cache/ml_framework_snapshots).
-        8. Sibling directory ../ml-framework-snapshots/src/ml_framework_snapshots/snapshots/.
-        9. Bundled fixture directory tests/fixtures/snapshots.
+    Delegates explicit overrides to ``ml_switcheroo_ir.snapshots.resolve_snapshots_path``
+    and falls back to environment variables, ``DEFAULT_SNAPSHOT_DIR``, and
+    ``get_default_snapshots_dir()``.
 
     Args:
         override_path (Optional[str]): Explicit path provided via CLI flag or config.
@@ -66,65 +58,22 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     if override_path:
         return _resolve_override_snapshots_path(override_path)
 
-    env_eco = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
-    if env_eco:
-        p = Path(env_eco).resolve()
-        if p.is_dir():
-            return p
-
-    env_dir = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR")
-    if env_dir:
-        p = Path(env_dir).resolve()
-        if p.is_dir():
-            return p
+    for env_var in ("ML_ECOSYSTEM_SNAPSHOTS_DIR", "ML_FRAMEWORK_SNAPSHOTS_DIR"):
+        env_val = os.environ.get(env_var)
+        if env_val:
+            resolved_env = _resolve_override_snapshots_path(env_val)
+            if resolved_env is not None:
+                return resolved_env
 
     default_path = Path(DEFAULT_SNAPSHOT_DIR).resolve()
     if default_path.is_dir():
         return default_path
 
-    sibling_eco_fw = (
-        Path(__file__).resolve().parent.parent.parent
-        / "ml-ecosystem-snapshots"
-        / "src"
-        / "ml_framework_snapshots"
-        / "snapshots"
-    )
-    if sibling_eco_fw.is_dir():
-        return sibling_eco_fw
+    from ml_switcheroo_ir.snapshots import get_default_snapshots_dir
 
-    sibling_eco = (
-        Path(__file__).resolve().parent.parent.parent
-        / "ml-ecosystem-snapshots"
-        / "src"
-        / "ml_ecosystem_snapshots"
-        / "snapshots"
-    )
-    if sibling_eco.is_dir():
-        return sibling_eco
-
-    user_cache_eco = Path("~/.cache/ml_ecosystem_snapshots").expanduser().resolve()
-    if user_cache_eco.is_dir():
-        return user_cache_eco
-
-    user_cache_fw = Path("~/.cache/ml_framework_snapshots").expanduser().resolve()
-    if user_cache_fw.is_dir():
-        return user_cache_fw
-
-    sibling_fw = (
-        Path(__file__).resolve().parent.parent.parent
-        / "ml-framework-snapshots"
-        / "src"
-        / "ml_framework_snapshots"
-        / "snapshots"
-    )
-    if sibling_fw.is_dir():
-        return sibling_fw
-
-    fixtures_dir = (
-        Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "snapshots"
-    )
-    if fixtures_dir.is_dir():
-        return fixtures_dir
+    discovered = Path(get_default_snapshots_dir()).resolve()
+    if discovered.is_dir():
+        return discovered
 
     return None
 
@@ -851,7 +800,7 @@ def main(argv: list[str] | None = None) -> int:
         print("[WARNING] Snapshot directory not found. Skipping live snapshot checks.")
         return _verify_local_schemas_only()
 
-    if target_dir is None and not any(snapshots_dir.glob("*.json")):
+    if not any(snapshots_dir.glob("*.json")):
         if args.strict:
             print(
                 "[ERROR] Snapshot directory contains no snapshot files in strict mode."

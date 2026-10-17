@@ -22,26 +22,6 @@ from typing_extensions import TypeAlias
 if TYPE_CHECKING:
     from ml_switcheroo_ir.sentinels import NoTangent, ZeroTangent
 
-    InitializerValue: TypeAlias = Union[
-        int,
-        float,
-        bool,
-        str,
-        bytes,
-        List["InitializerValue"],
-        Dict[str, "InitializerValue"],
-    ]
-else:
-    InitializerValue = Union[
-        int,
-        float,
-        bool,
-        str,
-        bytes,
-        List[Any],
-        Dict[str, Any],
-    ]
-
 from ml_switcheroo_ir.shapes import (
     DimensionType,
     SymInt,
@@ -63,19 +43,58 @@ __all__ = [
     "ZeroTangent",
 ]
 
-AttributeValue = Union[
-    int,
-    float,
-    str,
-    bool,
-    List[int],
-    List[float],
-    List[str],
-    Sequence[Any],
-    Dict[str, Any],
-    Mapping[str, Any],
-    Any,
-]
+if TYPE_CHECKING:
+    InitializerValue: TypeAlias = Union[
+        int,
+        float,
+        bool,
+        str,
+        bytes,
+        List["InitializerValue"],
+        Dict[str, "InitializerValue"],
+    ]
+
+    AttributeValue: TypeAlias = Union[
+        int,
+        float,
+        str,
+        bool,
+        bytes,
+        None,
+        SymNode,
+        SymInt,
+        "DType",
+        "TensorShape",
+        "TensorSpec",
+        Sequence["AttributeValue"],
+        Mapping[str, "AttributeValue"],
+    ]
+else:
+    _ScalarInit = Union[int, float, bool, str, bytes]
+    InitializerValue = Union[
+        _ScalarInit,
+        List[Union[_ScalarInit, List[_ScalarInit]]],
+        Dict[str, Union[_ScalarInit, List[_ScalarInit]]],
+    ]
+
+    _ScalarAttr = Union[
+        int,
+        float,
+        str,
+        bool,
+        bytes,
+        None,
+        SymNode,
+        SymInt,
+        "DType",
+        "TensorShape",
+        "TensorSpec",
+    ]
+    AttributeValue = Union[
+        _ScalarAttr,
+        Sequence[_ScalarAttr],
+        Mapping[str, _ScalarAttr],
+    ]
 
 
 class AutodiffSentinelProtocol(Protocol):
@@ -211,6 +230,18 @@ class DType(str, Enum):
         return onnx_map.get(self.value, self.value.upper())
 
 
+class _HasDimsProtocol(Protocol):
+    """Protocol for duck-typed shape objects carrying a .dims sequence."""
+
+    @property
+    def dims(self) -> Sequence[DimensionType]:
+        """Return sequence of dimensions.
+
+        Returns:
+            Sequence[DimensionType]: Dimension sequence.
+        """
+
+
 @dataclass
 class TensorShape:
     """Represents a tensor shape with dimension query and symbolic manipulation capabilities.
@@ -222,18 +253,23 @@ class TensorShape:
     dims: tuple[DimensionType, ...]
 
     def __init__(
-        self, dims: tuple[DimensionType, ...] | Sequence[DimensionType] | Any
+        self,
+        dims: tuple[DimensionType, ...]
+        | Sequence[DimensionType]
+        | TensorShape
+        | _HasDimsProtocol
+        | DimensionType,
     ) -> None:
         """Initialize TensorShape normalizing inputs into a tuple.
 
         Args:
-            dims (tuple[DimensionType, ...] | Sequence[DimensionType] | Any): Dimensions.
+            dims (tuple[DimensionType, ...] | Sequence[DimensionType] | TensorShape | _HasDimsProtocol | DimensionType): Dimensions.
         """
         if isinstance(dims, tuple):
             self.dims = dims
         elif hasattr(dims, "dims"):
             self.dims = tuple(dims.dims)
-        elif isinstance(dims, Iterable):
+        elif not isinstance(dims, str) and isinstance(dims, Iterable):
             self.dims = tuple(dims)
         else:
             self.dims = (dims,)

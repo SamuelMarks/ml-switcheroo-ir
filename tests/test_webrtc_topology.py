@@ -69,6 +69,7 @@ def test_webrtc_signaling_topology_and_mesh_integration() -> None:
     assert "mesh" in g_dict
     assert "webrtc_topology" in g_dict["mesh"]
     assert g_dict["mesh"]["webrtc_topology"]["chunk_size_bytes"] == 131072
+    assert "webrtc_topology" in graph.to_json()
 
     g_restored = LogicalGraph.from_dict(g_dict)
     assert g_restored.mesh is not None
@@ -78,3 +79,13 @@ def test_webrtc_signaling_topology_and_mesh_integration() -> None:
         == "wss://coordinator.switcheroo.ai:8443"
     )
     assert len(g_restored.mesh.webrtc_topology.peers) == 2
+
+    plain_graph = LogicalGraph(
+        name="PlainMeshGraph",
+        nodes={"n1": n1},
+        inputs=["n1"],
+        outputs=["n1"],
+        mesh=LogicalMesh(shape={"data": 2}),
+    )
+    assert plain_graph.to_dict()["mesh"]["webrtc_topology"] is None
+    assert "PlainMeshGraph" in plain_graph.to_json()

@@ -10,15 +10,13 @@ def get_default_snapshots_dir() -> str:
     """Discover and return default snapshot directory location.
 
     Checks locations in the following precedence order:
-        1. ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable.
-        2. Sibling directory ../ml-ecosystem-snapshots/src/ml_framework_snapshots/snapshots/
+        1. ML_FRAMEWORK_SNAPSHOTS_DIR or ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable.
+        2. Sibling directory ../ml-framework-snapshots/src/ml_framework_snapshots/snapshots/.
+        3. Sibling directory ../ml-ecosystem-snapshots/src/ml_framework_snapshots/snapshots/
            and ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/.
-        3. User cache directory (~/.cache/ml_ecosystem_snapshots).
-        4. ML_FRAMEWORK_SNAPSHOTS_DIR environment variable.
-        5. User cache directory (~/.cache/ml_framework_snapshots).
-        6. Installed ml_ecosystem_snapshots or ml_framework_snapshots package directory.
-        7. Sibling directory ../ml-framework-snapshots/src/ml_framework_snapshots/snapshots/.
-        8. Bundled offline fixture snapshots in tests/fixtures/snapshots.
+        4. User cache directory (~/.cache/ml_framework_snapshots or ~/.cache/ml_ecosystem_snapshots).
+        5. Installed ml_framework_snapshots or ml_ecosystem_snapshots package directory.
+        6. Bundled offline fixture snapshots in tests/fixtures/snapshots.
 
     Returns:
         str: Absolute path to snapshot directory.
@@ -26,6 +24,27 @@ def get_default_snapshots_dir() -> str:
     env_eco = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
     if env_eco and os.path.isdir(env_eco):
         return os.path.abspath(env_eco)
+
+    env_fw = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR")
+    if env_fw and os.path.isdir(env_fw):
+        return os.path.abspath(env_fw)
+
+    sibling_fw = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "..",
+            "ml-framework-snapshots",
+            "src",
+            "ml_framework_snapshots",
+            "snapshots",
+        )
+    )
+    if os.path.isdir(sibling_fw) and any(
+        f.endswith((".json", ".json.gz")) for f in os.listdir(sibling_fw)
+    ):
+        return sibling_fw
 
     sibling_eco_fw = os.path.abspath(
         os.path.join(
@@ -67,10 +86,6 @@ def get_default_snapshots_dir() -> str:
     ):
         return os.path.abspath(user_cache_eco)
 
-    env_fw = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR")
-    if env_fw and os.path.isdir(env_fw):
-        return os.path.abspath(env_fw)
-
     user_cache_fw = os.path.expanduser("~/.cache/ml_framework_snapshots")
     if os.path.isdir(user_cache_fw) and any(
         f.endswith((".json", ".json.gz")) for f in os.listdir(user_cache_fw)
@@ -80,7 +95,7 @@ def get_default_snapshots_dir() -> str:
     try:
         import importlib.util
 
-        for pkg_name in ("ml_ecosystem_snapshots", "ml_framework_snapshots"):
+        for pkg_name in ("ml_framework_snapshots", "ml_ecosystem_snapshots"):
             spec = importlib.util.find_spec(pkg_name)
             if spec and spec.origin:
                 pkg_dir = os.path.join(os.path.dirname(spec.origin), "snapshots")
@@ -90,23 +105,6 @@ def get_default_snapshots_dir() -> str:
                     return os.path.abspath(pkg_dir)
     except (ImportError, AttributeError, ValueError):
         pass
-
-    sibling_fw = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "..",
-            "ml-framework-snapshots",
-            "src",
-            "ml_framework_snapshots",
-            "snapshots",
-        )
-    )
-    if os.path.isdir(sibling_fw) and any(
-        f.endswith((".json", ".json.gz")) for f in os.listdir(sibling_fw)
-    ):
-        return sibling_fw
 
     fixtures_dir = os.path.abspath(
         os.path.join(
@@ -181,6 +179,12 @@ def resolve_snapshots_path(override_path: Path | str) -> Path | None:
             / "snapshots"
         )
         if unified_fw.is_dir():
+            if (
+                not _has_snapshot_files(unified_fw)
+                and p.parent.resolve()
+                == Path(__file__).resolve().parent.parent.parent.parent
+            ):
+                return Path(DEFAULT_SNAPSHOT_DIR).resolve()
             return unified_fw
     return None
 

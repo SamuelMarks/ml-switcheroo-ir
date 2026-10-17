@@ -331,7 +331,7 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
     import io
     import json
 
-    from ml_switcheroo_ir.graph import _stream_parse_graph
+    from ml_switcheroo_ir.graph import _decode_next_json_value, _stream_parse_graph
 
     raw_dict_nodes = (
         '{"name": "ChunkedModel", "nodes": {"n1": {"id": "n1", "op_type": "Relu"}, '
@@ -381,3 +381,12 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
             LogicalGraph,
             chunk_size=4,
         )
+
+    # Test primitive token (multi-digit number) split across chunk boundaries
+    dec = json.JSONDecoder()
+    val_split, _, _ = _decode_next_json_value(dec, "12", 0, io.StringIO("345}"), 4)
+    assert val_split == 12345
+
+    # Test primitive token at exact EOF of stream
+    val_eof, _, _ = _decode_next_json_value(dec, "123", 0, io.StringIO(""), 3)
+    assert val_eof == 123

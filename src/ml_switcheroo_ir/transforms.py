@@ -16,6 +16,10 @@ from ml_switcheroo_ir.graph import (
     LogicalNode,
     topological_sort,
 )
+from ml_switcheroo_ir.schema.custom_ops import (
+    COLLECTIVE_OPS_REGISTRY,
+    STATE_OPS_REGISTRY,
+)
 from ml_switcheroo_ir.shapes import (
     DimensionType,
     SymBinaryOp,
@@ -43,6 +47,27 @@ SIDE_EFFECT_OPS: set[str] = {
     "atomicCompareExchangeWeak",
     "textureStore",
 }
+
+
+def _is_ssa_live(
+    ssa_name: str,
+    live_nodes: set[str],
+    graph: LogicalGraph,
+) -> bool:
+    """Return True if an SSA value or node identifier is produced by a live node.
+
+    Args:
+        ssa_name (str): Node ID or SSA value identifier.
+        live_nodes (set[str]): Set of live node IDs.
+        graph (LogicalGraph): Owning LogicalGraph.
+
+    Returns:
+        bool: True if the producer of ssa_name is in live_nodes.
+    """
+    if ssa_name in live_nodes:
+        return True
+    producer = graph.get_output_producer(ssa_name)
+    return producer is not None and producer.id in live_nodes
 
 
 def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
@@ -82,19 +107,38 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
             or bool(node.attributes.get("side_effects", False))
             or bool(node.attributes.get("is_mutating", False))
             or node.op_type in SIDE_EFFECT_OPS
+            or node.op_type in STATE_OPS_REGISTRY
+            or node.op_type in COLLECTIVE_OPS_REGISTRY
+            or node.domain
+            in (
+                "state",
+                "ml.switcheroo.state",
+                "collective",
+                "ml.switcheroo.collective",
+            )
         )
         if has_effect and node_id not in live_nodes:
             live_nodes.add(node_id)
             queue.append(node_id)
 
-    # 2. Backward BFS traversal along node inputs
+    # 2. Backward BFS traversal along node inputs (including multi-output SSA names)
     while queue:
         curr_id = queue.popleft()
         curr_node = graph.nodes[curr_id]
         for inp_id in curr_node.inputs:
-            if inp_id in graph.nodes and inp_id not in live_nodes:
-                live_nodes.add(inp_id)
-                queue.append(inp_id)
+            if inp_id in graph.nodes:
+                if inp_id not in live_nodes:
+                    live_nodes.add(inp_id)
+                    queue.append(inp_id)
+            else:
+                producer = graph.get_output_producer(inp_id)
+                if (
+                    producer is not None
+                    and producer.id in graph.nodes
+                    and producer.id not in live_nodes
+                ):
+                    live_nodes.add(producer.id)
+                    queue.append(producer.id)
 
     # 3. Filter surviving nodes and recursively process nested subgraphs
     new_nodes: dict[str, LogicalNode] = {}
@@ -111,10 +155,12 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
                 id=node.id,
                 op_type=node.op_type,
                 domain=node.domain,
+                version=node.version,
                 inputs=list(node.inputs),
                 attributes=dict(node.attributes),
                 outputs=list(node.outputs) if node.outputs is not None else None,
                 shape_metadata=node.shape_metadata,
+                source_ast_ref=node.source_ast_ref,
                 sharding=node.sharding,
                 dtype=node.dtype,
                 output_specs=list(node.output_specs),
@@ -133,10 +179,10 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
             value_name=edge.value_name,
         )
         for edge in graph.edges
-        if edge.source in live_nodes and edge.target in live_nodes
+        if _is_ssa_live(edge.source, live_nodes, graph) and edge.target in live_nodes
     ]
 
-    new_outputs = [out for out in graph.outputs if out in live_nodes]
+    new_outputs = [out for out in graph.outputs if _is_ssa_live(out, live_nodes, graph)]
 
     return LogicalGraph(
         name=graph.name,
@@ -160,6 +206,8 @@ def _serialize_attr_for_key(val: Any) -> Any:
     Returns:
         Any: Hashable normalized representation.
     """
+    if isinstance(val, LogicalGraph):
+        return _serialize_attr_for_key(val.to_dict())
     if isinstance(val, dict):
         return tuple(sorted((k, _serialize_attr_for_key(v)) for k, v in val.items()))
     if isinstance(val, (list, tuple)):
@@ -191,6 +239,15 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
             or bool(node.attributes.get("side_effects", False))
             or bool(node.attributes.get("is_mutating", False))
             or node.op_type in SIDE_EFFECT_OPS
+            or node.op_type in STATE_OPS_REGISTRY
+            or node.op_type in COLLECTIVE_OPS_REGISTRY
+            or node.domain
+            in (
+                "state",
+                "ml.switcheroo.state",
+                "collective",
+                "ml.switcheroo.collective",
+            )
             or node.op_type in ("Input", "rng_bit_generator")
         )
 
@@ -205,6 +262,7 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
                 if isinstance(node.shape_metadata, (list, tuple))
                 else None
             )
+            subgraph_key = _serialize_attr_for_key(node.subgraphs)
             sig = (
                 node.domain,
                 node.op_type,
@@ -214,11 +272,18 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
                 node.dtype.value if node.dtype is not None else None,
                 node.device,
                 node.stream,
+                subgraph_key,
             )
 
             if sig in sig_map:
                 canonical_id = sig_map[sig]
                 alias_map[node.id] = canonical_id
+                canonical_node = surviving_nodes[canonical_id]
+                for out_idx, out_name in enumerate(node.outputs):
+                    alias_map[out_name] = canonical_node.get_output_name(out_idx)
+                    alias_map[f"{node.id}:{out_idx}"] = canonical_node.get_output_name(
+                        out_idx
+                    )
                 continue
 
             sig_map[sig] = node.id
@@ -234,10 +299,12 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
             id=node.id,
             op_type=node.op_type,
             domain=node.domain,
+            version=node.version,
             inputs=updated_inputs,
             attributes=dict(node.attributes),
             outputs=list(node.outputs) if node.outputs is not None else None,
             shape_metadata=node.shape_metadata,
+            source_ast_ref=node.source_ast_ref,
             sharding=node.sharding,
             dtype=node.dtype,
             output_specs=list(node.output_specs),
@@ -249,22 +316,18 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
 
     new_outputs = [alias_map.get(out, out) for out in graph.outputs]
 
-    # Rebuild edges
+    # Rebuild edges preserving multi-edges across distinct target ports
     new_edges: list[LogicalEdge] = []
-    seen_edges: set[tuple[str, str]] = set()
     for node in surviving_nodes.values():
         for target_idx, inp in enumerate(node.inputs):
-            edge_tuple = (inp, node.id)
-            if edge_tuple not in seen_edges:
-                seen_edges.add(edge_tuple)
-                new_edges.append(
-                    LogicalEdge(
-                        source=inp,
-                        target=node.id,
-                        target_idx=target_idx,
-                        value_name=inp,
-                    )
+            new_edges.append(
+                LogicalEdge(
+                    source=inp,
+                    target=node.id,
+                    target_idx=target_idx,
+                    value_name=inp,
                 )
+            )
 
     return LogicalGraph(
         name=graph.name,
@@ -963,18 +1026,48 @@ def propagate_shapes_and_constants(graph: LogicalGraph) -> LogicalGraph:
     for node in sorted_nodes:
         computed = _infer_node_shape(node, new_nodes, tracker)
         inferred_shape = computed if computed is not None else node.shape_metadata
+        updated_output_specs = list(node.output_specs)
+
+        if (
+            node.op_type in ("Split", "split")
+            and not updated_output_specs
+            and node.outputs
+            and len(node.outputs) > 1
+            and node.inputs
+        ):
+            inp_node = new_nodes.get(node.inputs[0])
+            split_attr = node.attributes.get("split")
+            if (
+                inp_node is not None
+                and isinstance(inp_node.shape_metadata, (list, tuple))
+                and isinstance(split_attr, (list, tuple))
+            ):
+                from ml_switcheroo_ir.types import DType, TensorSpec
+
+                axis_raw = node.attributes.get("axis", 0)
+                axis = int(axis_raw) if isinstance(axis_raw, (int, str)) else 0
+                norm_ax = normalize_axis(axis, len(inp_node.shape_metadata))
+                dt = node.dtype or inp_node.dtype or DType.float32
+                for sz in split_attr:
+                    s_i = list(inp_node.shape_metadata)
+                    s_i[norm_ax] = (
+                        int(sz) if isinstance(sz, int) or str(sz).isdigit() else str(sz)
+                    )
+                    updated_output_specs.append(TensorSpec(shape=tuple(s_i), dtype=dt))
 
         new_node = LogicalNode(
             id=node.id,
             op_type=node.op_type,
             domain=node.domain,
+            version=node.version,
             inputs=list(node.inputs),
             attributes=dict(node.attributes),
             outputs=list(node.outputs) if node.outputs is not None else None,
             shape_metadata=inferred_shape,
+            source_ast_ref=node.source_ast_ref,
             sharding=node.sharding,
             dtype=node.dtype,
-            output_specs=list(node.output_specs),
+            output_specs=updated_output_specs,
             subgraphs=dict(node.subgraphs),
             device=node.device,
             stream=node.stream,

@@ -67,7 +67,7 @@ warn_unused_ignores = true
 warn_no_return = true
 warn_return_any = true
 warn_unused_configs = true
-disable_error_code = ["import-untyped"]
+strict_equality = true
 
 [[tool.mypy.overrides]]
 module = [

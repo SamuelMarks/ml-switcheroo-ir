@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ml_switcheroo_ir.schema.base import (
+    REGISTRY_LOCK,
     CustomOpSchema,
     OpSchema,
     load_op_schema_catalog,
@@ -140,35 +141,36 @@ def _load_schema_file(
 
 def _initialize_low_level_registries() -> None:
     """Initialize all low-level hardware and shader registries."""
-    loaded_ptx = _load_schema_file("ptx_ops.json", "nvidia_ptx")
-    if not loaded_ptx:
-        for s in _CANONICAL_PTX_OPS:
-            loaded_ptx[s.name] = s.to_op_schema()
-    PTX_REGISTRY.update(loaded_ptx)
+    with REGISTRY_LOCK:
+        loaded_ptx = _load_schema_file("ptx_ops.json", "nvidia_ptx")
+        if not loaded_ptx:
+            for s in _CANONICAL_PTX_OPS:
+                loaded_ptx[s.name] = s.to_op_schema()
+        PTX_REGISTRY.update(loaded_ptx)
 
-    loaded_metal = _load_schema_file("metal_ops.json", "metal_msl")
-    if not loaded_metal:
-        for s in _CANONICAL_METAL_OPS:
-            loaded_metal[s.name] = s.to_op_schema()
-    METAL_REGISTRY.update(loaded_metal)
+        loaded_metal = _load_schema_file("metal_ops.json", "metal_msl")
+        if not loaded_metal:
+            for s in _CANONICAL_METAL_OPS:
+                loaded_metal[s.name] = s.to_op_schema()
+        METAL_REGISTRY.update(loaded_metal)
 
-    loaded_wasm = _load_schema_file("wasm_ops.json", "wasm_simd")
-    if not loaded_wasm:
-        for s in _CANONICAL_WASM_OPS:
-            loaded_wasm[s.name] = s.to_op_schema()
-    WASM_REGISTRY.update(loaded_wasm)
+        loaded_wasm = _load_schema_file("wasm_ops.json", "wasm_simd")
+        if not loaded_wasm:
+            for s in _CANONICAL_WASM_OPS:
+                loaded_wasm[s.name] = s.to_op_schema()
+        WASM_REGISTRY.update(loaded_wasm)
 
-    loaded_webgl = _load_schema_file("webgl_ops.json", "webgl")
-    if not loaded_webgl:
-        for s in _CANONICAL_WEBGL_OPS:
-            loaded_webgl[s.name] = s.to_op_schema()
-    WEBGL_REGISTRY.update(loaded_webgl)
+        loaded_webgl = _load_schema_file("webgl_ops.json", "webgl")
+        if not loaded_webgl:
+            for s in _CANONICAL_WEBGL_OPS:
+                loaded_webgl[s.name] = s.to_op_schema()
+        WEBGL_REGISTRY.update(loaded_webgl)
 
-    loaded_wgsl = _load_schema_file("wgsl_ops.json", "wgsl")
-    if not loaded_wgsl:
-        for s in _CANONICAL_WGSL_OPS:
-            loaded_wgsl[s.name] = s.to_op_schema()
-    WGSL_REGISTRY.update(loaded_wgsl)
+        loaded_wgsl = _load_schema_file("wgsl_ops.json", "wgsl")
+        if not loaded_wgsl:
+            for s in _CANONICAL_WGSL_OPS:
+                loaded_wgsl[s.name] = s.to_op_schema()
+        WGSL_REGISTRY.update(loaded_wgsl)
 
 
 _initialize_low_level_registries()

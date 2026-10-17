@@ -74,7 +74,15 @@ def test_sass_yield_flag_validation() -> None:
     v = Validator(level=ValidationLevel.STRICT)
 
     # Valid yield flags
-    for yf in ["Y", "-", "yield", "noyield", True, False]:
+    valid_flags: tuple[str | bool, ...] = (
+        "Y",
+        "-",
+        "yield",
+        "noyield",
+        True,
+        False,
+    )
+    for yf in valid_flags:
         node = LogicalNode(
             id="s_y",
             op_type="FFMA",

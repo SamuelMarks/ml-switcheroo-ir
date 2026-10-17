@@ -373,6 +373,11 @@ class GroundingValidator(Validator):
             for sym in self.grounded_symbols:
                 if sym.startswith(domain_prefix):
                     unqual = sym[len(domain_prefix) :]
+                    if (
+                        abs(len(op_type) - len(unqual)) >= best_dist
+                        and abs(len(full_candidate) - len(sym)) >= best_dist
+                    ):
+                        continue
                     d = min(
                         compute_levenshtein(op_type, unqual),
                         compute_levenshtein(full_candidate, sym),
@@ -385,6 +390,8 @@ class GroundingValidator(Validator):
             return best_match
 
         for sym in self.grounded_symbols:
+            if abs(len(op_type) - len(sym)) >= best_dist:
+                continue
             d = compute_levenshtein(op_type, sym)
             if d < best_dist:
                 best_dist = d
@@ -429,6 +436,8 @@ class GroundingValidator(Validator):
         best_match: str | None = None
         best_dist = 4
         for cand in candidates:
+            if abs(len(attr_key) - len(cand)) >= best_dist:
+                continue
             d = compute_levenshtein(attr_key, cand)
             if d < best_dist:
                 best_dist = d

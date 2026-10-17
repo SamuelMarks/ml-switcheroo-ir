@@ -7,9 +7,28 @@ import json
 import os
 import sys
 import warnings
-from typing import Any
+from typing import TypedDict
 
+from ml_switcheroo_ir.cli import _fallback_tabulate
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+
+
+class FileComplianceResult(TypedDict):
+    """Typed dictionary representing the compliance analysis of a Python file.
+
+    Attributes:
+        is_ir (bool): Whether the file defines an IR Backend or Frontend.
+        is_fw (bool): Whether the file defines a FrameworkAdapter or Importer.
+        implemented_ops (set[str]): Set of implemented dialect operator names.
+        ir_score (tuple[int, int]): Tuple of (met_requirements, total_requirements) for IR.
+        fw_score (tuple[int, int]): Tuple of (met_requirements, total_requirements) for FrameworkAdapter.
+    """
+
+    is_ir: bool
+    is_fw: bool
+    implemented_ops: set[str]
+    ir_score: tuple[int, int]
+    fw_score: tuple[int, int]
 
 
 def _warn_deprecation() -> None:
@@ -35,27 +54,7 @@ __all__ = [
 try:
     from tabulate import tabulate
 except ImportError:
-    # Fallback if tabulate is not available
-    def tabulate(
-        tabular_data: Any,
-        headers: Any = (),
-        **kwargs: Any,
-    ) -> str:
-        """Fallback for tabulate.
-
-        Args:
-            tabular_data: The table data.
-            headers: The table headers.
-            kwargs: Ignored keyword arguments.
-
-        Returns:
-            The tabulated string.
-        """
-        res = " | ".join(str(h) for h in headers) + "\n"
-        res += "-" * len(res) + "\n"
-        for row in tabular_data:
-            res += " | ".join(str(c) for c in row) + "\n"
-        return res
+    tabulate = _fallback_tabulate
 
 
 def collect_files(targets: list[str]) -> list[str]:
@@ -283,7 +282,7 @@ def _score_fw_adapters(tree: ast.AST) -> tuple[bool, tuple[int, int]]:
     return is_fw, ((best_req_met, 4) if is_fw else (0, 4))
 
 
-def analyze_python_file(filepath: str, dialect_ops: set[str]) -> dict[str, Any]:
+def analyze_python_file(filepath: str, dialect_ops: set[str]) -> FileComplianceResult:
     """Analyze a python file for IR, FrameworkAdapter, and Dialect compliance.
 
     Args:
@@ -291,9 +290,9 @@ def analyze_python_file(filepath: str, dialect_ops: set[str]) -> dict[str, Any]:
         dialect_ops: Set of all dialect operations.
 
     Returns:
-        Dictionary with compliance findings.
+        FileComplianceResult: Dictionary with compliance findings.
     """
-    result: dict[str, Any] = {
+    result: FileComplianceResult = {
         "is_ir": False,
         "is_fw": False,
         "implemented_ops": set(),
@@ -480,11 +479,8 @@ def run_compliance_check(
     for filepath in files:
         if filepath.endswith(".json"):
             ops = parse_json_file(filepath, dialect_ops)
-            if ops:
-                aggregated_dialect_ops.update(ops)
-                found_any_dialect_targets = True
-            else:
-                _ = True
+            aggregated_dialect_ops.update(ops)
+            found_any_dialect_targets = found_any_dialect_targets or bool(ops)
             continue
 
         res = analyze_python_file(filepath, dialect_ops)

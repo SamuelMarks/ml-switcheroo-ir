@@ -562,11 +562,11 @@ def validate_isa_instruction_node(
     Returns:
         list[ValidationError]: Detected validation errors or warnings.
     """
-    if node.domain == "amd_rdna":
+    if node.domain in ("amd_rdna", "rdna"):
         return _validate_rdna_isa(node, level)
-    if node.domain == "nvidia_sass":
+    if node.domain in ("nvidia_sass", "sass"):
         return _validate_sass_isa(node)
-    if node.domain == "webgpu_wgsl":
+    if node.domain in ("webgpu_wgsl", "wgsl"):
         return _validate_wgsl_isa(node)
     return []
 
@@ -588,7 +588,7 @@ def validate_sass_scoreboarding_sequence(
     pending_writes: dict[str, tuple[str, str, int, int | None]] = {}
 
     for node in nodes:
-        if node.domain != "nvidia_sass":
+        if node.domain not in ("nvidia_sass", "sass"):
             continue
 
         wait_mask = node.attributes.get("wait_barrier_mask")

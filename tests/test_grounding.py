@@ -7,8 +7,6 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from ml_switcheroo_ir import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.onnx_registry import OpSchema
 from ml_switcheroo_ir.validator import (
@@ -416,7 +414,7 @@ def test_grounding_validator_accepted_kwargs() -> None:
 
 
 def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None:
-    """Verify GroundingValidator against real ml-framework-snapshots datasets if present or fixture.
+    """Verify GroundingValidator against real ml-framework-snapshots datasets or synthesized golden fixture.
 
     Args:
         tmp_path (Path): Temporary path fixture for generating test snapshots.
@@ -426,10 +424,37 @@ def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None
     snapshots_dir = Path(DEFAULT_SNAPSHOT_DIR)
     stablehlo_files = sorted(snapshots_dir.glob("stablehlo*.json"))
 
-    if not stablehlo_files:
-        pytest.skip("No StableHLO snapshots found to test against")
+    if stablehlo_files:
+        stablehlo_file = stablehlo_files[-1]
+    else:
+        stablehlo_file = tmp_path / "stablehlo_v1.0.0.json"
+        stablehlo_file.write_text(
+            json.dumps(
+                {
+                    "categories": {
+                        "ops": [
+                            {
+                                "name": "dot_general",
+                                "api_path": "stablehlo.dot_general",
+                                "attributes": [{"name": "dot_dimension_numbers"}],
+                            },
+                            {
+                                "name": "convolution",
+                                "api_path": "stablehlo.convolution",
+                                "attributes": [],
+                            },
+                            {
+                                "name": "reduce",
+                                "api_path": "stablehlo.reduce",
+                                "attributes": [],
+                            },
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
 
-    stablehlo_file = stablehlo_files[-1]
     gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
     assert "stablehlo.dot_general" in gv.grounded_symbols
     assert "stablehlo.convolution" in gv.grounded_symbols
@@ -445,7 +470,7 @@ def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None
     assert not gv.validate_grounding(valid_node)
 
     # Validate that loading snapshot directory loads symbols
-    gv_all = GroundingValidator(snapshot_manifest=str(snapshots_dir))
+    gv_all = GroundingValidator(snapshot_manifest=str(stablehlo_file.parent))
     assert len(gv_all.grounded_symbols) >= 3
 
 
@@ -476,12 +501,14 @@ def test_grounding_against_dumped_ir_snapshot(tmp_path: Path) -> None:
 def test_grounding_against_ml_framework_snapshots_golden_fallback(
     tmp_path: Path,
 ) -> None:
-    """Test fallback branch when live snapshot directory is empty or missing.
+    """Test fallback branch when live snapshot directory has no stablehlo*.json files.
 
     Args:
         tmp_path (Path): Temporary path fixture.
     """
-    with patch("pathlib.Path.exists", return_value=False):
+    empty_snap_dir = tmp_path / "empty_snaps"
+    empty_snap_dir.mkdir(parents=True, exist_ok=True)
+    with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(empty_snap_dir)):
         test_grounding_against_ml_framework_snapshots_golden(tmp_path)
 
 

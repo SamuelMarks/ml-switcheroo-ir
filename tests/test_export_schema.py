@@ -80,7 +80,9 @@ def test_get_json_schema_invalid_target() -> None:
 
 
 def test_generate_typescript_definitions() -> None:
-    """Test TypeScript definitions generation and syntax validation."""
+    """Test TypeScript definitions generation and 1-to-1 DType parity."""
+    from ml_switcheroo_ir.types import DType
+
     ts_code = generate_typescript_definitions()
     assert isinstance(ts_code, str)
     assert "export interface LogicalGraph" in ts_code
@@ -97,6 +99,8 @@ def test_generate_typescript_definitions() -> None:
     assert "export interface SymInt" in ts_code
     assert "export type DType =" in ts_code
     assert "export type AttributeValue =" in ts_code
+    for dt in DType:
+        assert f'| "{dt.value}"' in ts_code
 
 
 def test_export_schemas_directory(tmp_path: Path) -> None:

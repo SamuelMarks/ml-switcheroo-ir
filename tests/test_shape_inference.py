@@ -213,47 +213,17 @@ def test_shape_tracker_inference_and_feedback() -> None:
     resolved_nested = ShapeTracker.update_from_feedback(telemetry_nested)
     assert resolved_nested["node_1"] == (2, 4, 8)
 
-    # Resolve dynamic bounds in mock graph
-    from typing import Protocol, Sequence
-
-    class _MockNodeProto(Protocol):
-        """Protocol for mock nodes with an id attribute."""
-
-        id: str
-
-    class MockNode:
-        """Mock node for testing dynamic bound resolution."""
-
-        def __init__(
-            self,
-            node_id: str,
-            shape: tuple[object, ...] | None,
-        ) -> None:
-            """Initialize mock node with id and shape.
-
-            Args:
-                node_id (str): Identifier for the mock node.
-                shape (Optional[tuple[object, ...]]): Shape tuple or None.
-            """
-            self.id = node_id
-            self.shape_metadata = shape
-            self.shape = shape
-
-    class MockGraph:
-        """Mock graph containing nodes."""
-
-        def __init__(self, nodes: Sequence[_MockNodeProto]) -> None:
-            """Initialize mock graph with node list.
-
-            Args:
-                nodes (Sequence[_MockNodeProto]): Sequence of mock nodes.
-            """
-            self.nodes = {n.id: n for n in nodes}
+    # Resolve dynamic bounds on real LogicalGraph and LogicalNode instances
+    from ml_switcheroo_ir import LogicalGraph, LogicalNode
 
     si_b = SymInt("batch")
     sv_s = SymVar("seq_len")
-    n1 = MockNode("n1", (si_b, sv_s, "embed_dim", 64))
-    g = MockGraph([n1])
+    n1 = LogicalNode(
+        id="n1",
+        op_type="Relu",
+        shape_metadata=(si_b, sv_s, "embed_dim", 64),
+    )
+    g = LogicalGraph(nodes={"n1": n1})
 
     tracker = SymbolicConstraintTracker()
     bounds = ShapeTracker.resolve_dynamic_bounds(
@@ -265,6 +235,8 @@ def test_shape_tracker_inference_and_feedback() -> None:
     assert bounds["seq_len"] == 128
     assert bounds["embed_dim"] == 512
     assert n1.shape_metadata == (8, 128, 512, 64)
+    assert n1.shape is not None
+    assert n1.shape.dims == (8, 128, 512, 64)
 
     # Test tracker unification and record_equality branches
     t2 = SymbolicConstraintTracker()
@@ -300,7 +272,19 @@ def test_shape_tracker_inference_and_feedback() -> None:
     n_so = MockNodeShapeOnly(
         "n_so", (SymInt("si_track_none"), SymVar("sv_track_none"), "var_dim", 64, 128)
     )
-    g_so = MockGraph([n_so])
+
+    class _SimpleNodeContainer:
+        """Container with nodes mapping for duck-typed node resolution tests."""
+
+        def __init__(self, nodes_map: dict[str, object]) -> None:
+            """Initialize node container.
+
+            Args:
+                nodes_map (dict[str, object]): Mapping of node ID to node object.
+            """
+            self.nodes = nodes_map
+
+    g_so = _SimpleNodeContainer({"n_so": n_so})
 
     # Resolve bounds with tracker=None and shorter telemetry (dim 3 pads with 1)
     bounds_so = ShapeTracker.resolve_dynamic_bounds(
@@ -330,20 +314,20 @@ def test_shape_tracker_inference_and_feedback() -> None:
     assert broadcast_dimension("dim_foo", "dim_bar", tracker=None) == "dim_foo"
 
     # ShapeTracker with list-based graph nodes and unobserved node skipped
-    class MockGraphWithList:
-        """Mock graph with nodes as a list."""
+    class _ListGraphContainer:
+        """Graph container with nodes stored as a list."""
 
-        def __init__(self, nodes_list: list[MockNode]) -> None:
-            """Initialize mock graph with list.
+        def __init__(self, nodes_list: list[LogicalNode]) -> None:
+            """Initialize list-backed graph container.
 
             Args:
-                nodes_list (list[MockNode]): List of mock nodes.
+                nodes_list (list[LogicalNode]): List of LogicalNode objects.
             """
             self.nodes = nodes_list
 
-    n_list = MockNode("n_list", (si_b, "dynamic_axis", 64))
-    n_unobserved = MockNode("n_unobserved", (128, 256))
-    g_list = MockGraphWithList([n_list, n_unobserved])
+    n_list = LogicalNode("n_list", "Relu", shape_metadata=(si_b, "dynamic_axis", 64))
+    n_unobserved = LogicalNode("n_unobserved", "Relu", shape_metadata=(128, 256))
+    g_list = _ListGraphContainer([n_list, n_unobserved])
     bounds_list = ShapeTracker.resolve_dynamic_bounds(
         g_list,
         {"n_list": [4, 16, 64]},
@@ -359,24 +343,28 @@ def test_shape_tracker_inference_and_feedback() -> None:
     assert ShapeTracker.update_from_feedback({"inv": "not_list"}) == {}
 
     # Exact rank match in resolve_dynamic_bounds
-    n_exact = MockNode("n_exact", (SymInt("A"), SymVar("B"), "C", 10))
-    n_none = MockNode("n_none", None)
+    n_exact = LogicalNode(
+        "n_exact", "Relu", shape_metadata=(SymInt("A"), SymVar("B"), "C", 10)
+    )
+    n_none = LogicalNode("n_none", "Relu", shape_metadata=None)
 
     class MockNodeShapeMetaOnly:
-        """Mock node with shape_metadata only."""
+        """Node with shape_metadata only and no shape property."""
 
         def __init__(self, node_id: str, shape_meta: tuple[object, ...]) -> None:
-            """Initialize mock node with shape_metadata.
+            """Initialize node with shape_metadata.
 
             Args:
-                node_id (str): Identifier for the mock node.
+                node_id (str): Identifier for the node.
                 shape_meta (tuple[object, ...]): Shape metadata tuple.
             """
             self.id = node_id
             self.shape_metadata = shape_meta
 
     n_smo = MockNodeShapeMetaOnly("n_smo", (16, 32))
-    g_exact = MockGraph([n_exact, n_none, n_smo])
+    g_exact = _SimpleNodeContainer(
+        {"n_exact": n_exact, "n_none": n_none, "n_smo": n_smo}
+    )
     bounds_exact = ShapeTracker.resolve_dynamic_bounds(
         g_exact,
         {"n_exact": [1, 2, 3, 10], "n_none": [1], "n_smo": [16, 32]},

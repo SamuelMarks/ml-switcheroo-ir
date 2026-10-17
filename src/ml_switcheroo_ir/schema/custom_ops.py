@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from ml_switcheroo_ir.schema.base import (
+    REGISTRY_LOCK,
     CustomAttributeSchema as CustomAttributeSchema,
     CustomOpSchema as CustomOpSchema,
     OpSchema as OpSchema,
@@ -664,17 +665,18 @@ def _load_state_schemas(json_path: Path | str | None = None) -> None:
     Args:
         json_path (Optional[Union[Path, str]]): Explicit path to state_ops.json.
     """
-    loaded = load_op_schema_catalog(
-        "state_ops.json",
-        domain_default="ml.switcheroo.state",
-        json_path=json_path,
-        attr_type_default="Any",
-    )
-    if loaded:
-        STATE_OPS_REGISTRY.update(loaded)
-    elif json_path is None:
-        for s in _CANONICAL_STATE_OPS:
-            STATE_OPS_REGISTRY[s.name] = s.to_op_schema()
+    with REGISTRY_LOCK:
+        loaded = load_op_schema_catalog(
+            "state_ops.json",
+            domain_default="ml.switcheroo.state",
+            json_path=json_path,
+            attr_type_default="Any",
+        )
+        if loaded:
+            STATE_OPS_REGISTRY.update(loaded)
+        elif json_path is None:
+            for s in _CANONICAL_STATE_OPS:
+                STATE_OPS_REGISTRY[s.name] = s.to_op_schema()
 
 
 _load_state_schemas()

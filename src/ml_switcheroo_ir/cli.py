@@ -13,6 +13,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 from ml_switcheroo_ir import (
     CompilerBackend,
@@ -24,26 +25,34 @@ from ml_switcheroo_ir.validator import ValidationError, ValidationLevel, Validat
 
 __all__ = ["main", "tabulate"]
 
+
+def _fallback_tabulate(
+    tabular_data: Any,
+    headers: Any = (),
+    **kwargs: Any,
+) -> str:
+    """Format tabular data as a pipe-separated ASCII table when tabulate is unavailable.
+
+    Args:
+        tabular_data (Any): Rows of table cells.
+        headers (Any): Sequence of column header labels.
+        **kwargs (Any): Ignored formatting keyword arguments.
+
+    Returns:
+        str: Formatted table string.
+    """
+    del kwargs
+    res = " | ".join(str(h) for h in headers) + "\n"
+    res += "-" * len(res) + "\n"
+    for row in tabular_data:
+        res += " | ".join(str(c) for c in row) + "\n"
+    return res
+
+
 try:
     from tabulate import tabulate
 except ImportError:
-    # Fallback if tabulate is not available
-    def tabulate(data: list[list[object]], headers: list[str], **kwargs: object) -> str:
-        """Fallback for tabulate.
-
-        Args:
-            data: The table data.
-            headers: The table headers.
-            kwargs: Ignored keyword arguments.
-
-        Returns:
-            The tabulated string.
-        """
-        res = " | ".join(headers) + "\n"
-        res += "-" * len(res) + "\n"
-        for row in data:
-            res += " | ".join(str(c) for c in row) + "\n"
-        return res
+    tabulate = _fallback_tabulate
 
 
 def _parse_graph_from_json(json_str: str) -> LogicalGraph:
@@ -166,7 +175,7 @@ def _handle_validate(parsed_args: argparse.Namespace) -> None:
         registry.load_custom_ops_from_json(parsed_args.custom_ops)
 
     merged_schemas = {**ONNX_REGISTRY, **registry.schemas}
-    validator = Validator(registry=merged_schemas)
+    validator = Validator(registry=merged_schemas, strict=bool(parsed_args.strict))
     errors = validator.validate_graph(graph)
 
     if not errors:
@@ -199,13 +208,52 @@ def _handle_list_ops(parsed_args: argparse.Namespace) -> None:
     Args:
         parsed_args (argparse.Namespace): Parsed CLI arguments.
     """
-    from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
+    from ml_switcheroo_ir.schema.custom_ops import (
+        COLLECTIVE_OPS_REGISTRY,
+        CUSTOM_OPS_REGISTRY,
+        QUANTIZATION_OPS_REGISTRY,
+        STATE_OPS_REGISTRY,
+    )
+    from ml_switcheroo_ir.schema.framework_registries import (
+        ARRAY_API_REGISTRY,
+        ATEN_REGISTRY,
+        ODL_CATALOG,
+    )
+    from ml_switcheroo_ir.schema.low_level_registries import (
+        METAL_REGISTRY,
+        PTX_REGISTRY,
+        WASM_REGISTRY,
+        WEBGL_REGISTRY,
+        WGSL_REGISTRY,
+    )
+    from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
     from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+    from ml_switcheroo_ir.schema.rdna_registry import RDNA_REGISTRY
+    from ml_switcheroo_ir.schema.sass_registry import SASS_REGISTRY
     from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 
+    all_registries = (
+        ONNX_REGISTRY,
+        CUSTOM_OPS_REGISTRY,
+        STABLEHLO_REGISTRY,
+        MLIR_REGISTRY,
+        RDNA_REGISTRY,
+        SASS_REGISTRY,
+        WGSL_REGISTRY,
+        PTX_REGISTRY,
+        METAL_REGISTRY,
+        WASM_REGISTRY,
+        WEBGL_REGISTRY,
+        ATEN_REGISTRY,
+        ARRAY_API_REGISTRY,
+        COLLECTIVE_OPS_REGISTRY,
+        QUANTIZATION_OPS_REGISTRY,
+        STATE_OPS_REGISTRY,
+        ODL_CATALOG,
+    )
     seen_ops: set[tuple[str, str]] = set()
     schemas = []
-    for reg in (ONNX_REGISTRY, CUSTOM_OPS_REGISTRY, STABLEHLO_REGISTRY):
+    for reg in all_registries:
         for s in reg.values():
             key = (s.domain, s.name)
             if key not in seen_ops:
@@ -240,7 +288,6 @@ def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
         parsed_args (argparse.Namespace): Parsed CLI arguments.
     """
     import datetime
-    from typing import Any
 
     from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
     from ml_switcheroo_ir.schema.ghost import (

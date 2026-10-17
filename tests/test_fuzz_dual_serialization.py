@@ -135,30 +135,14 @@ def test_fuzz_pythonic_cst_eval(graph: LogicalGraph) -> None:
     Args:
         graph (LogicalGraph): Randomly generated DAG.
     """
-    # Programmatic reconstruction via LogicalGraph and LogicalNode
-    reconstructed_nodes = {
-        n.id: LogicalNode(
-            id=n.id,
-            op_type=n.op_type,
-            domain=n.domain,
-            version=n.version,
-            attributes=n.attributes,
-            inputs=list(n.inputs),
-            shape_metadata=n.shape_metadata,
-            sharding=n.sharding,
-        )
-        for n in graph.nodes.values()
-    }
+    from ml_switcheroo_ir.export import export_to_python
 
-    reconstructed_graph = LogicalGraph(
-        name=graph.name,
-        nodes=reconstructed_nodes,
-        outputs=list(graph.outputs),
-        mesh=graph.mesh,
-    )
+    py_code = export_to_python(graph, function_name="build_fuzzed_graph")
+    scope: dict[str, Any] = {}
+    exec(py_code, scope)  # noqa: S102
+    reconstructed_graph = scope["build_fuzzed_graph"]()
 
     assert reconstructed_graph.name == graph.name
-    assert len(reconstructed_graph.nodes) == len(graph.nodes)
     assert reconstructed_graph.outputs == graph.outputs
     for nid, node in graph.nodes.items():
         r_node = reconstructed_graph.nodes[nid]

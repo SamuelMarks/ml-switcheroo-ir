@@ -330,13 +330,15 @@ def test_validator_edge_source_idx_out_of_bounds() -> None:
         f"Errors were: {errors}"
     )
 
+    # Also test when edge.source is an explicit SSA output name with out-of-bounds source_idx
     from unittest import mock
 
     with mock.patch(
         "ml_switcheroo_ir.LogicalGraph.edges", new_callable=mock.PropertyMock
     ) as mock_edges:
         mock_edges.return_value = [
-            LogicalEdge(source="prod", target="cons", source_idx=2)
+            LogicalEdge(source="prod", target="cons", source_idx=2),
+            LogicalEdge(source="out1", target="cons", source_idx=2),
         ]
         errors_direct = validator.validate_graph(graph)
-    assert any("out of bounds" in str(e.message) for e in errors_direct)
+    assert len([e for e in errors_direct if "out of bounds" in str(e.message)]) == 2

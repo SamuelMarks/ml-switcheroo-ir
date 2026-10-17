@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ml_switcheroo_ir.schema.base import (
+    REGISTRY_LOCK,
     OpSchema,
     build_isa_primitive_schemas,
     load_op_schema_catalog,
@@ -33,27 +34,28 @@ def _load_sass_schemas(json_path: Path | str | None = None) -> None:
             op_data.get("execution_latency", 4)
         )
 
-    loaded = load_op_schema_catalog(
-        "sass_ops.json",
-        domain_default="nvidia_sass",
-        json_path=json_path,
-        find_file_fn=find_schema_file,
-        on_entry=_record_sass_latency,
-    )
-    if loaded:
-        SASS_REGISTRY.update(loaded)
-    elif json_path is None:
-        from ml_switcheroo_ir.schema.ghost import (
-            SASS_INSTRUCTION_PRIMITIVES as GHOST_PRIMITIVES,
+    with REGISTRY_LOCK:
+        loaded = load_op_schema_catalog(
+            "sass_ops.json",
+            domain_default="nvidia_sass",
+            json_path=json_path,
+            find_file_fn=find_schema_file,
+            on_entry=_record_sass_latency,
         )
-        from ml_switcheroo_ir.schema.ghost import (
-            SASS_PIPELINE_LATENCIES as GHOST_LATENCIES,
-        )
+        if loaded:
+            SASS_REGISTRY.update(loaded)
+        elif json_path is None:
+            from ml_switcheroo_ir.schema.ghost import (
+                SASS_INSTRUCTION_PRIMITIVES as GHOST_PRIMITIVES,
+            )
+            from ml_switcheroo_ir.schema.ghost import (
+                SASS_PIPELINE_LATENCIES as GHOST_LATENCIES,
+            )
 
-        SASS_PIPELINE_LATENCIES.update(GHOST_LATENCIES)
-        SASS_REGISTRY.update(
-            build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="nvidia_sass")
-        )
+            SASS_PIPELINE_LATENCIES.update(GHOST_LATENCIES)
+            SASS_REGISTRY.update(
+                build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="nvidia_sass")
+            )
 
 
 _load_sass_schemas()

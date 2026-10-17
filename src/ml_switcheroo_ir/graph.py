@@ -7,13 +7,14 @@ from collections import defaultdict, deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 import copy
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 import gzip
 import io
 import json
 import os
 from pathlib import Path
 import string
-from typing import IO, Any, BinaryIO, TextIO, cast, overload
+from typing import TYPE_CHECKING, IO, Any, BinaryIO, TextIO, cast, overload
 import warnings
 
 from ml_switcheroo_ir.distributed import (
@@ -29,6 +30,9 @@ from ml_switcheroo_ir.types import (
     TensorShape,
     TensorSpec,
 )
+
+if TYPE_CHECKING:
+    from ml_switcheroo_ir.sentinels import NoTangent, ZeroTangent
 
 
 def _load_zstandard() -> Any:
@@ -63,6 +67,7 @@ __all__ = [
     "ZeroTangent",
     "_load_zstandard",
     "_stream_parse_graph",
+    "_stream_write_graph",
     "topological_sort",
     "zstandard",
 ]
@@ -137,8 +142,15 @@ class CyclicGraphError(Exception):
     """Raised when a cycle is detected in a graph during topological sorting."""
 
 
-_UNSET_OP_TYPE: object = object()
-_CLONE_UNSET: Any = object()
+class _UnsetSentinel(Enum):
+    """Internal sentinel enum for distinguishing omitted optional arguments."""
+
+    UNSET_OP_TYPE = "UNSET_OP_TYPE"
+    CLONE_UNSET = "CLONE_UNSET"
+
+
+_UNSET_OP_TYPE = _UnsetSentinel.UNSET_OP_TYPE
+_CLONE_UNSET = _UnsetSentinel.CLONE_UNSET
 
 
 def _normalize_shape_metadata(
@@ -168,8 +180,8 @@ def _normalize_shape_metadata(
 
 
 def _normalize_legacy_node_args(
-    op_type: object,
-    domain: object,
+    op_type: str | _UnsetSentinel | None,
+    domain: Mapping[str, AttributeValue] | str,
     attributes: Mapping[str, AttributeValue] | None,
     kind: str | None,
     metadata: Mapping[str, AttributeValue] | None,
@@ -177,8 +189,8 @@ def _normalize_legacy_node_args(
     """Resolve legacy LogicalNode constructor parameters and emit deprecation warnings.
 
     Args:
-        op_type (object): Canonical operation type or sentinel.
-        domain (object): Domain identifier string or legacy attribute mapping.
+        op_type (str | _UnsetSentinel | None): Canonical operation type or sentinel.
+        domain (Mapping[str, AttributeValue] | str): Domain identifier string or legacy attribute mapping.
         attributes (Optional[Mapping[str, AttributeValue]]): Canonical attributes mapping.
         kind (Optional[str]): Deprecated alias for op_type.
         metadata (Optional[Mapping[str, AttributeValue]]): Deprecated alias for attributes.
@@ -243,8 +255,8 @@ def _normalize_legacy_node_args(
 
 
 def _normalize_node_init_args(
-    op_type: object,
-    domain: object,
+    op_type: str | _UnsetSentinel | None,
+    domain: Mapping[str, AttributeValue] | str,
     attributes: Mapping[str, AttributeValue] | None,
     kind: str | None,
     metadata: Mapping[str, AttributeValue] | None,
@@ -255,8 +267,8 @@ def _normalize_node_init_args(
     coercion and deprecated alias resolution.
 
     Args:
-        op_type (object): Canonical operation type or sentinel.
-        domain (object): Domain identifier string or legacy attribute dictionary.
+        op_type (str | _UnsetSentinel | None): Canonical operation type or sentinel.
+        domain (Mapping[str, AttributeValue] | str): Domain identifier string or legacy attribute dictionary.
         attributes (Optional[Mapping[str, AttributeValue]]): Canonical attributes dictionary.
         kind (Optional[str]): Deprecated alias for op_type.
         metadata (Optional[Mapping[str, AttributeValue]]): Deprecated alias for attributes.
@@ -446,8 +458,8 @@ class LogicalNode:
     def __init__(
         self,
         id: str,
-        op_type: object = _UNSET_OP_TYPE,
-        domain: object = "ai.onnx",
+        op_type: str | _UnsetSentinel | None = _UNSET_OP_TYPE,
+        domain: Mapping[str, AttributeValue] | str = "ai.onnx",
         version: int = 1,
         attributes: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
@@ -468,8 +480,8 @@ class LogicalNode:
 
         Args:
             id (str): Unique identifier for the node.
-            op_type (object): Operation type (e.g. 'Conv', 'Relu').
-            domain (object): Operator domain or dictionary of attributes for 3-arg legacy signature.
+            op_type (str | _UnsetSentinel | None): Operation type (e.g. 'Conv', 'Relu').
+            domain (Mapping[str, AttributeValue] | str): Operator domain or dictionary of attributes for 3-arg legacy signature.
             version (int): Operator set version (default: 1).
             attributes (Optional[Mapping[str, AttributeValue]]): Operator configuration attributes.
             inputs (Optional[List[str]]): Ordered list of upstream LogicalNode IDs.
@@ -648,14 +660,15 @@ class LogicalNode:
         outputs: list[str] | None = None,
         shape_metadata: ShapeMetadataType
         | Sequence[DimensionType]
-        | object = _CLONE_UNSET,
-        source_ast_ref: str | None = _CLONE_UNSET,
-        sharding: PartitionSpec | None = _CLONE_UNSET,
-        dtype: DType | None = _CLONE_UNSET,
+        | object
+        | _UnsetSentinel = _CLONE_UNSET,
+        source_ast_ref: str | None | _UnsetSentinel = _CLONE_UNSET,
+        sharding: PartitionSpec | None | _UnsetSentinel = _CLONE_UNSET,
+        dtype: DType | None | _UnsetSentinel = _CLONE_UNSET,
         output_specs: list[TensorSpec] | None = None,
         subgraphs: Mapping[str, LogicalGraph | AttributeValue] | None = None,
-        device: str | None = _CLONE_UNSET,
-        stream: str | None = _CLONE_UNSET,
+        device: str | None | _UnsetSentinel = _CLONE_UNSET,
+        stream: str | None | _UnsetSentinel = _CLONE_UNSET,
         **kwargs: AttributeValue,
     ) -> LogicalNode:
         """Create a deep clone of this LogicalNode with optional keyword overrides.
@@ -668,14 +681,14 @@ class LogicalNode:
             attributes (Optional[Mapping[str, AttributeValue]]): Override attributes dictionary.
             inputs (Optional[List[str]]): Override input IDs.
             outputs (Optional[List[str]]): Override output names.
-            shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object): Override tensor shape metadata.
-            source_ast_ref (Optional[str]): Override source AST reference.
-            sharding (Optional[PartitionSpec]): Override partition specification.
-            dtype (Optional[DType]): Override data type.
+            shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object | _UnsetSentinel): Override tensor shape metadata.
+            source_ast_ref (Optional[str | _UnsetSentinel]): Override source AST reference.
+            sharding (Optional[PartitionSpec | _UnsetSentinel]): Override partition specification.
+            dtype (Optional[DType | _UnsetSentinel]): Override data type.
             output_specs (Optional[List[TensorSpec]]): Override output tensor specifications.
             subgraphs (Optional[Mapping[str, Union[LogicalGraph, AttributeValue]]]): Override nested subgraphs.
-            device (Optional[str]): Override target device placement.
-            stream (Optional[str]): Override asynchronous execution stream.
+            device (Optional[str | _UnsetSentinel]): Override target device placement.
+            stream (Optional[str | _UnsetSentinel]): Override asynchronous execution stream.
             **kwargs (AttributeValue): Additional attribute overrides.
 
         Returns:
@@ -693,7 +706,7 @@ class LogicalNode:
 
         raw_subgraphs = subgraphs if subgraphs is not None else self.subgraphs
         cloned_subgraphs: dict[str, LogicalGraph | AttributeValue] = {
-            k: v.clone() if hasattr(v, "clone") else copy.deepcopy(v)
+            k: v.clone() if isinstance(v, LogicalGraph) else copy.deepcopy(v)
             for k, v in raw_subgraphs.items()
         }
 
@@ -712,12 +725,12 @@ class LogicalNode:
                 else self.shape_metadata
             ),
             source_ast_ref=source_ast_ref
-            if source_ast_ref is not _CLONE_UNSET
+            if not isinstance(source_ast_ref, _UnsetSentinel)
             else self.source_ast_ref,
             sharding=copy.deepcopy(
-                sharding if sharding is not _CLONE_UNSET else self.sharding
+                sharding if not isinstance(sharding, _UnsetSentinel) else self.sharding
             ),
-            dtype=dtype if dtype is not _CLONE_UNSET else self.dtype,
+            dtype=dtype if not isinstance(dtype, _UnsetSentinel) else self.dtype,
             output_specs=[
                 copy.deepcopy(s)
                 for s in (
@@ -725,8 +738,8 @@ class LogicalNode:
                 )
             ],
             subgraphs=cloned_subgraphs,
-            device=device if device is not _CLONE_UNSET else self.device,
-            stream=stream if stream is not _CLONE_UNSET else self.stream,
+            device=device if not isinstance(device, _UnsetSentinel) else self.device,
+            stream=stream if not isinstance(stream, _UnsetSentinel) else self.stream,
         )
 
     def get_output_name(self, index: int) -> str:
@@ -757,7 +770,7 @@ class NodeDict(dict[str, LogicalNode]):
 
 
 class EdgeList(list["LogicalEdge"]):
-    """List of LogicalEdge instances without magic graph synchronization."""
+    """Typed list of LogicalEdge instances."""
 
 
 def _normalize_graph_nodes(
@@ -890,16 +903,18 @@ def _parse_subgraphs_from_node_dict(
         graph_cls (type[LogicalGraph]): LogicalGraph class for recursive deserialization.
 
     Returns:
-        dict[str, LogicalGraph | AttributeValue]: Mapping of subgraph names to LogicalGraph instances.
+        dict[str, LogicalGraph | AttributeValue]: Mapping of subgraph names to LogicalGraph instances or AttributeValues.
     """
     resolved_subgraphs: dict[str, LogicalGraph | AttributeValue] = {}
     subgraphs_data = ndata_copy.get("subgraphs")
     if subgraphs_data and isinstance(subgraphs_data, dict):
         for sub_k, sub_v in subgraphs_data.items():
-            if isinstance(sub_v, dict):
+            if isinstance(sub_v, dict) and ("nodes" in sub_v or "name" in sub_v):
                 resolved_subgraphs[sub_k] = graph_cls.from_dict(sub_v)
             elif isinstance(sub_v, LogicalGraph):
                 resolved_subgraphs[sub_k] = sub_v
+            else:
+                resolved_subgraphs[sub_k] = cast("AttributeValue", sub_v)
 
     attrs = ndata_copy.get("attributes")
     if isinstance(attrs, dict):
@@ -1045,6 +1060,12 @@ def _decode_next_json_value(
     while True:
         try:
             val, next_pos = decoder.raw_decode(buf, pos)
+            if next_pos == len(buf) and buf[pos] not in ('"', "{", "["):
+                chunk = _read_next_chunk(stream, chunk_size)
+                if chunk:
+                    buf = buf[pos:] + chunk
+                    pos = 0
+                    continue
             return val, buf, next_pos
         except json.JSONDecodeError:
             chunk = _read_next_chunk(stream, chunk_size)
@@ -1117,6 +1138,54 @@ def _stream_parse_nodes_section(
             nodes[node.id] = node
 
 
+def _apply_edges_list(
+    nodes: dict[str, LogicalNode],
+    edges_list: Sequence[LogicalEdge | Mapping[str, Any]],
+    clear_existing: bool = False,
+) -> None:
+    """Apply an explicit list of LogicalEdge instances or dicts onto target node inputs.
+
+    Supports both multi-input ports (via explicit distinct ``target_idx`` values,
+    e.g. ``Add(x, x)``) and idempotent deduplication when ``target_idx`` is repeated.
+
+    Args:
+        nodes (dict[str, LogicalNode]): Graph nodes dictionary.
+        edges_list (Sequence[LogicalEdge | Mapping[str, Any]]): Edges to apply.
+        clear_existing (bool): Whether to clear existing target_node.inputs first.
+    """
+    if clear_existing:
+        for node in nodes.values():
+            node.inputs.clear()
+
+    for edge in edges_list:
+        if isinstance(edge, LogicalEdge):
+            src = edge.source
+            tgt = edge.target
+            src_idx = edge.source_idx
+            tgt_idx = edge.target_idx
+            val_name = edge.value_name
+        else:
+            src = str(edge.get("source", ""))
+            tgt = str(edge.get("target", ""))
+            src_idx = edge.get("source_idx", 0)
+            tgt_idx = int(edge.get("target_idx", 0) or 0)
+            val_name = edge.get("value_name")
+
+        if tgt not in nodes:
+            continue
+
+        target_node = nodes[tgt]
+        if val_name:
+            src_name = str(val_name)
+        elif src in nodes and src_idx is not None and (clear_existing or src_idx != 0):
+            src_name = nodes[src].get_output_name(int(src_idx))
+        else:
+            src_name = src
+
+        if src_name not in target_node.inputs or tgt_idx > len(target_node.inputs) - 1:
+            target_node.inputs.append(src_name)
+
+
 def _build_graph_from_parsed_sections(
     graph_cls: type[LogicalGraph],
     nodes: NodeDict,
@@ -1134,11 +1203,7 @@ def _build_graph_from_parsed_sections(
     """
     edges_data = meta.get("edges")
     if edges_data and isinstance(edges_data, list):
-        for edge_item in edges_data:
-            src = edge_item.get("source")
-            tgt = edge_item.get("target")
-            if tgt and tgt in nodes and src and src not in nodes[tgt].inputs:
-                nodes[tgt].inputs.append(src)
+        _apply_edges_list(nodes, edges_data, clear_existing=False)
 
     pipe_topo_raw = meta.get("pipeline_topology")
     pipe_topo = (
@@ -1210,6 +1275,130 @@ def _stream_parse_graph(
             meta[str(key)] = val
 
     return _build_graph_from_parsed_sections(graph_cls, nodes, meta)
+
+
+_NL = chr(10)
+
+
+def _indent_json_fragment(fragment: str, base_indent: str) -> str:
+    """Indent lines 2..N of a multi-line JSON fragment by base_indent.
+
+    Args:
+        fragment (str): Multi-line JSON string produced by json.dumps.
+        base_indent (str): Indentation prefix for continuation lines.
+
+    Returns:
+        str: Indented JSON fragment.
+    """
+    lines = fragment.splitlines()
+    if len(lines) <= 1:
+        return fragment
+    return lines[0] + _NL + _NL.join(base_indent + line for line in lines[1:])
+
+
+def _stream_write_graph(
+    graph: LogicalGraph,
+    fp: IO[Any] | TextIO,
+    format: str = "canonical",
+    indent: int = 2,
+) -> None:
+    """Incrementally stream-serialize a LogicalGraph to a writable stream in O(max_node_size) RAM.
+
+    Produces output byte-for-byte identical to ``json.dumps(graph.to_dict(format), sort_keys=True, indent=indent)``
+    while streaming ``edges`` and ``nodes`` item by item without materializing the full graph dictionary.
+
+    Args:
+        graph (LogicalGraph): Graph to serialize.
+        fp (IO[Any] | TextIO): Writable text stream.
+        format (str): Serialization format ('canonical' or 'legacy').
+        indent (int): Indentation spaces (default: 2).
+    """
+    pad1 = " " * indent
+    pad2 = " " * (indent * 2)
+
+    mesh_val = (
+        {
+            "shape": dict(graph.mesh.shape),
+            "webrtc_topology": (
+                graph.mesh.webrtc_topology.to_dict()
+                if graph.mesh.webrtc_topology is not None
+                else None
+            ),
+        }
+        if graph.mesh is not None
+        else None
+    )
+    pipe_val = (
+        graph.pipeline_topology.to_dict()
+        if graph.pipeline_topology is not None
+        else None
+    )
+    input_specs_val = {k: asdict(v) for k, v in sorted(graph.input_specs.items())}
+    inits_val = dict(sorted(graph.initializers.items()))
+
+    keys_order = [
+        "initializers",
+        "input_specs",
+        "inputs",
+        "mesh",
+        "name",
+        "nodes",
+        "outputs",
+        "pipeline_topology",
+    ]
+    if format == "canonical":
+        keys_order.insert(0, "edges")
+
+    fp.write("{" + _NL)
+    total_keys = len(keys_order)
+    for k_idx, key in enumerate(keys_order):
+        comma = "," if k_idx < total_keys - 1 else ""
+        fp.write(f'{pad1}"{key}": ')
+        if key == "edges":
+            edges = graph.edges
+            if not edges:
+                fp.write(f"[]{comma}{_NL}")
+            else:
+                fp.write("[" + _NL)
+                for e_idx, edge in enumerate(edges):
+                    e_comma = "," if e_idx < len(edges) - 1 else ""
+                    edge_str = json.dumps(
+                        asdict(edge), sort_keys=True, indent=indent, default=str
+                    )
+                    fp.write(
+                        f"{pad2}{_indent_json_fragment(edge_str, pad2)}{e_comma}{_NL}"
+                    )
+                fp.write(f"{pad1}]{comma}{_NL}")
+        elif key == "nodes" and graph.nodes:
+            sorted_nids = sorted(graph.nodes.keys())
+            fp.write("{" + _NL)
+            for n_idx, nid in enumerate(sorted_nids):
+                n_comma = "," if n_idx < len(sorted_nids) - 1 else ""
+                node_dict = asdict(graph.nodes[nid])
+                node_str = json.dumps(
+                    node_dict, sort_keys=True, indent=indent, default=str
+                )
+                key_json = json.dumps(nid)
+                fp.write(
+                    f"{pad2}{key_json}: {_indent_json_fragment(node_str, pad2)}{n_comma}{_NL}"
+                )
+            fp.write(f"{pad1}}}{comma}{_NL}")
+        else:
+            val_map: dict[str, Any] = {
+                "initializers": inits_val,
+                "input_specs": input_specs_val,
+                "inputs": list(graph.inputs),
+                "mesh": mesh_val,
+                "name": graph.name,
+                "nodes": {},
+                "outputs": list(graph.outputs),
+                "pipeline_topology": pipe_val,
+            }
+            val_str = json.dumps(
+                val_map[key], sort_keys=True, indent=indent, default=str
+            )
+            fp.write(f"{_indent_json_fragment(val_str, pad1)}{comma}{_NL}")
+    fp.write("}")
 
 
 @dataclass
@@ -1324,6 +1513,9 @@ class LogicalGraph:
         """
         self.name = name
         self.nodes = _normalize_graph_nodes(nodes)
+        self._cached_output_map: dict[str, tuple[LogicalNode, int]] | None = None
+        self._cached_nodes_version: int = -1
+        self._cached_outputs_sig: int = -1
         self.inputs = list(inputs) if inputs is not None else []
         self.input_specs = dict(input_specs) if input_specs is not None else {}
         self.initializers = dict(initializers) if initializers is not None else {}
@@ -1331,15 +1523,7 @@ class LogicalGraph:
         _auto_detect_input_pseudo_nodes(self.nodes, self.inputs, self.input_specs)
 
         if edges is not None:
-            for edge in edges:
-                src_name = edge.source
-                if (
-                    edge.source in self.nodes
-                    and edge.source_idx is not None
-                    and edge.source_idx != 0
-                ):
-                    src_name = self.nodes[edge.source].get_output_name(edge.source_idx)
-                self.add_edge(src_name, edge.target)
+            _apply_edges_list(self.nodes, edges, clear_existing=False)
 
         self.outputs = _infer_graph_outputs(self.nodes, outputs)
         self.mesh = mesh
@@ -1348,6 +1532,9 @@ class LogicalGraph:
     @property
     def nodes_list(self) -> list[LogicalNode]:
         """Return list of LogicalNode instances in dictionary insertion order.
+
+        Time Complexity:
+            O(V) where V is the number of nodes in the graph.
 
         Returns:
             List[LogicalNode]: Ordered list of nodes.
@@ -1358,6 +1545,9 @@ class LogicalGraph:
         self, output_name: str
     ) -> tuple[LogicalNode, int] | None:
         """Resolve both the producing node and the specific output port index.
+
+        Time Complexity:
+            O(1) amortized via cached ``_output_map`` lookup.
 
         Args:
             output_name (str): SSA output tensor identifier or 'node_id:idx'.
@@ -1378,13 +1568,21 @@ class LogicalGraph:
     def edges(self) -> list[LogicalEdge]:
         """Derive and return directed edges dynamically from each node's inputs.
 
+        Time Complexity:
+            O(V + E) where V is the number of nodes and E is the number of input connections.
+
         Returns:
             list[LogicalEdge]: List of directed edges from upstream inputs to target nodes.
         """
+        output_map = self._output_map
         result: list[LogicalEdge] = []
         for target_node in self.nodes.values():
             for target_idx, src in enumerate(target_node.inputs):
-                prod_info = self.get_producing_output_index(src)
+                prod_info = output_map.get(src)
+                if prod_info is None and ":" in src:
+                    node_part, idx_part = src.rsplit(":", 1)
+                    if node_part in self.nodes and idx_part.lstrip("-").isdigit():
+                        prod_info = (self.nodes[node_part], int(idx_part))
                 src_idx = prod_info[1] if prod_info is not None else 0
                 result.append(
                     LogicalEdge(
@@ -1403,16 +1601,7 @@ class LogicalGraph:
         Args:
             edge_list (list[LogicalEdge]): List of edges to configure.
         """
-        for node in self.nodes.values():
-            node.inputs.clear()
-        for edge in edge_list:
-            if edge.target in self.nodes:
-                target_node = self.nodes[edge.target]
-                src_name = edge.source
-                if edge.source in self.nodes and edge.source_idx is not None:
-                    src_name = self.nodes[edge.source].get_output_name(edge.source_idx)
-                if src_name not in target_node.inputs:
-                    target_node.inputs.append(src_name)
+        _apply_edges_list(self.nodes, edge_list, clear_existing=True)
 
     def set_pipeline_topology(self, topology: PipelineTopologyConfig) -> None:
         """Set distributed pipeline topology configuration for this graph.
@@ -1423,12 +1612,13 @@ class LogicalGraph:
         self.pipeline_topology = topology
 
     def add_node(self, node: LogicalNode) -> None:
-        """Add or update a node in the graph.
+        """Add or update a node in the graph and invalidate the output map cache.
 
         Args:
             node (LogicalNode): The node to add or update.
         """
         self.nodes[node.id] = node
+        self._cached_output_map = None
 
     def add_edge(self, source: str, target: str) -> None:
         """Connect source node to target node, updating target inputs.
@@ -1444,15 +1634,34 @@ class LogicalGraph:
 
     @property
     def _output_map(self) -> dict[str, tuple[LogicalNode, int]]:
-        """O(1) mapping of SSA names to (producer_node, output_index)."""
+        """Cached O(1) mapping of SSA names to (producer_node, output_index).
+
+        Automatically rebuilds when ``self.nodes`` count or identity changes.
+
+        Returns:
+            dict[str, tuple[LogicalNode, int]]: Mapping from output SSA name to (node, port_index).
+        """
+        nodes_len = len(self.nodes)
+        if (
+            self._cached_output_map is not None
+            and nodes_len == self._cached_nodes_version
+        ):
+            return self._cached_output_map
+
         mapping: dict[str, tuple[LogicalNode, int]] = {}
         for node in self.nodes.values():
             for idx, out_name in enumerate(node.outputs):
                 mapping[out_name] = (node, idx)
+
+        self._cached_output_map = mapping
+        self._cached_nodes_version = nodes_len
         return mapping
 
     def get_output_producer(self, output_name: str) -> LogicalNode | None:
         """Retrieve the LogicalNode that produces the specified output name.
+
+        Time Complexity:
+            O(1) amortized via cached ``_output_map`` lookup.
 
         Args:
             output_name (str): Identifier or SSA name of the output.
@@ -1460,8 +1669,8 @@ class LogicalGraph:
         Returns:
             Optional[LogicalNode]: The producing node if found, otherwise None.
         """
-        res = self._output_map.get(output_name)
-        if res:
+        res = self.get_producing_output_index(output_name)
+        if res is not None:
             return res[0]
         return None
 
@@ -1530,7 +1739,10 @@ class LogicalGraph:
         return [
             node
             for node in self.nodes.values()
-            if any(inp in output_ids for inp in node.inputs)
+            if any(
+                inp in output_ids or inp.startswith(f"{node_id}:")
+                for inp in node.inputs
+            )
         ]
 
     def __iter__(self) -> Iterator[LogicalNode]:
@@ -1570,12 +1782,19 @@ class LogicalGraph:
             Dict[str, Any]: Dictionary representation of the graph.
         """
         data = asdict(self)
+        if self.mesh is not None:
+            data["mesh"]["webrtc_topology"] = (
+                self.mesh.webrtc_topology.to_dict()
+                if self.mesh.webrtc_topology is not None
+                else None
+            )
+        data["pipeline_topology"] = (
+            self.pipeline_topology.to_dict()
+            if self.pipeline_topology is not None
+            else None
+        )
         if format == "canonical":
             data["edges"] = [asdict(edge) for edge in self.edges]
-        if self.pipeline_topology is not None:
-            data["pipeline_topology"] = self.pipeline_topology.to_dict()
-        if self.mesh is not None and self.mesh.webrtc_topology is not None:
-            data["mesh"]["webrtc_topology"] = self.mesh.webrtc_topology.to_dict()
         return data
 
     def to_json(self, format: str = "canonical", indent: int = 2) -> str:
@@ -1588,8 +1807,9 @@ class LogicalGraph:
         Returns:
             str: Deterministic JSON string representation.
         """
-        data = self.to_dict(format=format)
-        return json.dumps(data, sort_keys=True, indent=indent, default=str)
+        buf = io.StringIO()
+        self.to_stream(buf, format=format, indent=indent)
+        return buf.getvalue()
 
     def to_stream(
         self,
@@ -1599,15 +1819,15 @@ class LogicalGraph:
     ) -> None:
         """Stream the serialized graph directly into a file-like object.
 
-        Avoids allocating a single massive intermediate JSON string in memory.
+        Avoids allocating a single massive intermediate JSON string or full-graph
+        dictionary in memory by streaming edges and nodes entry-by-entry.
 
         Args:
             fp (Union[IO[Any], TextIO]): Writable file-like stream.
             format (str): Serialization format ('canonical' or 'legacy').
             indent (int): Indentation spaces for JSON formatting.
         """
-        data = self.to_dict(format=format)
-        json.dump(data, fp, sort_keys=True, indent=indent, default=str)
+        _stream_write_graph(self, fp, format=format, indent=indent)
 
     def to_file(
         self,
@@ -1766,6 +1986,9 @@ def topological_sort(graph: LogicalGraph, strict: bool = False) -> list[LogicalN
     unreachable nodes in their original definition order, or raises
     CyclicGraphError if strict=True.
 
+    Time Complexity:
+        O(V + E) where V is the number of nodes and E is the number of edges.
+
     Args:
         graph (LogicalGraph): The logical graph to sort.
         strict (bool): If True, raises CyclicGraphError on cycle detection.
@@ -1853,4 +2076,22 @@ class GraphFrontend(BaseFrontend):
         raise NotImplementedError
 
 
-from ml_switcheroo_ir.sentinels import NoTangent, ZeroTangent  # noqa: E402
+def __getattr__(name: str) -> Any:
+    """Lazily resolve ZeroTangent and NoTangent from ml_switcheroo_ir.sentinels.
+
+    Args:
+        name (str): Attribute name to retrieve.
+
+    Returns:
+        Any: Exported sentinel class.
+
+    Raises:
+        AttributeError: If attribute is not found.
+    """
+    if name in ("ZeroTangent", "NoTangent"):
+        from ml_switcheroo_ir import sentinels
+
+        val = getattr(sentinels, name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

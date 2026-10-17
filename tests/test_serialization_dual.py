@@ -98,6 +98,7 @@ def test_to_json_deterministic() -> None:
 
     json_legacy = graph.to_json(format="legacy", indent=2)
     assert "edges" not in json.loads(json_legacy)
+    assert "edges" not in graph.to_dict(format="legacy")
 
 
 def test_roundtrip_json_serialization() -> None:

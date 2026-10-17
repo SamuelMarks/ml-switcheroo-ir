@@ -1225,8 +1225,7 @@ class SymInt:
         Returns:
             SymInt: Result of addition.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("+", self.node, other_node))
+        return SymInt(self.node + SymNode.to_node(other))
 
     def __radd__(self, other: int | SymNode | str) -> SymInt:
         """Evaluate right addition.
@@ -1237,8 +1236,7 @@ class SymInt:
         Returns:
             SymInt: Result of addition.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("+", other_node, self.node))
+        return SymInt(SymNode.to_node(other) + self.node)
 
     def __sub__(self, other: SymInt | int | SymNode | str) -> SymInt:
         """Evaluate subtraction.
@@ -1249,8 +1247,7 @@ class SymInt:
         Returns:
             SymInt: Result of subtraction.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("-", self.node, other_node))
+        return SymInt(self.node - SymNode.to_node(other))
 
     def __rsub__(self, other: int | SymNode | str) -> SymInt:
         """Evaluate right subtraction.
@@ -1261,8 +1258,7 @@ class SymInt:
         Returns:
             SymInt: Result of subtraction.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("-", other_node, self.node))
+        return SymInt(SymNode.to_node(other) - self.node)
 
     def __mul__(self, other: SymInt | int | SymNode | str) -> SymInt:
         """Evaluate multiplication.
@@ -1273,8 +1269,7 @@ class SymInt:
         Returns:
             SymInt: Result of multiplication.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("*", self.node, other_node))
+        return SymInt(self.node * SymNode.to_node(other))
 
     def __rmul__(self, other: int | SymNode | str) -> SymInt:
         """Evaluate right multiplication.
@@ -1285,8 +1280,7 @@ class SymInt:
         Returns:
             SymInt: Result of multiplication.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("*", other_node, self.node))
+        return SymInt(SymNode.to_node(other) * self.node)
 
     def __floordiv__(self, other: SymInt | int | SymNode | str) -> SymInt:
         """Evaluate floor division.
@@ -1297,8 +1291,7 @@ class SymInt:
         Returns:
             SymInt: Result of floor division.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("//", self.node, other_node))
+        return SymInt(self.node // SymNode.to_node(other))
 
     def __rfloordiv__(self, other: int | SymNode | str) -> SymInt:
         """Evaluate right floor division.
@@ -1309,8 +1302,7 @@ class SymInt:
         Returns:
             SymInt: Result of floor division.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("//", other_node, self.node))
+        return SymInt(SymNode.to_node(other) // self.node)
 
     def __mod__(self, other: SymInt | int | SymNode | str) -> SymInt:
         """Evaluate modulo operation.
@@ -1321,8 +1313,7 @@ class SymInt:
         Returns:
             SymInt: Result of modulo operation.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("%", self.node, other_node))
+        return SymInt(self.node % SymNode.to_node(other))
 
     def __rmod__(self, other: int | SymNode | str) -> SymInt:
         """Evaluate right modulo operation.
@@ -1333,8 +1324,7 @@ class SymInt:
         Returns:
             SymInt: Result of modulo operation.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("%", other_node, self.node))
+        return SymInt(SymNode.to_node(other) % self.node)
 
     def __pow__(self, other: SymInt | int | SymNode | str) -> SymInt:
         """Evaluate exponentiation.
@@ -1345,8 +1335,7 @@ class SymInt:
         Returns:
             SymInt: Result of exponentiation.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("**", self.node, other_node))
+        return SymInt(self.node ** SymNode.to_node(other))
 
     def __rpow__(self, other: int | SymNode | str) -> SymInt:
         """Evaluate right exponentiation.
@@ -1357,8 +1346,7 @@ class SymInt:
         Returns:
             SymInt: Result of exponentiation.
         """
-        other_node = SymNode.to_node(other)
-        return SymInt(SymBinaryOp("**", other_node, self.node))
+        return SymInt(SymNode.to_node(other) ** self.node)
 
     def __neg__(self) -> SymInt:
         """Evaluate negation.
@@ -1366,7 +1354,7 @@ class SymInt:
         Returns:
             SymInt: Negated expression.
         """
-        return SymInt(SymUnaryOp("-", self.node))
+        return SymInt(-self.node)
 
     def __abs__(self) -> SymInt:
         """Evaluate absolute value.
@@ -1374,7 +1362,7 @@ class SymInt:
         Returns:
             SymInt: Absolute value expression.
         """
-        return SymInt(SymUnaryOp("abs", self.node))
+        return SymInt(abs(self.node))
 
     def __str__(self) -> str:
         """Return string expression.

@@ -773,28 +773,47 @@ class StandardMap(BaseModel):
     macro_template: str | None = Field(default=None)
 
 
+def _normalize_param_kinds(params: list[Any]) -> list[Any]:
+    """Return a new list of parameter dictionaries with normalized ParameterKind strings.
+
+    Args:
+        params (list[Any]): Raw parameter list from a GhostRef dictionary.
+
+    Returns:
+        list[Any]: Parameter list with normalized kind strings.
+    """
+    normalized: list[Any] = []
+    for param in params:
+        if (
+            isinstance(param, dict)
+            and "kind" in param
+            and isinstance(param["kind"], str)
+        ):
+            param_copy = dict(param)
+            param_copy["kind"] = param_copy["kind"].split(".")[-1]
+            normalized.append(param_copy)
+        else:
+            normalized.append(param)
+    return normalized
+
+
 def migrate_ghost_ref(data: dict[str, Any]) -> GhostRef:
     """Migrates a v1.x JSON dict to a v1.2 compatible GhostRef instance.
 
     Args:
-        data: The dictionary representation of a GhostRef, possibly from an older schema.
+        data (dict[str, Any]): The dictionary representation of a GhostRef, possibly from an older schema.
 
     Returns:
-        A valid GhostRef object.
+        GhostRef: A valid GhostRef object.
     """
-    if "schema_version" not in data:
-        data["schema_version"] = "1.2"
+    data_copy = dict(data)
+    if "schema_version" not in data_copy:
+        data_copy["schema_version"] = "1.2"
 
-    # Ensure parameter kinds map to valid ParameterKind enum values
-    if "params" in data and isinstance(data["params"], list):
-        for param in data["params"]:
-            if "kind" in param and isinstance(param["kind"], str):
-                # Standardize inspect._ParameterKind strings to our enum values
-                # e.g., 'POSITIONAL_OR_KEYWORD' or '_ParameterKind.POSITIONAL_OR_KEYWORD'
-                kind_str = param["kind"].split(".")[-1]
-                param["kind"] = kind_str
+    if "params" in data_copy and isinstance(data_copy["params"], list):
+        data_copy["params"] = _normalize_param_kinds(data_copy["params"])
 
-    return GhostRef.model_validate(data)
+    return GhostRef.model_validate(data_copy)
 
 
 def migrate_ghost_ref_v2(data: dict[str, Any]) -> ExtendedGhostRef:
@@ -829,14 +848,7 @@ def migrate_ghost_ref_v2(data: dict[str, Any]) -> ExtendedGhostRef:
         data_copy["api_path"] = data_copy.get("name", "unknown")
 
     if "params" in data_copy and isinstance(data_copy["params"], list):
-        for param in data_copy["params"]:
-            if (
-                isinstance(param, dict)
-                and "kind" in param
-                and isinstance(param["kind"], str)
-            ):
-                kind_str = param["kind"].split(".")[-1]
-                param["kind"] = kind_str
+        data_copy["params"] = _normalize_param_kinds(data_copy["params"])
 
     domain_type = data_copy.get("domain_type")
     if domain_type == "python":

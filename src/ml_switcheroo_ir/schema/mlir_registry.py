@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ml_switcheroo_ir.schema.base import (
+    REGISTRY_LOCK,
     CustomAttributeSchema,
     CustomOpSchema,
     OpSchema,
@@ -249,17 +250,18 @@ def _load_mlir_schemas(json_path: Path | str | None = None) -> None:
     Args:
         json_path (Optional[Union[Path, str]]): Explicit path override for mlir_ops.json.
     """
-    loaded = load_op_schema_catalog(
-        "mlir_ops.json",
-        domain_default="mlir",
-        json_path=json_path,
-        find_file_fn=find_schema_file,
-    )
-    if loaded:
-        MLIR_REGISTRY.update(loaded)
-    elif json_path is None:
-        for s in _CANONICAL_MLIR_OPS:
-            MLIR_REGISTRY[s.name] = s.to_op_schema()
+    with REGISTRY_LOCK:
+        loaded = load_op_schema_catalog(
+            "mlir_ops.json",
+            domain_default="mlir",
+            json_path=json_path,
+            find_file_fn=find_schema_file,
+        )
+        if loaded:
+            MLIR_REGISTRY.update(loaded)
+        elif json_path is None:
+            for s in _CANONICAL_MLIR_OPS:
+                MLIR_REGISTRY[s.name] = s.to_op_schema()
 
 
 _load_mlir_schemas()

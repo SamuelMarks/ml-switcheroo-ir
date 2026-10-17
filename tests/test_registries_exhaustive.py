@@ -114,16 +114,25 @@ def test_framework_registries_loader_with_json_and_dialects(
 
 def test_framework_registries_non_empty_initialization() -> None:
     """Verify _initialize_framework_registries branch when schemas are already loaded from files."""
-    dummy_op = mock.MagicMock()
+    from ml_switcheroo_ir.schema.base import OpSchema
+
+    dummy_op = OpSchema(
+        name="mock_op",
+        domain="aten",
+        version=1,
+        attributes={},
+        inputs=["x"],
+        outputs=["y"],
+    )
     with mock.patch(
         "ml_switcheroo_ir.schema.framework_registries._load_framework_schema_file",
         return_value={"mock_op": dummy_op},
     ):
         try:
             framework_registries._initialize_framework_registries()
-            assert "mock_op" in framework_registries.ATEN_REGISTRY
-            assert "mock_op" in framework_registries.ARRAY_API_REGISTRY
-            assert "mock_op" in framework_registries.ODL_CATALOG
+            assert framework_registries.ATEN_REGISTRY.get("mock_op") is dummy_op
+            assert framework_registries.ARRAY_API_REGISTRY.get("mock_op") is dummy_op
+            assert framework_registries.ODL_CATALOG.get("mock_op") is dummy_op
         finally:
             framework_registries.ATEN_REGISTRY.pop("mock_op", None)
             framework_registries.ARRAY_API_REGISTRY.pop("mock_op", None)
@@ -161,18 +170,27 @@ def test_low_level_registries_loader_with_custom_json(tmp_path: Path) -> None:
 
 def test_low_level_registries_initialization_branches() -> None:
     """Verify _initialize_low_level_registries branches when loaders return empty or non-empty."""
-    dummy_op = mock.MagicMock()
+    from ml_switcheroo_ir.schema.base import OpSchema
+
+    dummy_op = OpSchema(
+        name="mock_ll",
+        domain="wgsl",
+        version=1,
+        attributes={},
+        inputs=["src"],
+        outputs=["dst"],
+    )
     with mock.patch(
         "ml_switcheroo_ir.schema.low_level_registries._load_schema_file",
         side_effect=lambda *args, **kwargs: {"mock_ll": dummy_op},
     ):
         try:
             low_level_registries._initialize_low_level_registries()
-            assert "mock_ll" in low_level_registries.PTX_REGISTRY
-            assert "mock_ll" in low_level_registries.METAL_REGISTRY
-            assert "mock_ll" in low_level_registries.WASM_REGISTRY
-            assert "mock_ll" in low_level_registries.WEBGL_REGISTRY
-            assert "mock_ll" in low_level_registries.WGSL_REGISTRY
+            assert low_level_registries.PTX_REGISTRY.get("mock_ll") is dummy_op
+            assert low_level_registries.METAL_REGISTRY.get("mock_ll") is dummy_op
+            assert low_level_registries.WASM_REGISTRY.get("mock_ll") is dummy_op
+            assert low_level_registries.WEBGL_REGISTRY.get("mock_ll") is dummy_op
+            assert low_level_registries.WGSL_REGISTRY.get("mock_ll") is dummy_op
         finally:
             low_level_registries.PTX_REGISTRY.pop("mock_ll", None)
             low_level_registries.METAL_REGISTRY.pop("mock_ll", None)

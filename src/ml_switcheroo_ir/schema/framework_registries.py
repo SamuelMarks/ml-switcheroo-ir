@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ml_switcheroo_ir.schema.base import (
+    REGISTRY_LOCK,
     CustomAttributeSchema,
     CustomOpSchema,
     OpSchema,
@@ -270,24 +271,27 @@ def _load_framework_schema_file(
 
 def _initialize_framework_registries() -> None:
     """Initialize ATen, Array API, and ODL catalog registries."""
-    loaded_aten = _load_framework_schema_file("aten_ops.json", "aten")
-    if not loaded_aten:
-        for s in _CANONICAL_ATEN_OPS:
-            loaded_aten[s.name] = s.to_op_schema()
-    ATEN_REGISTRY.update(loaded_aten)
+    with REGISTRY_LOCK:
+        loaded_aten = _load_framework_schema_file("aten_ops.json", "aten")
+        if not loaded_aten:
+            for s in _CANONICAL_ATEN_OPS:
+                loaded_aten[s.name] = s.to_op_schema()
+        ATEN_REGISTRY.update(loaded_aten)
 
-    loaded_array_api = _load_framework_schema_file("array_api_ops.json", "array_api")
-    if not loaded_array_api:
-        for s in _CANONICAL_ARRAY_API_OPS:
-            loaded_array_api[s.name] = s.to_op_schema()
-    ARRAY_API_REGISTRY.update(loaded_array_api)
+        loaded_array_api = _load_framework_schema_file(
+            "array_api_ops.json", "array_api"
+        )
+        if not loaded_array_api:
+            for s in _CANONICAL_ARRAY_API_OPS:
+                loaded_array_api[s.name] = s.to_op_schema()
+        ARRAY_API_REGISTRY.update(loaded_array_api)
 
-    loaded_odl = _load_framework_schema_file("odl_catalog.json", "odl")
-    if not loaded_odl:
-        for s in _CANONICAL_ODL_OPS:
-            loaded_odl[s.name] = s.to_op_schema()
-        ODL_DIALECT_MAPPINGS.update(_CANONICAL_ODL_DIALECT_MAPPINGS)
-    ODL_CATALOG.update(loaded_odl)
+        loaded_odl = _load_framework_schema_file("odl_catalog.json", "odl")
+        if not loaded_odl:
+            for s in _CANONICAL_ODL_OPS:
+                loaded_odl[s.name] = s.to_op_schema()
+            ODL_DIALECT_MAPPINGS.update(_CANONICAL_ODL_DIALECT_MAPPINGS)
+        ODL_CATALOG.update(loaded_odl)
 
 
 _initialize_framework_registries()

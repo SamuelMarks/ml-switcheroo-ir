@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from ml_switcheroo_ir.validation.grounding import GroundingValidator
@@ -43,6 +43,7 @@ from ml_switcheroo_ir.validation.core import (
     ValidationLevel,
 )
 from ml_switcheroo_ir.validation.distributed import (
+    CommunicationVolumeReport,
     estimate_communication_volume,
     estimate_graph_communication_volume,
     validate_pipeline_and_checkpointing_graph,
@@ -61,6 +62,82 @@ __all__ = [
     "Validator",
 ]
 
+_ISA_ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
+    "amd_rdna": {
+        "wavefront_size",
+        "register_classes",
+        "vgpr_operands",
+        "dst_vgpr",
+        "src_vgprs",
+        "dst",
+        "vopd_slot",
+        "vopd_target",
+        "modifiers",
+    },
+    "rdna": {
+        "wavefront_size",
+        "register_classes",
+        "vgpr_operands",
+        "dst_vgpr",
+        "src_vgprs",
+        "dst",
+        "vopd_slot",
+        "vopd_target",
+        "modifiers",
+    },
+    "nvidia_sass": {
+        "barrier_predicate",
+        "warp_sync",
+        "stall",
+        "stall_count",
+        "yield_flag",
+        "read_barrier",
+        "write_barrier",
+        "wait_barrier_mask",
+        "barrier_mask",
+        "execution_latency",
+        "modifiers",
+        "control_codes",
+        "register_classes",
+    },
+    "sass": {
+        "barrier_predicate",
+        "warp_sync",
+        "stall",
+        "stall_count",
+        "yield_flag",
+        "read_barrier",
+        "write_barrier",
+        "wait_barrier_mask",
+        "barrier_mask",
+        "execution_latency",
+        "modifiers",
+        "control_codes",
+        "register_classes",
+    },
+    "webgpu_wgsl": {"workgroup_size", "address_space", "qualifier"},
+    "wgsl": {"workgroup_size", "address_space", "qualifier"},
+    "nvidia_ptx": {"vector_widths", "min_sm", "address_space"},
+    "ptx": {"vector_widths", "min_sm", "address_space"},
+}
+
+_ATTRIBUTE_TYPE_CHECKERS: dict[str, Callable[[Any], bool]] = {
+    "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "float": lambda v: isinstance(v, (float, int)) and not isinstance(v, bool),
+    "str": lambda v: isinstance(v, str),
+    "dict": lambda v: isinstance(v, dict),
+    "List[int]": lambda v: (
+        isinstance(v, list)
+        and all(isinstance(x, int) and not isinstance(x, bool) for x in v)
+    ),
+    "List[float]": lambda v: (
+        isinstance(v, list)
+        and all(isinstance(x, (float, int)) and not isinstance(x, bool) for x in v)
+    ),
+    "List[str]": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+    "bool": lambda v: isinstance(v, bool),
+}
+
 
 class Validator:
     """Validates LogicalGraph and LogicalNode instances against schemas."""
@@ -77,6 +154,10 @@ class Validator:
         grounding_validator: GroundingValidator | None = None,
     ) -> None:
         """Initialize the validator with configurable registries and severity thresholds.
+
+        Note:
+            Passing ``level=ValidationLevel.ERROR`` maps to ``ValidationLevel.LENIENT``
+            so that only fatal ``ERROR`` diagnostics are retained while warnings are filtered out.
 
         Args:
             registry (Optional[Dict[str, OpSchema]]): The operator registry to use.
@@ -151,6 +232,7 @@ class Validator:
             "wasm_simd": WASM_REGISTRY,
             "wasm": WASM_REGISTRY,
             "webgl": WEBGL_REGISTRY,
+            "webgpu_wgsl": WGSL_REGISTRY,
             "wgsl": WGSL_REGISTRY,
             "aten": ATEN_REGISTRY,
             "array_api": ARRAY_API_REGISTRY,
@@ -196,6 +278,39 @@ class Validator:
             return secondary.get(node.op_type)
         return None
 
+    def _validate_core_mlir_dialect(self, node: LogicalNode) -> list[ValidationError]:
+        """Validate a node belonging to one of the CORE_MLIR_DIALECTS.
+
+        Args:
+            node (LogicalNode): Node in a core MLIR dialect.
+
+        Returns:
+            list[ValidationError]: Detected kind or operand-count errors.
+        """
+        errors: list[ValidationError] = []
+        dialect_ops = CORE_MLIR_DIALECTS[node.domain]
+        if node.op_type not in dialect_ops and node.op_type not in self.registry:
+            errors.append(
+                ValidationError(
+                    node_id=node.id,
+                    attribute="kind",
+                    message=f"Operator '{node.op_type}' not found in MLIR dialect '{node.domain}'.",
+                    level=ValidationLevel.ERROR,
+                )
+            )
+        else:
+            expected_inputs = dialect_ops.get(node.op_type)
+            if expected_inputs is not None and len(node.inputs) < expected_inputs:
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute="inputs",
+                        message=f"MLIR op '{node.domain}.{node.op_type}' expects at least {expected_inputs} operands, got {len(node.inputs)}.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        return errors
+
     def validate_kind(self, node: LogicalNode) -> list[ValidationError]:
         """Validate that the node's kind exists in the registry for its domain.
 
@@ -208,267 +323,87 @@ class Validator:
         if node.op_type in ("Input", "Output"):
             return []
 
-        errors: list[ValidationError] = []
         if node.domain == "ai.onnx":
             if node.op_type not in self.registry:
-                errors.append(
+                return [
                     ValidationError(
                         node_id=node.id,
                         attribute="kind",
                         message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
                         level=ValidationLevel.ERROR,
                     )
-                )
-        elif node.domain == "ml.switcheroo.custom":
-            if (
-                node.op_type not in self.custom_registry
-                and node.op_type not in self.registry
-            ):
-                lvl = (
-                    ValidationLevel.ERROR
-                    if self.level == ValidationLevel.STRICT
-                    else ValidationLevel.WARNING
-                )
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=lvl,
-                    )
-                )
-        elif node.domain == "stablehlo":
-            if (
-                node.op_type not in self.stablehlo_registry
-                and node.op_type not in self.registry
-            ):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in (
-            "mlir",
-            "mlir.arith",
-            "mlir.math",
-            "mlir.tensor",
-            "mlir.linalg",
-            "mlir.scf",
-        ):
-            if (
-                node.op_type not in self.mlir_registry
-                and node.op_type not in self.registry
-            ):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("collective", "ml.switcheroo.collective"):
-            if (
-                node.op_type not in self.collective_registry
-                and node.op_type not in self.registry
-            ):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in collective registry.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("quantization", "ml.switcheroo.quantization"):
-            if (
-                node.op_type not in self.quantization_registry
-                and node.op_type not in self.registry
-            ):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in quantization registry.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in CORE_MLIR_DIALECTS:
-            dialect_ops = CORE_MLIR_DIALECTS[node.domain]
-            if node.op_type not in dialect_ops and node.op_type not in self.registry:
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in MLIR dialect '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-            else:
-                expected_inputs = dialect_ops.get(node.op_type)
-                if expected_inputs is not None and len(node.inputs) < expected_inputs:
-                    errors.append(
-                        ValidationError(
-                            node_id=node.id,
-                            attribute="inputs",
-                            message=f"MLIR op '{node.domain}.{node.op_type}' expects at least {expected_inputs} operands, got {len(node.inputs)}.",
-                            level=ValidationLevel.ERROR,
-                        )
-                    )
-        elif node.domain in ("amd_rdna", "rdna"):
-            if (
-                node.op_type not in RDNA_REGISTRY
-                and node.op_type not in RDNA_INSTRUCTION_PRIMITIVES
-                and node.op_type not in self.registry
-            ):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("nvidia_sass", "sass"):
-            if (
-                node.op_type not in SASS_REGISTRY
-                and node.op_type not in SASS_INSTRUCTION_PRIMITIVES
-                and node.op_type not in self.registry
-            ):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("webgpu_wgsl", "wgsl"):
-            if (
-                node.op_type not in WGSL_REGISTRY
-                and node.op_type not in WGSL_PRIMITIVE_SIGNATURES
-                and node.op_type not in self.registry
-            ):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("nvidia_ptx", "ptx"):
-            if node.op_type not in PTX_REGISTRY and node.op_type not in self.registry:
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("metal_msl", "metal"):
-            if node.op_type not in METAL_REGISTRY and node.op_type not in self.registry:
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("wasm_simd", "wasm"):
-            if node.op_type not in WASM_REGISTRY and node.op_type not in self.registry:
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("webgl",):
-            if node.op_type not in WEBGL_REGISTRY and node.op_type not in self.registry:
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("state", "ml.switcheroo.state"):
-            if (
-                node.op_type not in self.state_registry
-                and node.op_type not in self.registry
-            ):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in state registry.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("ad", "ml.switcheroo.ad"):
+                ]
+            return []
+
+        if node.domain in ("ad", "ml.switcheroo.ad"):
             if node.op_type not in ("ZeroTangent", "NoTangent"):
-                errors.append(
+                return [
                     ValidationError(
                         node_id=node.id,
                         attribute="kind",
                         message=f"Operator '{node.op_type}' not found in autodiff sentinel registry.",
                         level=ValidationLevel.ERROR,
                     )
-                )
-        elif node.domain in ("aten",):
-            if node.op_type not in ATEN_REGISTRY and node.op_type not in self.registry:
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif node.domain in ("array_api",):
+                ]
+            return []
+
+        secondary = self._get_domain_registry(node.domain)
+        if secondary is not None:
+            extra_primitives: dict[str, Any] = {}
+            if node.domain in ("amd_rdna", "rdna"):
+                extra_primitives = RDNA_INSTRUCTION_PRIMITIVES
+            elif node.domain in ("nvidia_sass", "sass"):
+                extra_primitives = SASS_INSTRUCTION_PRIMITIVES
+            elif node.domain in ("webgpu_wgsl", "wgsl"):
+                extra_primitives = WGSL_PRIMITIVE_SIGNATURES
+
             if (
-                node.op_type not in ARRAY_API_REGISTRY
-                and node.op_type not in self.registry
+                node.op_type in secondary
+                or node.op_type in extra_primitives
+                or node.op_type in self.registry
             ):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
+                return []
+
+            lvl = (
+                ValidationLevel.WARNING
+                if node.domain == "ml.switcheroo.custom"
+                and self.level != ValidationLevel.STRICT
+                else ValidationLevel.ERROR
+            )
+            custom_labels = {
+                "collective": "collective registry.",
+                "ml.switcheroo.collective": "collective registry.",
+                "quantization": "quantization registry.",
+                "ml.switcheroo.quantization": "quantization registry.",
+                "state": "state registry.",
+                "ml.switcheroo.state": "state registry.",
+            }
+            target_desc = custom_labels.get(node.domain, f"domain '{node.domain}'.")
+            return [
+                ValidationError(
+                    node_id=node.id,
+                    attribute="kind",
+                    message=f"Operator '{node.op_type}' not found in {target_desc}",
+                    level=lvl,
                 )
-        elif node.domain in ("odl", "abstract"):
-            if node.op_type not in ODL_CATALOG and node.op_type not in self.registry:
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="kind",
-                        message=f"Operator '{node.op_type}' not found in domain '{node.domain}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif (
+            ]
+
+        if node.domain in CORE_MLIR_DIALECTS:
+            return self._validate_core_mlir_dialect(node)
+
+        if (
             node.domain not in ("ai.custom", "custom")
             and node.op_type not in self.registry
         ):
-            errors.append(
+            return [
                 ValidationError(
                     node_id=node.id,
                     attribute="domain",
                     message=f"Unrecognized domain '{node.domain}'.",
                     level=ValidationLevel.ERROR,
                 )
-            )
-        return errors
+            ]
+        return []
 
     def validate_required_attributes(self, node: LogicalNode) -> list[ValidationError]:
         """Validate that all required attributes for the node's kind are present.
@@ -510,82 +445,7 @@ class Validator:
         if schema is None:
             return errors
 
-        isa_attributes = {
-            "amd_rdna": {
-                "wavefront_size",
-                "register_classes",
-                "vgpr_operands",
-                "dst_vgpr",
-                "src_vgprs",
-                "dst",
-                "vopd_slot",
-                "vopd_target",
-                "modifiers",
-            },
-            "rdna": {
-                "wavefront_size",
-                "register_classes",
-                "vgpr_operands",
-                "dst_vgpr",
-                "src_vgprs",
-                "dst",
-                "vopd_slot",
-                "vopd_target",
-                "modifiers",
-            },
-            "nvidia_sass": {
-                "barrier_predicate",
-                "warp_sync",
-                "stall",
-                "stall_count",
-                "yield_flag",
-                "read_barrier",
-                "write_barrier",
-                "wait_barrier_mask",
-                "barrier_mask",
-                "execution_latency",
-                "modifiers",
-                "control_codes",
-                "register_classes",
-            },
-            "sass": {
-                "barrier_predicate",
-                "warp_sync",
-                "stall",
-                "stall_count",
-                "yield_flag",
-                "read_barrier",
-                "write_barrier",
-                "wait_barrier_mask",
-                "barrier_mask",
-                "execution_latency",
-                "modifiers",
-                "control_codes",
-                "register_classes",
-            },
-            "webgpu_wgsl": {"workgroup_size", "address_space", "qualifier"},
-            "wgsl": {"workgroup_size", "address_space", "qualifier"},
-            "nvidia_ptx": {"vector_widths", "min_sm", "address_space"},
-            "ptx": {"vector_widths", "min_sm", "address_space"},
-        }
-        allowed_isa_keys = isa_attributes.get(node.domain, set())
-
-        type_checkers = {
-            "int": lambda v: isinstance(v, int),
-            "float": lambda v: isinstance(v, (float, int)),
-            "str": lambda v: isinstance(v, str),
-            "dict": lambda v: isinstance(v, dict),
-            "List[int]": lambda v: (
-                isinstance(v, list) and all(isinstance(x, int) for x in v)
-            ),
-            "List[float]": lambda v: (
-                isinstance(v, list) and all(isinstance(x, (float, int)) for x in v)
-            ),
-            "List[str]": lambda v: (
-                isinstance(v, list) and all(isinstance(x, str) for x in v)
-            ),
-            "bool": lambda v: isinstance(v, bool),
-        }
+        allowed_isa_keys = _ISA_ALLOWED_ATTRIBUTES.get(node.domain, set())
 
         for key, value in node.attributes.items():
             if key not in schema.attributes:
@@ -608,7 +468,7 @@ class Validator:
 
             attr_schema = schema.attributes[key]
             expected_type = attr_schema.type
-            checker = type_checkers.get(expected_type)
+            checker = _ATTRIBUTE_TYPE_CHECKERS.get(expected_type)
             valid = checker(value) if checker is not None else True
 
             if not valid:
@@ -678,13 +538,17 @@ class Validator:
         return validate_quantization_node(node)
 
     def validate_node(
-        self, node: LogicalNode, mesh: LogicalMesh | None = None
+        self,
+        node: LogicalNode,
+        mesh: LogicalMesh | None = None,
+        populate_defaults: bool = True,
     ) -> list[ValidationError]:
         """Validate a single LogicalNode against schemas and configured severity level.
 
         Args:
             node (LogicalNode): The node to validate.
             mesh (Optional[LogicalMesh]): Optional logical device mesh for sharding validation.
+            populate_defaults (bool): Whether to populate missing default attributes from schema (default: True).
 
         Returns:
             List[ValidationError]: Aggregated list of validation errors and warnings for the node.
@@ -694,7 +558,14 @@ class Validator:
         errors.extend(self.validate_required_attributes(node))
         errors.extend(self.validate_attribute_types(node))
         errors.extend(self.validate_sharding(node, mesh))
-        if node.domain in ("amd_rdna", "nvidia_sass", "webgpu_wgsl"):
+        if node.domain in (
+            "amd_rdna",
+            "rdna",
+            "nvidia_sass",
+            "sass",
+            "webgpu_wgsl",
+            "wgsl",
+        ):
             errors.extend(self.validate_isa_instruction(node))
         if (
             node.domain in ("quantization", "ml.switcheroo.quantization")
@@ -739,18 +610,24 @@ class Validator:
                         )
                     )
 
-        self.populate_defaults(node)
+        if populate_defaults:
+            self.populate_defaults(node)
 
         if self.level == ValidationLevel.LENIENT:
             errors = [e for e in errors if e.level == ValidationLevel.ERROR]
 
         return errors
 
-    def validate_graph(self, graph: LogicalGraph) -> list[ValidationError]:
+    def validate_graph(
+        self,
+        graph: LogicalGraph,
+        populate_defaults: bool = True,
+    ) -> list[ValidationError]:
         """Validate all nodes, sharding, and edges in a LogicalGraph.
 
         Args:
             graph (LogicalGraph): The graph to validate.
+            populate_defaults (bool): Whether to populate missing default attributes on nodes (default: True).
 
         Returns:
             List[ValidationError]: A list of all aggregated errors.
@@ -758,11 +635,17 @@ class Validator:
         errors: list[ValidationError] = []
 
         for node in graph.nodes.values():
-            errors.extend(self.validate_node(node, graph.mesh))
+            errors.extend(
+                self.validate_node(
+                    node, graph.mesh, populate_defaults=populate_defaults
+                )
+            )
 
         errors.extend(self.validate_edges(graph))
 
-        sass_nodes = [n for n in graph.nodes.values() if n.domain == "nvidia_sass"]
+        sass_nodes = [
+            n for n in graph.nodes.values() if n.domain in ("nvidia_sass", "sass")
+        ]
         if sass_nodes:
             errors.extend(self.validate_sass_scoreboarding(sass_nodes))
 
@@ -843,14 +726,14 @@ class Validator:
 
     def estimate_graph_communication_volume(
         self, graph: LogicalGraph
-    ) -> dict[str, Any]:
+    ) -> CommunicationVolumeReport:
         """Aggregate analytical communication volume across all collective operators in a graph.
 
         Args:
             graph (LogicalGraph): The computational graph to analyze.
 
         Returns:
-            dict[str, Any]: Dictionary with total communication volume in bytes,
+            CommunicationVolumeReport: Dictionary with total communication volume in bytes,
                 and breakdowns by mesh axis and operator type.
         """
         return estimate_graph_communication_volume(graph)
@@ -859,12 +742,14 @@ class Validator:
         self,
         target: LogicalGraph | LogicalNode,
         raise_on_error: bool = False,
+        populate_defaults: bool = True,
     ) -> list[ValidationError]:
         """Validate a LogicalGraph or LogicalNode instance against configured validation level.
 
         Args:
             target (Union[LogicalGraph, LogicalNode]): Graph or node instance to validate.
             raise_on_error (bool): If True, raises the first fatal ValidationError encountered.
+            populate_defaults (bool): Whether to populate missing default attributes (default: True).
 
         Returns:
             List[ValidationError]: List of validation errors and warnings.
@@ -873,9 +758,9 @@ class Validator:
             ValidationError: If raise_on_error is True and a fatal ValidationError is found.
         """
         if isinstance(target, LogicalGraph):
-            errors = self.validate_graph(target)
+            errors = self.validate_graph(target, populate_defaults=populate_defaults)
         else:
-            errors = self.validate_node(target)
+            errors = self.validate_node(target, populate_defaults=populate_defaults)
 
         if raise_on_error:
             fatal_errors = [e for e in errors if e.level == ValidationLevel.ERROR]

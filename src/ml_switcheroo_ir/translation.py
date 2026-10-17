@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from typing import Any, Protocol, Union, runtime_checkable
+from typing_extensions import TypeAlias
 
 from ml_switcheroo_ir.types import AttributeValue
 from ml_switcheroo_ir.validator import DEFAULT_SNAPSHOT_DIR
@@ -50,15 +51,79 @@ class TensorLikeProtocol(Protocol):
         """
 
 
-TensorLike = Union[TensorLikeProtocol, Sequence[Any], object]
+@runtime_checkable
+class TransposableTensorProtocol(Protocol):
+    """Structural protocol for tensor-like objects providing .transpose()."""
+
+    def transpose(self, perm: tuple[int, ...]) -> Any:
+        """Return tensor with transposed dimensions.
+
+        Args:
+            perm (tuple[int, ...]): Target axis permutation.
+
+        Returns:
+            Any: Transposed tensor-like object.
+        """
+
+
+@runtime_checkable
+class PermutableTensorProtocol(Protocol):
+    """Structural protocol for PyTorch-like tensors providing .permute()."""
+
+    def permute(self, perm: tuple[int, ...]) -> Any:
+        """Return tensor with permuted dimensions.
+
+        Args:
+            perm (tuple[int, ...]): Target dimension order.
+
+        Returns:
+            Any: Permuted tensor-like object.
+        """
+
+
+@runtime_checkable
+class SplittableTensorProtocol(Protocol):
+    """Structural protocol for tensor-like objects providing .split()."""
+
+    def split(self, split_size: int, dim: int = 0) -> Sequence[Any]:
+        """Split tensor into chunks along a dimension.
+
+        Args:
+            split_size (int): Size of each chunk.
+            dim (int): Dimension along which to split.
+
+        Returns:
+            Sequence[Any]: Sequence of split tensor chunks.
+        """
+
+
+NestedTensorSequence: TypeAlias = Sequence[
+    Union[int, float, bool, str, "NestedTensorSequence"]
+]
+TensorLike: TypeAlias = Union[
+    TensorLikeProtocol,
+    TransposableTensorProtocol,
+    PermutableTensorProtocol,
+    SplittableTensorProtocol,
+    NestedTensorSequence,
+    Sequence[Any],
+    Mapping[str, Any],
+    int,
+    float,
+    str,
+]
 
 __all__ = [
+    "NestedTensorSequence",
     "OperationTranslationSpec",
     "ParameterTranslationEngine",
+    "PermutableTensorProtocol",
     "RoleFrameworkMap",
+    "SplittableTensorProtocol",
     "TensorLike",
     "TensorLikeProtocol",
     "TranslationMap",
+    "TransposableTensorProtocol",
 ]
 
 _CANONICAL_FALLBACK_TRANSLATIONS: TranslationMap = {
@@ -483,10 +548,12 @@ class ParameterTranslationEngine:
             return weights
 
         perm = [src.index(ch) for ch in tgt]
-        if hasattr(weights, "transpose"):
-            return weights.transpose(tuple(perm))
-        if hasattr(weights, "permute"):
-            return weights.permute(tuple(perm))
+        transpose_fn = getattr(weights, "transpose", None)
+        if callable(transpose_fn):
+            return transpose_fn(tuple(perm))
+        permute_fn = getattr(weights, "permute", None)
+        if callable(permute_fn):
+            return permute_fn(tuple(perm))
         return (weights, tuple(perm))
 
     def split_qkv_weights(
@@ -516,9 +583,11 @@ class ParameterTranslationEngine:
             )
 
         proj_size = num_heads * head_dim
-        if not isinstance(qkv_weight, (str, bytes)) and hasattr(qkv_weight, "split"):
-            parts = qkv_weight.split(proj_size, dim=split_dim)
-            return (parts[0], parts[1], parts[2])
+        if not isinstance(qkv_weight, (str, bytes)):
+            split_fn = getattr(qkv_weight, "split", None)
+            if callable(split_fn):
+                parts = split_fn(proj_size, dim=split_dim)
+                return (parts[0], parts[1], parts[2])
         if isinstance(qkv_weight, (list, tuple)) and len(qkv_weight) == 3 * proj_size:
             q = qkv_weight[:proj_size]
             k = qkv_weight[proj_size : 2 * proj_size]
