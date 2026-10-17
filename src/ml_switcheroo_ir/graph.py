@@ -1349,6 +1349,16 @@ def _stream_write_graph(
     if format == "canonical":
         keys_order.insert(0, "edges")
 
+    val_map: dict[str, Any] = {
+        "initializers": inits_val,
+        "input_specs": input_specs_val,
+        "inputs": list(graph.inputs),
+        "mesh": mesh_val,
+        "name": graph.name,
+        "nodes": {},
+        "outputs": list(graph.outputs),
+        "pipeline_topology": pipe_val,
+    }
     fp.write("{" + _NL)
     total_keys = len(keys_order)
     for k_idx, key in enumerate(keys_order):
@@ -1384,16 +1394,6 @@ def _stream_write_graph(
                 )
             fp.write(f"{pad1}}}{comma}{_NL}")
         else:
-            val_map: dict[str, Any] = {
-                "initializers": inits_val,
-                "input_specs": input_specs_val,
-                "inputs": list(graph.inputs),
-                "mesh": mesh_val,
-                "name": graph.name,
-                "nodes": {},
-                "outputs": list(graph.outputs),
-                "pipeline_topology": pipe_val,
-            }
             val_str = json.dumps(
                 val_map[key], sort_keys=True, indent=indent, default=str
             )
@@ -1541,6 +1541,30 @@ class LogicalGraph:
         """
         return list(self.nodes.values())
 
+    def _resolve_output_port(
+        self,
+        output_name: str,
+        output_map: dict[str, tuple[LogicalNode, int]] | None = None,
+    ) -> tuple[LogicalNode, int] | None:
+        """Resolve an SSA output name or 'node_id:idx' token to its (producer_node, port_index).
+
+        Args:
+            output_name (str): SSA output tensor identifier or 'node_id:idx'.
+            output_map (dict[str, tuple[LogicalNode, int]] | None): Pre-fetched output map if available.
+
+        Returns:
+            tuple[LogicalNode, int] | None: Producing node and 0-based output index, or None.
+        """
+        active_map = self._output_map if output_map is None else output_map
+        res = active_map.get(output_name)
+        if res is not None:
+            return res
+        if ":" in output_name:
+            node_part, idx_part = output_name.rsplit(":", 1)
+            if node_part in self.nodes and idx_part.lstrip("-").isdigit():
+                return self.nodes[node_part], int(idx_part)
+        return None
+
     def get_producing_output_index(
         self, output_name: str
     ) -> tuple[LogicalNode, int] | None:
@@ -1555,14 +1579,7 @@ class LogicalGraph:
         Returns:
             tuple[LogicalNode, int] | None: Producing node and 0-based output index, or None.
         """
-        res = self._output_map.get(output_name)
-        if res is not None:
-            return res
-        if ":" in output_name:
-            node_part, idx_part = output_name.rsplit(":", 1)
-            if node_part in self.nodes and idx_part.lstrip("-").isdigit():
-                return self.nodes[node_part], int(idx_part)
-        return None
+        return self._resolve_output_port(output_name)
 
     @property
     def edges(self) -> list[LogicalEdge]:
@@ -1578,11 +1595,7 @@ class LogicalGraph:
         result: list[LogicalEdge] = []
         for target_node in self.nodes.values():
             for target_idx, src in enumerate(target_node.inputs):
-                prod_info = output_map.get(src)
-                if prod_info is None and ":" in src:
-                    node_part, idx_part = src.rsplit(":", 1)
-                    if node_part in self.nodes and idx_part.lstrip("-").isdigit():
-                        prod_info = (self.nodes[node_part], int(idx_part))
+                prod_info = self._resolve_output_port(src, output_map=output_map)
                 src_idx = prod_info[1] if prod_info is not None else 0
                 result.append(
                     LogicalEdge(
@@ -1636,15 +1649,19 @@ class LogicalGraph:
     def _output_map(self) -> dict[str, tuple[LogicalNode, int]]:
         """Cached O(1) mapping of SSA names to (producer_node, output_index).
 
-        Automatically rebuilds when ``self.nodes`` count or identity changes.
+        Automatically rebuilds when ``self.nodes`` count, node identities, or node outputs change.
 
         Returns:
             dict[str, tuple[LogicalNode, int]]: Mapping from output SSA name to (node, port_index).
         """
         nodes_len = len(self.nodes)
+        outputs_sig = hash(
+            tuple((nid, id(n), tuple(n.outputs)) for nid, n in self.nodes.items())
+        )
         if (
             self._cached_output_map is not None
             and nodes_len == self._cached_nodes_version
+            and outputs_sig == self._cached_outputs_sig
         ):
             return self._cached_output_map
 
@@ -1655,6 +1672,7 @@ class LogicalGraph:
 
         self._cached_output_map = mapping
         self._cached_nodes_version = nodes_len
+        self._cached_outputs_sig = outputs_sig
         return mapping
 
     def get_output_producer(self, output_name: str) -> LogicalNode | None:
@@ -1684,9 +1702,11 @@ class LogicalGraph:
         cloned_specs = {k: copy.deepcopy(v) for k, v in self.input_specs.items()}
         cloned_inits = copy.deepcopy(self.initializers)
         cloned_mesh = copy.deepcopy(self.mesh) if self.mesh is not None else None
-        cloned_topology = getattr(self, "pipeline_topology", None)
-        if cloned_topology is not None:
-            cloned_topology = copy.deepcopy(cloned_topology)
+        cloned_topology = (
+            copy.deepcopy(self.pipeline_topology)
+            if self.pipeline_topology is not None
+            else None
+        )
 
         new_g = LogicalGraph(
             name=self.name,

@@ -238,6 +238,12 @@ RAGGED_PAGED_ATTENTION_SCHEMA = CustomOpSchema(
     ],
 )
 
+CANONICAL_ATTENTION_SCHEMAS: tuple[CustomOpSchema, ...] = (
+    FLASH_ATTENTION_SCHEMA,
+    PAGED_ATTENTION_SCHEMA,
+    RAGGED_PAGED_ATTENTION_SCHEMA,
+)
+
 LAYER_NORM_SCHEMA = CustomOpSchema(
     name="LayerNorm",
     domain="ml.switcheroo.custom",

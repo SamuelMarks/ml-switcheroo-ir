@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalMesh, LogicalNode
+from ml_switcheroo_ir.types import DType
 from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel
 
 __all__ = [
@@ -56,17 +57,20 @@ def estimate_communication_volume(
             else 1024
         )
 
-    dtype_val = getattr(node, "dtype", None) or node.attributes.get("dtype", "float32")
-    dtype_str = str(dtype_val).lower()
-    if "64" in dtype_str:
-        itemsize = 8
-    elif "16" in dtype_str:
-        itemsize = 2
-    elif "8" in dtype_str:
-        itemsize = 1
+    dtype_val = node.dtype or node.attributes.get("dtype", "float32")
+    if isinstance(dtype_val, DType):
+        itemsize = dtype_val.itemsize
     else:
-        itemsize = 4
-    tensor_bytes = element_count * itemsize
+        dtype_str = str(dtype_val).lower()
+        if "64" in dtype_str:
+            itemsize = 8.0
+        elif "16" in dtype_str:
+            itemsize = 2.0
+        elif "8" in dtype_str:
+            itemsize = 1.0
+        else:
+            itemsize = 4.0
+    tensor_bytes = int(element_count * itemsize)
 
     axis_name = str(node.attributes.get("mesh_axis", "data"))
     if mesh is not None and axis_name in mesh.shape:
@@ -264,7 +268,7 @@ def validate_sharding_propagation_graph(
     for node in graph.nodes.values():
         if node.op_type in elementwise_ops and node.sharding is not None:
             for inp_id in node.inputs:
-                inp_node = graph.nodes.get(inp_id)
+                inp_node = graph.nodes.get(inp_id) or graph.get_output_producer(inp_id)
                 if (
                     inp_node is not None
                     and inp_node.sharding is not None
@@ -289,8 +293,12 @@ def validate_sharding_propagation_graph(
                     )
 
         elif node.op_type in ("MatMul", "Gemm") and len(node.inputs) >= 2:
-            node0 = graph.nodes.get(node.inputs[0])
-            node1 = graph.nodes.get(node.inputs[1])
+            node0 = graph.nodes.get(node.inputs[0]) or graph.get_output_producer(
+                node.inputs[0]
+            )
+            node1 = graph.nodes.get(node.inputs[1]) or graph.get_output_producer(
+                node.inputs[1]
+            )
             if (
                 node0 is not None
                 and node1 is not None
@@ -548,7 +556,9 @@ def validate_pipeline_and_checkpointing_graph(
             if "pipeline_stage" in node.attributes
             else node.attributes.get("stage_id")
         )
-        if stage is not None and (type(stage) is not int or stage < 0):
+        if stage is not None and (
+            not isinstance(stage, int) or isinstance(stage, bool) or stage < 0
+        ):
             errors.append(
                 ValidationError(
                     node_id=node.id,
@@ -557,16 +567,16 @@ def validate_pipeline_and_checkpointing_graph(
                     level=ValidationLevel.ERROR,
                 )
             )
-        elif type(stage) is int:
+        elif isinstance(stage, int) and not isinstance(stage, bool):
             for inp_id in node.inputs:
-                src_node = graph.nodes.get(inp_id)
+                src_node = graph.nodes.get(inp_id) or graph.get_output_producer(inp_id)
                 if src_node is not None:
                     src_stage = (
                         src_node.attributes.get("pipeline_stage")
                         if "pipeline_stage" in src_node.attributes
                         else src_node.attributes.get("stage_id")
                     )
-                    if type(src_stage) is int:
+                    if isinstance(src_stage, int) and not isinstance(src_stage, bool):
                         if src_stage > stage:
                             errors.append(
                                 ValidationError(

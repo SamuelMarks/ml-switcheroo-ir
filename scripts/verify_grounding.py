@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ml_switcheroo_ir.schema.custom_ops import (
+    CANONICAL_ATTENTION_SCHEMAS,
     COLLECTIVE_OPS_REGISTRY,
     CUSTOM_OPS_REGISTRY,
 )
@@ -279,24 +280,9 @@ def verify_custom_ops_grounding(snapshots_dir: Path | None = None) -> list[str]:
             flash_file = flash_candidates[-1]
             try:
                 _load_snapshot_symbol_map(flash_file)
-                attention_ops = {
-                    "FlashAttention": ["Q", "K", "V"],
-                    "PagedAttention": [
-                        "query",
-                        "key_cache",
-                        "value_cache",
-                        "block_tables",
-                        "context_lens",
-                    ],
-                    "RaggedPagedAttention": [
-                        "query",
-                        "key_cache",
-                        "value_cache",
-                        "block_tables",
-                        "context_lens",
-                    ],
-                }
-                for att_name, exp_inputs in attention_ops.items():
+                for canonical_schema in CANONICAL_ATTENTION_SCHEMAS:
+                    att_name = canonical_schema.name
+                    exp_inputs = canonical_schema.inputs
                     if att_name not in CUSTOM_OPS_REGISTRY:
                         errors.append(
                             f"Custom attention op '{att_name}' missing from CUSTOM_OPS_REGISTRY."

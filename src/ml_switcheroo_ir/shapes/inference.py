@@ -72,11 +72,6 @@ def broadcast_dimension(
     if tracker is not None:
         return tracker.unify(dim_a, dim_b)
 
-    if isinstance(dim_a, (str, SymNode, SymInt)) and isinstance(
-        dim_b, (str, SymNode, SymInt)
-    ):
-        return dim_a
-
     raise ShapeMismatchError(
         f"Incompatible dimensions for broadcasting: {dim_a} and {dim_b}"
     )
@@ -305,9 +300,12 @@ class ShapeTracker:
         for node_id, shape_val in raw_shapes.items():
             concrete_tuple = tuple(int(dim) for dim in shape_val)
             resolved[str(node_id)] = concrete_tuple
-            if tracker is not None:
-                for dim in concrete_tuple:
-                    tracker.record_equality(dim, dim)
+            if (
+                tracker is not None
+                and len(concrete_tuple) == 1
+                and not str(node_id).isdigit()
+            ):
+                tracker.record_equality(str(node_id), concrete_tuple[0])
 
         return resolved
 

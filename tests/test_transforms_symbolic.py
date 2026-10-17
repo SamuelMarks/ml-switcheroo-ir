@@ -497,6 +497,25 @@ def test_propagate_slice_split_flatten_concat_branches() -> None:
         {"sym_t": LogicalNode(id="sym_t", op_type="Input", shape_metadata=(20,))},
     ) == (0,)
 
+    # Symbolic slice with negative start and end: e.g. x[-2:-1] has length 1, x[0:-2] has length T - 2
+    n_sl_sym_neg_rel = LogicalNode(
+        id="sl_sym_neg_rel",
+        op_type="Slice",
+        inputs=["sym_t"],
+        attributes={"starts": [-2], "ends": [-1], "axes": [0], "steps": [1]},
+    )
+    assert _propagate_slice_op(n_sl_sym_neg_rel, {"sym_t": n_sym_t}) == (1,)
+
+    n_sl_sym_open_end = LogicalNode(
+        id="sl_sym_open_end",
+        op_type="Slice",
+        inputs=["sym_t"],
+        attributes={"starts": [0], "ends": [-2], "axes": [0], "steps": [1]},
+    )
+    res_open_end = _propagate_slice_op(n_sl_sym_open_end, {"sym_t": n_sym_t})
+    assert res_open_end is not None
+    assert str(res_open_end[0]) == "(T - 2)"
+
     # Graph with unshaped nodes across all ops maintaining shape_metadata
     unshaped_ops = [
         ("u1", "Relu"),

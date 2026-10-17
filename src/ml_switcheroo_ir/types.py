@@ -229,6 +229,48 @@ class DType(str, Enum):
         }
         return onnx_map.get(self.value, self.value.upper())
 
+    @property
+    def itemsize(self) -> float:
+        """Return the storage size in bytes per element for this data type.
+
+        Sub-byte quantized types (e.g. int4, uint4, qint4) return fractional byte sizes
+        (e.g. 0.5 bytes for 4-bit, 0.25 bytes for 2-bit).
+
+        Returns:
+            float: Number of bytes per element.
+        """
+        sizes: dict[str, float] = {
+            "complex128": 16.0,
+            "float64": 8.0,
+            "int64": 8.0,
+            "uint64": 8.0,
+            "complex64": 8.0,
+            "float32": 4.0,
+            "int32": 4.0,
+            "uint32": 4.0,
+            "float16": 2.0,
+            "bfloat16": 2.0,
+            "int16": 2.0,
+            "uint16": 2.0,
+            "int8": 1.0,
+            "uint8": 1.0,
+            "bool": 1.0,
+            "qint8": 1.0,
+            "quint8": 1.0,
+            "float8_e4m3fn": 1.0,
+            "float8_e4m3b11fnuz": 1.0,
+            "float8_e5m2": 1.0,
+            "fp8_e4m3fn": 1.0,
+            "fp8_e4m3fnuz": 1.0,
+            "fp8_e5m2": 1.0,
+            "fp8_e5m2fnuz": 1.0,
+            "int4": 0.5,
+            "uint4": 0.5,
+            "qint4": 0.5,
+            "int2": 0.25,
+        }
+        return sizes.get(self.value, 4.0)
+
 
 class _HasDimsProtocol(Protocol):
     """Protocol for duck-typed shape objects carrying a .dims sequence."""

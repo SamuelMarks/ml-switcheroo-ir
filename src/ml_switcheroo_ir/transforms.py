@@ -24,6 +24,7 @@ from ml_switcheroo_ir.shapes import (
     DimensionType,
     SymBinaryOp,
     SymbolicConstraintTracker,
+    SymbolicSolver,
     SymConst,
     SymInt,
     SymNode,
@@ -31,6 +32,7 @@ from ml_switcheroo_ir.shapes import (
     matmul_shape,
     normalize_axis,
 )
+from ml_switcheroo_ir.types import AttributeValue, DType, TensorSpec
 
 SIDE_EFFECT_OPS: set[str] = {
     "Print",
@@ -47,6 +49,36 @@ SIDE_EFFECT_OPS: set[str] = {
     "atomicCompareExchangeWeak",
     "textureStore",
 }
+
+
+def _is_side_effecting_node(node: LogicalNode, include_sources: bool = False) -> bool:
+    """Return True if a node has side effects, state mutation, or collective semantics.
+
+    Args:
+        node (LogicalNode): Node to inspect.
+        include_sources (bool): Whether to also treat Input and rng_bit_generator as impure.
+
+    Returns:
+        bool: True if the node cannot be eliminated or merged.
+    """
+    is_effect = (
+        bool(node.attributes.get("has_side_effect", False))
+        or bool(node.attributes.get("side_effects", False))
+        or bool(node.attributes.get("is_mutating", False))
+        or node.op_type in SIDE_EFFECT_OPS
+        or node.op_type in STATE_OPS_REGISTRY
+        or node.op_type in COLLECTIVE_OPS_REGISTRY
+        or node.domain
+        in (
+            "state",
+            "ml.switcheroo.state",
+            "collective",
+            "ml.switcheroo.collective",
+        )
+    )
+    if include_sources:
+        return is_effect or node.op_type in ("Input", "rng_bit_generator")
+    return is_effect
 
 
 def _is_ssa_live(
@@ -102,22 +134,7 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
 
     # Add nodes marked with side-effects or known mutating ops
     for node_id, node in graph.nodes.items():
-        has_effect = (
-            bool(node.attributes.get("has_side_effect", False))
-            or bool(node.attributes.get("side_effects", False))
-            or bool(node.attributes.get("is_mutating", False))
-            or node.op_type in SIDE_EFFECT_OPS
-            or node.op_type in STATE_OPS_REGISTRY
-            or node.op_type in COLLECTIVE_OPS_REGISTRY
-            or node.domain
-            in (
-                "state",
-                "ml.switcheroo.state",
-                "collective",
-                "ml.switcheroo.collective",
-            )
-        )
-        if has_effect and node_id not in live_nodes:
+        if _is_side_effecting_node(node) and node_id not in live_nodes:
             live_nodes.add(node_id)
             queue.append(node_id)
 
@@ -144,30 +161,14 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
     new_nodes: dict[str, LogicalNode] = {}
     for nid, node in graph.nodes.items():
         if nid in live_nodes:
-            transformed_subgraphs: dict[str, Any] = {}
+            transformed_subgraphs: dict[str, LogicalGraph | AttributeValue] = {}
             for sub_k, sub_v in node.subgraphs.items():
                 if isinstance(sub_v, LogicalGraph):
                     transformed_subgraphs[sub_k] = eliminate_dead_nodes(sub_v)
                 else:
                     transformed_subgraphs[sub_k] = sub_v
 
-            new_nodes[nid] = LogicalNode(
-                id=node.id,
-                op_type=node.op_type,
-                domain=node.domain,
-                version=node.version,
-                inputs=list(node.inputs),
-                attributes=dict(node.attributes),
-                outputs=list(node.outputs) if node.outputs is not None else None,
-                shape_metadata=node.shape_metadata,
-                source_ast_ref=node.source_ast_ref,
-                sharding=node.sharding,
-                dtype=node.dtype,
-                output_specs=list(node.output_specs),
-                subgraphs=transformed_subgraphs,
-                device=node.device,
-                stream=node.stream,
-            )
+            new_nodes[nid] = node.clone(subgraphs=transformed_subgraphs)
 
     # 4. Filter surviving edges
     new_edges: list[LogicalEdge] = [
@@ -234,22 +235,7 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
         updated_inputs = [alias_map.get(inp, inp) for inp in node.inputs]
 
         # Check if pure and eligible for CSE
-        has_effect = (
-            bool(node.attributes.get("has_side_effect", False))
-            or bool(node.attributes.get("side_effects", False))
-            or bool(node.attributes.get("is_mutating", False))
-            or node.op_type in SIDE_EFFECT_OPS
-            or node.op_type in STATE_OPS_REGISTRY
-            or node.op_type in COLLECTIVE_OPS_REGISTRY
-            or node.domain
-            in (
-                "state",
-                "ml.switcheroo.state",
-                "collective",
-                "ml.switcheroo.collective",
-            )
-            or node.op_type in ("Input", "rng_bit_generator")
-        )
+        has_effect = _is_side_effecting_node(node, include_sources=True)
 
         if not has_effect:
             attr_key = tuple(
@@ -288,31 +274,17 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
 
             sig_map[sig] = node.id
 
-        transformed_subgraphs: dict[str, Any] = {}
+        transformed_subgraphs: dict[str, LogicalGraph | AttributeValue] = {}
         for sub_k, sub_v in node.subgraphs.items():
             if isinstance(sub_v, LogicalGraph):
                 transformed_subgraphs[sub_k] = eliminate_common_subexpressions(sub_v)
             else:
                 transformed_subgraphs[sub_k] = sub_v
 
-        new_node = LogicalNode(
-            id=node.id,
-            op_type=node.op_type,
-            domain=node.domain,
-            version=node.version,
+        surviving_nodes[node.id] = node.clone(
             inputs=updated_inputs,
-            attributes=dict(node.attributes),
-            outputs=list(node.outputs) if node.outputs is not None else None,
-            shape_metadata=node.shape_metadata,
-            source_ast_ref=node.source_ast_ref,
-            sharding=node.sharding,
-            dtype=node.dtype,
-            output_specs=list(node.output_specs),
             subgraphs=transformed_subgraphs,
-            device=node.device,
-            stream=node.stream,
         )
-        surviving_nodes[node.id] = new_node
 
     new_outputs = [alias_map.get(out, out) for out in graph.outputs]
 
@@ -454,8 +426,6 @@ def _propagate_gemm_op(
             k_a = s_a[0] if trans_a else s_a[1]
             k_b = s_b[1] if trans_b else s_b[0]
             n = s_b[0] if trans_b else s_b[1]
-
-            from ml_switcheroo_ir.shapes import SymbolicSolver
 
             if not SymbolicSolver.is_consistent(k_a, k_b):
                 raise ValueError(
@@ -747,11 +717,46 @@ def _propagate_slice_op(
                             else:
                                 s[norm_ax] = 0
                         else:
+                            sym_dim = SymNode.to_node(dim_len)
+                            st_sym: SymNode = (
+                                SymBinaryOp("+", sym_dim, SymConst(st)).simplify()
+                                if st < 0
+                                else SymConst(st)
+                            )
+                            en_sym: SymNode = (
+                                SymBinaryOp("+", sym_dim, SymConst(en)).simplify()
+                                if en < 0
+                                else SymConst(en)
+                            )
                             if sp > 0:
-                                s[norm_ax] = max(0, (en - st + sp - 1) // sp)
+                                diff_node = SymBinaryOp(
+                                    "+",
+                                    SymBinaryOp("-", en_sym, st_sym),
+                                    SymConst(sp - 1),
+                                ).simplify()
+                                res_sym = SymBinaryOp(
+                                    "//", diff_node, SymConst(sp)
+                                ).simplify()
+                                s[norm_ax] = (
+                                    max(0, res_sym.value)
+                                    if isinstance(res_sym, SymConst)
+                                    else res_sym
+                                )
                             elif sp < 0:
                                 abs_sp = -sp
-                                s[norm_ax] = max(0, (st - en + abs_sp - 1) // abs_sp)
+                                diff_node = SymBinaryOp(
+                                    "+",
+                                    SymBinaryOp("-", st_sym, en_sym),
+                                    SymConst(abs_sp - 1),
+                                ).simplify()
+                                res_sym = SymBinaryOp(
+                                    "//", diff_node, SymConst(abs_sp)
+                                ).simplify()
+                                s[norm_ax] = (
+                                    max(0, res_sym.value)
+                                    if isinstance(res_sym, SymConst)
+                                    else res_sym
+                                )
                             else:
                                 s[norm_ax] = 0
                 return tuple(s)
@@ -1040,39 +1045,33 @@ def propagate_shapes_and_constants(graph: LogicalGraph) -> LogicalGraph:
             if (
                 inp_node is not None
                 and isinstance(inp_node.shape_metadata, (list, tuple))
-                and isinstance(split_attr, (list, tuple))
+                and inferred_shape is not None
             ):
-                from ml_switcheroo_ir.types import DType, TensorSpec
-
                 axis_raw = node.attributes.get("axis", 0)
                 axis = int(axis_raw) if isinstance(axis_raw, (int, str)) else 0
                 norm_ax = normalize_axis(axis, len(inp_node.shape_metadata))
                 dt = node.dtype or inp_node.dtype or DType.float32
-                for sz in split_attr:
-                    s_i = list(inp_node.shape_metadata)
-                    s_i[norm_ax] = (
-                        int(sz) if isinstance(sz, int) or str(sz).isdigit() else str(sz)
-                    )
-                    updated_output_specs.append(TensorSpec(shape=tuple(s_i), dtype=dt))
+                if isinstance(split_attr, (list, tuple)):
+                    for sz in split_attr:
+                        s_i = list(inp_node.shape_metadata)
+                        s_i[norm_ax] = (
+                            int(sz)
+                            if isinstance(sz, int) or str(sz).isdigit()
+                            else str(sz)
+                        )
+                        updated_output_specs.append(
+                            TensorSpec(shape=tuple(s_i), dtype=dt)
+                        )
+                else:
+                    for _ in node.outputs:
+                        updated_output_specs.append(
+                            TensorSpec(shape=tuple(inferred_shape), dtype=dt)
+                        )
 
-        new_node = LogicalNode(
-            id=node.id,
-            op_type=node.op_type,
-            domain=node.domain,
-            version=node.version,
-            inputs=list(node.inputs),
-            attributes=dict(node.attributes),
-            outputs=list(node.outputs) if node.outputs is not None else None,
+        new_nodes[node.id] = node.clone(
             shape_metadata=inferred_shape,
-            source_ast_ref=node.source_ast_ref,
-            sharding=node.sharding,
-            dtype=node.dtype,
             output_specs=updated_output_specs,
-            subgraphs=dict(node.subgraphs),
-            device=node.device,
-            stream=node.stream,
         )
-        new_nodes[node.id] = new_node
 
     return LogicalGraph(
         name=graph.name,

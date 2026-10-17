@@ -238,3 +238,15 @@ def test_extract_vgpr_helpers() -> None:
         outputs=["v20"],
     )
     assert _extract_dst_vgpr(node4) == 20
+
+    # Test that arbitrary SSA names containing digits (e.g. input_fp32) are not misparsed as VGPRs
+    node5 = LogicalNode(
+        id="n5",
+        op_type="V_ADD_F32",
+        domain="amd_rdna",
+        inputs=["input_fp32", "layer2_out"],
+        outputs=["output_fp16"],
+        attributes={"src_vgprs": ["not_a_vgpr_99"]},
+    )
+    assert _extract_vgpr_indices(node5) == []
+    assert _extract_dst_vgpr(node5) is None

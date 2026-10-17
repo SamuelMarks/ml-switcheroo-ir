@@ -546,3 +546,21 @@ def test_dce_and_cse_multi_output_and_self_edges() -> None:
     )
     prop_sp_n = propagate_shapes_and_constants(split_num_g)
     assert prop_sp_n.nodes["sp_n"].shape_metadata == (4, 15)
+    assert len(prop_sp_n.nodes["sp_n"].output_specs) == 2
+
+    # Multi-output Split with unshaped input
+    split_unshaped_g = LogicalGraph(
+        nodes={
+            "x_un": LogicalNode(id="x_un", op_type="Input"),
+            "sp_un": LogicalNode(
+                id="sp_un",
+                op_type="Split",
+                inputs=["x_un"],
+                outputs=["sp_un0", "sp_un1"],
+            ),
+        },
+        inputs=["x_un"],
+        outputs=["sp_un0", "sp_un1"],
+    )
+    prop_sp_un = propagate_shapes_and_constants(split_unshaped_g)
+    assert prop_sp_un.nodes["sp_un"].output_specs == []

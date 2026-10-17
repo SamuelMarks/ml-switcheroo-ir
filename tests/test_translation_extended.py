@@ -132,6 +132,11 @@ def test_permute_conv_weights() -> None:
     res_perm = engine.permute_conv_weights(t_perm, "OIHW", "HWOI")
     assert res_perm == ("weight_data", (2, 3, 0, 1))
 
+    # Real 4D nested list permutation: shape (2, 1, 1, 3) in OIHW -> (1, 3, 1, 2) in HWIO
+    nested_4d = [[[[10, 20, 30]]], [[[40, 50, 60]]]]
+    permuted_4d = engine.permute_conv_weights(nested_4d, "OIHW", "HWIO")
+    assert permuted_4d == [[[[10, 40]], [[20, 50]], [[30, 60]]]]
+
     # Fallback tuple
     res_fallback = engine.permute_conv_weights("raw_tensor", "OIHW", "HWIO")
     assert res_fallback == ("raw_tensor", (2, 3, 1, 0))

@@ -244,10 +244,21 @@ def test_collective_communication_schemas() -> None:
 
 def test_analytical_communication_cost_estimation() -> None:
     """Verify analytical communication volume calculation for collective operators."""
+    from ml_switcheroo_ir import DType
+
     mesh = LogicalMesh(shape={"data": 4, "model": 2})
 
     # Tensor shape: (1024, 1024), dtype float32 (4 bytes) -> 1,048,576 elements * 4 = 4,194,304 bytes (4 MB)
     # Ring all-reduce on 4 devices: 2 * ((4 - 1) / 4) * 4MB = 2 * 0.75 * 4MB = 6 MB = 6,291,456 bytes
+    ar_dtype_node = LogicalNode(
+        id="ar_dt",
+        op_type="collective.all_reduce",
+        domain="collective",
+        shape_metadata=(1024, 1024),
+        dtype=DType.float32,
+        attributes={"mesh_axis": "data"},
+    )
+    assert estimate_communication_volume(ar_dtype_node, mesh) == 6291456
     ar_node = LogicalNode(
         id="ar_cost",
         op_type="collective.all_reduce",

@@ -28,6 +28,9 @@ __all__ = [
 ]
 
 
+_VGPR_PATTERN = re.compile(r"^(?:v|vgpr)(\d+)$|^(\d+)$", re.IGNORECASE)
+
+
 def _extract_vgpr_indices(node: LogicalNode) -> list[int]:
     """Extract VGPR operand integer indices from a node.
 
@@ -45,12 +48,14 @@ def _extract_vgpr_indices(node: LogicalNode) -> list[int]:
                 if isinstance(item, int) and not isinstance(item, bool):
                     indices.append(item)
                 else:
-                    for digit in re.findall(r"\d+", str(item)):
-                        indices.append(int(digit))
+                    m = _VGPR_PATTERN.match(str(item).strip())
+                    if m:
+                        indices.append(int(m.group(1) or m.group(2)))
 
     for inp in node.inputs:
-        for digit in re.findall(r"\d+", str(inp)):
-            indices.append(int(digit))
+        m = _VGPR_PATTERN.match(str(inp).strip())
+        if m:
+            indices.append(int(m.group(1) or m.group(2)))
 
     return indices
 
@@ -70,11 +75,13 @@ def _extract_dst_vgpr(node: LogicalNode) -> int | None:
     if isinstance(dst, int) and not isinstance(dst, bool):
         return dst
     if dst is not None:
-        for digit in re.findall(r"\d+", str(dst)):
-            return int(digit)
+        m = _VGPR_PATTERN.match(str(dst).strip())
+        if m:
+            return int(m.group(1) or m.group(2))
     for out in node.outputs:
-        for digit in re.findall(r"\d+", str(out)):
-            return int(digit)
+        m = _VGPR_PATTERN.match(str(out).strip())
+        if m:
+            return int(m.group(1) or m.group(2))
     return None
 
 

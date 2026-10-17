@@ -73,3 +73,25 @@ def test_get_producing_output_index() -> None:
     assert graph.get_producing_output_index("non_existent_output") is None
     assert graph.get_producing_output_index("missing_node:0") is None
     assert graph.get_producing_output_index("split_node:not_int") is None
+
+    # 5. Cache invalidation when node.outputs is mutated in-place (same node count)
+    split.outputs = ["new_part_a", "new_part_b"]
+    assert graph.get_producing_output_index("part_a") is None
+    res_mut = graph.get_producing_output_index("new_part_b")
+    assert res_mut is not None
+    assert res_mut[0] is split
+    assert res_mut[1] == 1
+
+    # 6. Cache invalidation when a node is replaced in-place in graph.nodes (same len)
+    replacement_split = LogicalNode(
+        id="split_node", op_type="Split", outputs=["rep_0", "rep_1"]
+    )
+    graph.nodes["split_node"] = replacement_split
+    assert graph.get_producing_output_index("new_part_b") is None
+    res_rep = graph.get_producing_output_index("rep_0")
+    assert res_rep is not None
+    assert res_rep[0] is replacement_split
+    assert res_rep[1] == 0
+    assert DType.float32.itemsize == 4.0
+    assert DType.int4.itemsize == 0.5
+    assert DType.string.itemsize == 4.0

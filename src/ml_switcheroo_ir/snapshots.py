@@ -21,13 +21,13 @@ def get_default_snapshots_dir() -> str:
     Returns:
         str: Absolute path to snapshot directory.
     """
-    env_eco = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
-    if env_eco and os.path.isdir(env_eco):
-        return os.path.abspath(env_eco)
-
     env_fw = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR")
     if env_fw and os.path.isdir(env_fw):
         return os.path.abspath(env_fw)
+
+    env_eco = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
+    if env_eco and os.path.isdir(env_eco):
+        return os.path.abspath(env_eco)
 
     sibling_fw = os.path.abspath(
         os.path.join(

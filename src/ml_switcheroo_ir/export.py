@@ -262,6 +262,7 @@ export interface LogicalNode {
   inputs?: string[];
   outputs?: string[];
   shape_metadata?: DimensionType[] | null;
+  source_ast_ref?: string | null;
   dtype?: DType | null;
   output_specs?: TensorSpec[];
   subgraphs?: Record<string, LogicalGraph>;
@@ -269,6 +270,8 @@ export interface LogicalNode {
   stream?: string | null;
   sharding?: PartitionSpec | null;
   subgraph?: LogicalGraph | null;
+  kind?: string;
+  metadata?: Record<string, AttributeValue>;
 }
 
 export interface ZeroTangent extends LogicalNode {
@@ -304,6 +307,8 @@ export interface SnapshotEnvelope {
   generated_at: string;
   environment?: Record<string, string>;
   categories?: Record<string, unknown>;
+  operations?: unknown[] | null;
+  instructions?: unknown[] | null;
 }
 """
     )
@@ -375,17 +380,18 @@ def _format_tensor_spec(spec: TensorSpec) -> str:
     )
 
 
-def _format_graph_expr(graph: LogicalGraph, indent: int = 8) -> str:
+def _format_graph_expr(graph: LogicalGraph, indent: int = 0) -> str:
     """Format a nested LogicalGraph into a Python expression string.
 
     Args:
         graph (LogicalGraph): Nested subgraph to serialize.
-        indent (int): Indentation level in spaces.
+        indent (int): Leading indentation level in spaces.
 
     Returns:
         str: Executable Python expression reconstructing the subgraph.
     """
-    return f"sw_ir.LogicalGraph.from_dict({graph.to_dict()!r})"
+    prefix = " " * max(0, indent)
+    return f"{prefix}sw_ir.LogicalGraph.from_dict({graph.to_dict()!r})"
 
 
 def _sanitize_python_identifier(name: str, fallback: str = "build_graph") -> str:

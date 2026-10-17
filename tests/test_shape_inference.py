@@ -310,8 +310,14 @@ def test_shape_tracker_inference_and_feedback() -> None:
     assert t2.solve()["dim_p"] == 16
     assert t2.solve()["dim_n"] == 32
 
-    # broadcast_dimension between two dynamic expressions without tracker
-    assert broadcast_dimension("dim_foo", "dim_bar", tracker=None) == "dim_foo"
+    # broadcast_dimension between two distinct dynamic expressions without tracker raises ShapeMismatchError
+    with pytest.raises(ShapeMismatchError, match="Incompatible dimensions"):
+        broadcast_dimension("dim_foo", "dim_bar", tracker=None)
+
+    # ShapeTracker.update_from_feedback with 1D symbolic binding records equality on tracker
+    t_1d = SymbolicConstraintTracker()
+    ShapeTracker.update_from_feedback({"batch_dim": [64], "123": [32]}, tracker=t_1d)
+    assert t_1d.solve()["batch_dim"] == 64
 
     # ShapeTracker with list-based graph nodes and unobserved node skipped
     class _ListGraphContainer:

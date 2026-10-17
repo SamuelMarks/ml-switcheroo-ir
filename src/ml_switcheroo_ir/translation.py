@@ -10,8 +10,8 @@ import os
 from typing import Any, Protocol, Union, runtime_checkable
 from typing_extensions import TypeAlias
 
+from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR
 from ml_switcheroo_ir.types import AttributeValue
-from ml_switcheroo_ir.validator import DEFAULT_SNAPSHOT_DIR
 
 _logger = logging.getLogger(__name__)
 
@@ -554,6 +554,41 @@ class ParameterTranslationEngine:
         permute_fn = getattr(weights, "permute", None)
         if callable(permute_fn):
             return permute_fn(tuple(perm))
+        if (
+            isinstance(weights, (list, tuple))
+            and len(weights) > 0
+            and isinstance(weights[0], (list, tuple))
+            and len(weights[0]) > 0
+            and isinstance(weights[0][0], (list, tuple))
+            and len(weights[0][0]) > 0
+            and isinstance(weights[0][0][0], (list, tuple))
+        ):
+            dims = [
+                len(weights),
+                len(weights[0]),
+                len(weights[0][0]),
+                len(weights[0][0][0]),
+            ]
+            out_dims = [dims[p] for p in perm]
+            out_4d: list[list[list[list[Any]]]] = []
+            for i0 in range(out_dims[0]):
+                plane1: list[list[list[Any]]] = []
+                for i1 in range(out_dims[1]):
+                    plane2: list[list[Any]] = []
+                    for i2 in range(out_dims[2]):
+                        row: list[Any] = []
+                        for i3 in range(out_dims[3]):
+                            out_idx = [i0, i1, i2, i3]
+                            src_idx = [0, 0, 0, 0]
+                            for d_idx, p_axis in enumerate(perm):
+                                src_idx[p_axis] = out_idx[d_idx]
+                            row.append(
+                                weights[src_idx[0]][src_idx[1]][src_idx[2]][src_idx[3]]
+                            )
+                        plane2.append(row)
+                    plane1.append(plane2)
+                out_4d.append(plane1)
+            return out_4d
         return (weights, tuple(perm))
 
     def split_qkv_weights(

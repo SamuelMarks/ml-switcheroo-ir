@@ -97,12 +97,22 @@ const graph: LogicalGraph = {
 def test_typescript_missing_tsc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test that missing tsc compiler triggers pytest.fail.
+    """Test that missing tsc compiler triggers pytest.fail and verify TS/JSON schema field parity.
 
     Args:
         tmp_path (Path): Pytest temporary path fixture.
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
+    from ml_switcheroo_ir.export import get_json_schema
+
+    ts_defs = generate_typescript_definitions()
+    for schema_name in ("LogicalGraph", "LogicalNode", "SnapshotEnvelope"):
+        json_schema = get_json_schema(schema_name)
+        props = json_schema.get("properties", {})
+        assert isinstance(props, dict)
+        for prop_name in props:
+            assert prop_name in ts_defs
+
     monkeypatch.setattr(shutil, "which", lambda cmd: None)
     with pytest.raises(
         pytest.fail.Exception, match="TypeScript compiler .* is required"

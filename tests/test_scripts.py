@@ -1934,3 +1934,25 @@ def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
             resolve_snapshots_path(ws_pop / "ml-framework-snapshots")
             == pop_sibling.resolve()
         )
+
+        ws_empty_fw = tmp_path / "ws_empty_fw"
+        empty_fw_sibling = (
+            ws_empty_fw
+            / "ml-ecosystem-snapshots"
+            / "src"
+            / "ml_framework_snapshots"
+            / "snapshots"
+        )
+        empty_fw_sibling.mkdir(parents=True, exist_ok=True)
+        fake_snapshots_file = (
+            ws_empty_fw
+            / "ml-switcheroo-ir"
+            / "src"
+            / "ml_switcheroo_ir"
+            / "snapshots.py"
+        )
+        with patch("ml_switcheroo_ir.snapshots.__file__", str(fake_snapshots_file)):
+            assert (
+                resolve_snapshots_path(ws_empty_fw / "ml-framework-snapshots")
+                == Path(DEFAULT_SNAPSHOT_DIR).resolve()
+            )
