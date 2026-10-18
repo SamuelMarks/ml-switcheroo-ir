@@ -36,6 +36,7 @@ from ml_switcheroo_ir.types import AttributeValue, DType, TensorSpec
 
 SIDE_EFFECT_OPS: set[str] = {
     "Print",
+    "Output",
     "custom_call",
     "storageStore",
     "atomicAdd",
@@ -50,13 +51,25 @@ SIDE_EFFECT_OPS: set[str] = {
     "textureStore",
 }
 
+NON_DETERMINISTIC_OPS: set[str] = {
+    "Input",
+    "rng_bit_generator",
+    "Dropout",
+    "RandomUniform",
+    "RandomNormal",
+    "RandomUniformLike",
+    "RandomNormalLike",
+    "Multinomial",
+    "Bernoulli",
+}
+
 
 def _is_side_effecting_node(node: LogicalNode, include_sources: bool = False) -> bool:
     """Return True if a node has side effects, state mutation, or collective semantics.
 
     Args:
         node (LogicalNode): Node to inspect.
-        include_sources (bool): Whether to also treat Input and rng_bit_generator as impure.
+        include_sources (bool): Whether to also treat Input and non-deterministic RNG ops as impure.
 
     Returns:
         bool: True if the node cannot be eliminated or merged.
@@ -77,8 +90,47 @@ def _is_side_effecting_node(node: LogicalNode, include_sources: bool = False) ->
         )
     )
     if include_sources:
-        return is_effect or node.op_type in ("Input", "rng_bit_generator")
+        return is_effect or node.op_type in NON_DETERMINISTIC_OPS
     return is_effect
+
+
+def _resolve_input_shape(
+    inp_id: str,
+    new_nodes: dict[str, LogicalNode],
+) -> tuple[DimensionType, ...] | None:
+    """Resolve the tensor shape for an input identifier or multi-output SSA port name.
+
+    Checks direct node IDs in ``new_nodes`` first, then resolves multi-output SSA
+    names (or ``node_id:port_idx`` references) against ``producer.output_specs``.
+
+    Args:
+        inp_id (str): Input node ID or SSA value name.
+        new_nodes (dict[str, LogicalNode]): Map of processed preceding nodes.
+
+    Returns:
+        tuple[DimensionType, ...] | None: Resolved input shape tuple or None.
+    """
+    direct = new_nodes.get(inp_id)
+    if direct is not None:
+        if isinstance(direct.shape_metadata, (list, tuple)):
+            return tuple(direct.shape_metadata)
+        return None
+
+    node_part, sep, idx_part = inp_id.rpartition(":")
+    if sep and node_part in new_nodes and idx_part.isdigit():
+        prod = new_nodes[node_part]
+        port_idx = int(idx_part)
+        if 0 <= port_idx < len(prod.output_specs):
+            return tuple(prod.output_specs[port_idx].shape)
+        if isinstance(prod.shape_metadata, (list, tuple)):
+            return tuple(prod.shape_metadata)
+
+    for prod in new_nodes.values():
+        if inp_id in prod.outputs:
+            port_idx = prod.outputs.index(inp_id)
+            if 0 <= port_idx < len(prod.output_specs):
+                return tuple(prod.output_specs[port_idx].shape)
+    return None
 
 
 def _is_ssa_live(
@@ -327,9 +379,7 @@ def _propagate_unary_op(
         tuple[DimensionType, ...] | None: Propagated shape or None if unshaped.
     """
     if node.inputs:
-        inp = new_nodes.get(node.inputs[0])
-        if inp is not None and isinstance(inp.shape_metadata, (list, tuple)):
-            return tuple(inp.shape_metadata)
+        return _resolve_input_shape(node.inputs[0], new_nodes)
     return None
 
 
@@ -349,17 +399,10 @@ def _propagate_binary_op(
         tuple[DimensionType, ...] | None: Broadcasted shape or None if inputs are unshaped.
     """
     if len(node.inputs) >= 2:
-        inp1 = new_nodes.get(node.inputs[0])
-        inp2 = new_nodes.get(node.inputs[1])
-        if (
-            inp1 is not None
-            and inp2 is not None
-            and isinstance(inp1.shape_metadata, (list, tuple))
-            and isinstance(inp2.shape_metadata, (list, tuple))
-        ):
-            return broadcast_shapes(
-                inp1.shape_metadata, inp2.shape_metadata, tracker=tracker
-            )
+        s1 = _resolve_input_shape(node.inputs[0], new_nodes)
+        s2 = _resolve_input_shape(node.inputs[1], new_nodes)
+        if s1 is not None and s2 is not None:
+            return broadcast_shapes(s1, s2, tracker=tracker)
     return None
 
 
@@ -376,15 +419,10 @@ def _propagate_matmul_op(
         tuple[DimensionType, ...] | None: Resulting matmul shape or None if unshaped.
     """
     if len(node.inputs) >= 2:
-        inp1 = new_nodes.get(node.inputs[0])
-        inp2 = new_nodes.get(node.inputs[1])
-        if (
-            inp1 is not None
-            and inp2 is not None
-            and isinstance(inp1.shape_metadata, (list, tuple))
-            and isinstance(inp2.shape_metadata, (list, tuple))
-        ):
-            return matmul_shape(inp1.shape_metadata, inp2.shape_metadata)
+        s1 = _resolve_input_shape(node.inputs[0], new_nodes)
+        s2 = _resolve_input_shape(node.inputs[1], new_nodes)
+        if s1 is not None and s2 is not None:
+            return matmul_shape(s1, s2)
     return None
 
 
@@ -625,11 +663,13 @@ def _propagate_split_op(
 
     Returns:
         tuple[DimensionType, ...] | None: Shape of first output partition or None.
+
+    Raises:
+        ValueError: If a concrete dimension is not evenly divisible by num_outputs.
     """
     if node.inputs:
-        inp = new_nodes.get(node.inputs[0])
-        if inp is not None and isinstance(inp.shape_metadata, (list, tuple)):
-            s = tuple(inp.shape_metadata)
+        s = _resolve_input_shape(node.inputs[0], new_nodes)
+        if s is not None:
             axis_val = node.attributes.get("axis", 0)
             axis = int(axis_val) if isinstance(axis_val, (int, str)) else 0
             norm_axis = normalize_axis(axis, len(s))
@@ -651,6 +691,11 @@ def _propagate_split_op(
             else:
                 dim_val = s[norm_axis]
                 if isinstance(dim_val, int):
+                    if dim_val % num_outputs != 0:
+                        raise ValueError(
+                            f"Split dimension {dim_val} along axis {norm_axis} in node '{node.id}' "
+                            f"is not evenly divisible by num_outputs={num_outputs}."
+                        )
                     first_split = dim_val // num_outputs
                 else:
                     first_split = SymBinaryOp(
@@ -787,6 +832,9 @@ def _propagate_reshape_op(
 ) -> tuple[DimensionType, ...] | None:
     """Propagate output shape and validate element count for Reshape operations.
 
+    Supports ONNX 0-dimension copy semantics (copying corresponding input dimension
+    when ``allowzero=0``) and guards against division by zero.
+
     Args:
         node (LogicalNode): Current Reshape node.
         new_nodes (dict[str, LogicalNode]): Map of processed preceding nodes.
@@ -795,30 +843,27 @@ def _propagate_reshape_op(
         tuple[DimensionType, ...] | None: Resolved target shape or None.
 
     Raises:
-        ValueError: If multiple -1 dimensions exist or static element counts mismatch.
+        ValueError: If multiple -1 dimensions exist, 0-dim is out of bounds, or static element counts mismatch.
     """
     if not node.inputs:
         return None
-    inp_node = new_nodes.get(node.inputs[0])
+    inp_shape = _resolve_input_shape(node.inputs[0], new_nodes)
     target_shape_attr = node.attributes.get("shape")
     if target_shape_attr is None:
         target_shape_attr = node.attributes.get("new_shape")
-    if (
-        inp_node is None
-        or not isinstance(inp_node.shape_metadata, (list, tuple))
-        or not isinstance(target_shape_attr, (list, tuple))
-    ):
+    if inp_shape is None or not isinstance(target_shape_attr, (list, tuple)):
         return None
 
     in_numel = 1
     all_concrete = True
-    for d in inp_node.shape_metadata:
-        if isinstance(d, int) and d > 0:
+    for d in inp_shape:
+        if isinstance(d, int) and not isinstance(d, bool) and d > 0:
             in_numel *= d
         else:
             all_concrete = False
             break
 
+    allowzero = bool(node.attributes.get("allowzero", 0))
     resolved_dims: list[DimensionType] = []
     neg_idx = -1
     target_known_numel = 1
@@ -831,11 +876,28 @@ def _propagate_reshape_op(
                 )
             neg_idx = idx
             resolved_dims.append(-1)
-        elif isinstance(d, int):
+        elif d == 0 and not allowzero:
+            if idx >= len(inp_shape):
+                raise ValueError(
+                    f"Reshape in node '{node.id}' cannot copy dimension 0 at index {idx} "
+                    f"from input of rank {len(inp_shape)}."
+                )
+            copied_d = inp_shape[idx]
+            resolved_dims.append(copied_d)
+            if isinstance(copied_d, int) and not isinstance(copied_d, bool):
+                target_known_numel *= copied_d
+            else:
+                all_concrete = False
+        elif isinstance(d, int) and not isinstance(d, bool):
+            if d <= 0:
+                raise ValueError(
+                    f"Reshape in node '{node.id}' has invalid non-positive dimension {d}."
+                )
             target_known_numel *= d
             resolved_dims.append(d)
         else:
-            resolved_dims.append(str(d))
+            all_concrete = False
+            resolved_dims.append(d if isinstance(d, (SymNode, SymInt)) else str(d))
 
     if all_concrete and neg_idx != -1:
         if in_numel % target_known_numel != 0:
@@ -864,23 +926,29 @@ def _propagate_transpose_op(
 
     Returns:
         tuple[DimensionType, ...] | None: Permuted shape or None.
+
+    Raises:
+        ValueError: If perm has matching length but contains duplicate or out-of-range axes.
     """
     if node.inputs:
-        inp_node = new_nodes.get(node.inputs[0])
+        inp_shape = _resolve_input_shape(node.inputs[0], new_nodes)
         perm = node.attributes.get("perm")
         if (
-            inp_node is not None
-            and isinstance(inp_node.shape_metadata, (list, tuple))
+            inp_shape is not None
             and isinstance(perm, (list, tuple))
-            and len(perm) == len(inp_node.shape_metadata)
+            and len(perm) == len(inp_shape)
         ):
-            return tuple(
-                inp_node.shape_metadata[p]
+            rank = len(inp_shape)
+            valid_perm: list[int] = [
+                p
                 for p in perm
-                if isinstance(p, int)
-                and not isinstance(p, bool)
-                and 0 <= p < len(inp_node.shape_metadata)
-            )
+                if isinstance(p, int) and not isinstance(p, bool) and 0 <= p < rank
+            ]
+            if len(valid_perm) != rank or len(set(valid_perm)) != rank:
+                raise ValueError(
+                    f"Invalid Transpose permutation {list(perm)} for rank {rank} in node '{node.id}'."
+                )
+            return tuple(inp_shape[p] for p in valid_perm)
     return None
 
 

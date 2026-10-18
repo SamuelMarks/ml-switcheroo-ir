@@ -2,31 +2,42 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+from pathlib import Path
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
-from ml_switcheroo_ir.export import generate_typescript_definitions
+from ml_switcheroo_ir import (
+    LogicalEdge,
+    LogicalGraph,
+    LogicalMesh,
+    LogicalNode,
+    PartitionSpec,
+    PipelineTopologyConfig,
+    TensorSpec,
+    WebRTCSignalingTopology,
+)
+from ml_switcheroo_ir.export import generate_typescript_definitions, get_json_schema
+from ml_switcheroo_ir.schema.ghost import SnapshotEnvelope
 
 
-def test_typescript_definitions_compile(tmp_path: Path) -> None:
-    """Validate that generate_typescript_definitions compiles without error using tsc.
+def _verify_ts_compilation(work_dir: Path) -> None:
+    """Compile generated TypeScript definitions and sample consumer code using tsc.
 
     Args:
-        tmp_path (Path): Pytest temporary directory fixture.
+        work_dir (Path): Working directory for temporary TypeScript files.
     """
     tsc_path = shutil.which("tsc")
     if tsc_path is None:
         pytest.fail("TypeScript compiler (tsc) is required for schema validation.")
 
     ts_code = generate_typescript_definitions()
-    ts_file = tmp_path / "schema.d.ts"
+    ts_file = work_dir / "schema.d.ts"
     ts_file.write_text(ts_code, encoding="utf-8")
 
-    # Add a sample usage test file to ensure interfaces are sound
-    consumer_file = tmp_path / "consumer.ts"
+    consumer_file = work_dir / "consumer.ts"
     consumer_code = """
 import {
   LogicalGraph,
@@ -90,31 +101,63 @@ const graph: LogicalGraph = {
         check=False,
     )
     assert result.returncode == 0, (
-        f"tsc validation failed:\n{result.stdout}\n{result.stderr}"
+        f"tsc validation failed: {result.stdout} {result.stderr}"
     )
 
 
-def test_typescript_missing_tsc(
+def test_typescript_definitions_compile(tmp_path: Path) -> None:
+    """Validate that generate_typescript_definitions compiles without error using tsc.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
+    _verify_ts_compilation(tmp_path)
+
+
+def test_typescript_missing_tsc_and_structural_parity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test that missing tsc compiler triggers pytest.fail and verify TS/JSON schema field parity.
+    """Test missing tsc failure handling and verify TypeScript/Python field parity across all IR models.
 
     Args:
         tmp_path (Path): Pytest temporary path fixture.
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
-    from ml_switcheroo_ir.export import get_json_schema
-
     ts_defs = generate_typescript_definitions()
-    for schema_name in ("LogicalGraph", "LogicalNode", "SnapshotEnvelope"):
+    for schema_name in (
+        "LogicalGraph",
+        "LogicalNode",
+        "SnapshotEnvelope",
+        "PipelineTopologyConfig",
+        "WebRTCSignalingTopology",
+    ):
         json_schema = get_json_schema(schema_name)
         props = json_schema.get("properties", {})
         assert isinstance(props, dict)
         for prop_name in props:
             assert prop_name in ts_defs
 
+    for dc_cls in (
+        LogicalGraph,
+        LogicalNode,
+        LogicalEdge,
+        LogicalMesh,
+        PartitionSpec,
+        TensorSpec,
+    ):
+        for f in fields(dc_cls):
+            assert f.name in ts_defs
+
+    for pyd_cls in (
+        SnapshotEnvelope,
+        PipelineTopologyConfig,
+        WebRTCSignalingTopology,
+    ):
+        for field_name in pyd_cls.model_fields:
+            assert field_name in ts_defs
+
     monkeypatch.setattr(shutil, "which", lambda cmd: None)
     with pytest.raises(
         pytest.fail.Exception, match="TypeScript compiler .* is required"
     ):
-        test_typescript_definitions_compile(tmp_path)
+        _verify_ts_compilation(tmp_path)

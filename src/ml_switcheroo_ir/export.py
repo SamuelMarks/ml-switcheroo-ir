@@ -71,10 +71,14 @@ def get_json_schema(target: str = "LogicalGraph") -> dict[str, Any]:
         schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
         return schema
     if target_clean == "ZeroTangent":
+        from ml_switcheroo_ir import sentinels as _sentinels  # noqa: F401
+
         schema = TypeAdapter(ZeroTangent).json_schema()
         schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
         return schema
     if target_clean == "NoTangent":
+        from ml_switcheroo_ir import sentinels as _sentinels  # noqa: F401
+
         schema = TypeAdapter(NoTangent).json_schema()
         schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
         return schema

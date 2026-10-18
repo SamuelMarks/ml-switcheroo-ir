@@ -305,16 +305,37 @@ def validate_sharding_propagation_graph(
                 and node0.sharding is not None
                 and node1.sharding is not None
             ):
-                contract_axis_0 = (
-                    node0.sharding.axes[-1] if len(node0.sharding.axes) >= 1 else None
-                )
-                contract_axis_1 = (
-                    node1.sharding.axes[-2]
-                    if len(node1.sharding.axes) >= 2
-                    else node1.sharding.axes[0]
-                    if len(node1.sharding.axes) >= 1
-                    else None
-                )
+                trans_a = bool(node.attributes.get("transA", 0))
+                trans_b = bool(node.attributes.get("transB", 0))
+                if trans_a:
+                    contract_axis_0 = (
+                        node0.sharding.axes[-2]
+                        if len(node0.sharding.axes) >= 2
+                        else node0.sharding.axes[0]
+                        if len(node0.sharding.axes) >= 1
+                        else None
+                    )
+                else:
+                    contract_axis_0 = (
+                        node0.sharding.axes[-1]
+                        if len(node0.sharding.axes) >= 1
+                        else None
+                    )
+
+                if trans_b:
+                    contract_axis_1 = (
+                        node1.sharding.axes[-1]
+                        if len(node1.sharding.axes) >= 1
+                        else None
+                    )
+                else:
+                    contract_axis_1 = (
+                        node1.sharding.axes[-2]
+                        if len(node1.sharding.axes) >= 2
+                        else node1.sharding.axes[0]
+                        if len(node1.sharding.axes) >= 1
+                        else None
+                    )
                 if (
                     contract_axis_0 is not None
                     and contract_axis_1 is not None
@@ -339,7 +360,9 @@ def validate_sharding_propagation_graph(
             and len(node.inputs) >= 1
         ):
             reduced_axes = node.attributes.get("axes")
-            inp_node = graph.nodes.get(node.inputs[0])
+            inp_node = graph.nodes.get(node.inputs[0]) or graph.get_output_producer(
+                node.inputs[0]
+            )
             if (
                 isinstance(reduced_axes, (list, tuple))
                 and inp_node is not None
@@ -408,7 +431,9 @@ def validate_sharding_propagation_graph(
                 and str(mesh_axis) in graph.mesh.shape
                 and node.inputs
             ):
-                inp_node = graph.nodes.get(node.inputs[0])
+                inp_node = graph.nodes.get(node.inputs[0]) or graph.get_output_producer(
+                    node.inputs[0]
+                )
                 partition_factor = graph.mesh.shape[str(mesh_axis)]
                 if (
                     inp_node is not None
@@ -449,7 +474,9 @@ def validate_sharding_propagation_graph(
                 and str(mesh_axis) in graph.mesh.shape
                 and node.inputs
             ):
-                inp_node = graph.nodes.get(node.inputs[0])
+                inp_node = graph.nodes.get(node.inputs[0]) or graph.get_output_producer(
+                    node.inputs[0]
+                )
                 partition_factor = graph.mesh.shape[str(mesh_axis)]
                 if (
                     inp_node is not None

@@ -140,3 +140,44 @@ def test_graph_edges_setter_synchronization() -> None:
     ]
     assert graph.nodes["split"].inputs == []
     assert graph.nodes["cons"].inputs == ["s1", "external_input"]
+
+
+def test_add_edge_multi_port_value_name_and_nodedict_mutations() -> None:
+    """Test add_edge with source_idx, target_idx, value_name, and NodeDict mutation methods."""
+    split_node = LogicalNode(id="split", op_type="Split", outputs=["s0", "s1"])
+    add_node = LogicalNode(id="add", op_type="Add")
+    sub_graph = LogicalGraph(
+        name="SubG",
+        nodes={"sub_in": LogicalNode(id="sub_in", op_type="Input")},
+    )
+    if_node = LogicalNode(
+        id="if_node",
+        op_type="If",
+        subgraphs={"then_branch": sub_graph, "attr_meta": "scalar_meta"},
+    )
+    graph = LogicalGraph(
+        nodes={"split": split_node, "add": add_node, "if_node": if_node}
+    )
+
+    graph.add_edge("split", "add", source_idx=1, target_idx=0, value_name="s1")
+    graph.add_edge("ext_src", "add", source_idx=0, target_idx=1, value_name="ext_ssa")
+    assert add_node.inputs == ["s1", "ext_ssa"]
+    assert any(e.value_name == "s1" for e in graph.edges)
+
+    cloned = graph.clone()
+    assert any(e.value_name == "s1" for e in cloned.edges)
+    dumped = graph.to_dict(format="canonical")
+    assert dumped["nodes"]["if_node"]["subgraphs"]["attr_meta"] == "scalar_meta"
+    assert "edges" in dumped["nodes"]["if_node"]["subgraphs"]["then_branch"]
+    restored = LogicalGraph.from_dict(dumped)
+    assert any(e.value_name == "s1" for e in restored.edges)
+
+    # NodeDict mutation methods: __delitem__, pop, update, clear
+    del cloned.nodes["if_node"]
+    assert "if_node" not in cloned.nodes
+    popped = cloned.nodes.pop("add")
+    assert popped.id == "add"
+    cloned.nodes.update({"new_n": LogicalNode(id="new_n", op_type="Relu")})
+    assert "new_n" in cloned.nodes
+    cloned.nodes.clear()
+    assert len(cloned.nodes) == 0

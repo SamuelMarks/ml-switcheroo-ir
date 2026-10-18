@@ -564,3 +564,154 @@ def test_dce_and_cse_multi_output_and_self_edges() -> None:
     )
     prop_sp_un = propagate_shapes_and_constants(split_unshaped_g)
     assert prop_sp_un.nodes["sp_un"].output_specs == []
+
+    # Multi-output Split port resolution via node_id:port and named outputs
+    from ml_switcheroo_ir import DType, TensorSpec
+
+    split_multi_g = LogicalGraph(
+        nodes={
+            "x_in": LogicalNode(id="x_in", op_type="Input", shape_metadata=(6, 4)),
+            "sp": LogicalNode(
+                id="sp",
+                op_type="Split",
+                inputs=["x_in"],
+                outputs=["s0", "s1"],
+                output_specs=[
+                    TensorSpec((2, 4), DType.float32),
+                    TensorSpec((4, 4), DType.float32),
+                ],
+                attributes={"axis": 0, "split": [2, 4]},
+            ),
+            "r_named": LogicalNode(id="r_named", op_type="Relu", inputs=["s1"]),
+            "r_colon": LogicalNode(id="r_colon", op_type="Relu", inputs=["sp:1"]),
+            "sp_no_specs": LogicalNode(
+                id="sp_no_specs",
+                op_type="Split",
+                inputs=["x_in"],
+                outputs=["ns0", "ns1"],
+                attributes={"axis": 0, "num_outputs": 2},
+            ),
+            "r_colon_fallback": LogicalNode(
+                id="r_colon_fallback", op_type="Relu", inputs=["sp_no_specs:5"]
+            ),
+            "sp_unshaped": LogicalNode(
+                id="sp_unshaped",
+                op_type="CustomMulti",
+                outputs=["u0", "u1"],
+            ),
+            "r_unshaped_colon": LogicalNode(
+                id="r_unshaped_colon", op_type="Relu", inputs=["sp_unshaped:1"]
+            ),
+            "r_unshaped_named": LogicalNode(
+                id="r_unshaped_named", op_type="Relu", inputs=["u1"]
+            ),
+        },
+        inputs=["x_in"],
+        outputs=[
+            "r_named",
+            "r_colon",
+            "r_colon_fallback",
+            "r_unshaped_colon",
+            "r_unshaped_named",
+        ],
+    )
+    prop_multi = propagate_shapes_and_constants(split_multi_g)
+    assert prop_multi.nodes["r_named"].shape_metadata == (4, 4)
+    assert prop_multi.nodes["r_colon"].shape_metadata == (4, 4)
+    assert prop_multi.nodes["r_colon_fallback"].shape_metadata == (3, 4)
+    assert prop_multi.nodes["r_unshaped_colon"].shape_metadata is None
+    assert prop_multi.nodes["r_unshaped_named"].shape_metadata is None
+
+    # Indivisible Split raises ValueError
+    indiv_split_g = LogicalGraph(
+        nodes={
+            "x_in": LogicalNode(id="x_in", op_type="Input", shape_metadata=(5, 4)),
+            "sp_bad": LogicalNode(
+                id="sp_bad",
+                op_type="Split",
+                inputs=["x_in"],
+                outputs=["b0", "b1"],
+                attributes={"axis": 0, "num_outputs": 2},
+            ),
+        },
+        inputs=["x_in"],
+        outputs=["b0", "b1"],
+    )
+    with pytest.raises(ValueError, match="not evenly divisible"):
+        propagate_shapes_and_constants(indiv_split_g)
+
+    # Reshape with 0-dim copy semantics (concrete and symbolic) and error cases
+    reshape_0_g = LogicalGraph(
+        nodes={
+            "x_in": LogicalNode(id="x_in", op_type="Input", shape_metadata=(4, 6)),
+            "r0": LogicalNode(
+                id="r0",
+                op_type="Reshape",
+                inputs=["x_in"],
+                attributes={"shape": [0, 3, -1]},
+            ),
+            "x_sym": LogicalNode(id="x_sym", op_type="Input", shape_metadata=("B", 6)),
+            "r0_sym": LogicalNode(
+                id="r0_sym",
+                op_type="Reshape",
+                inputs=["x_sym"],
+                attributes={"shape": [0, 2, 3]},
+            ),
+        },
+        inputs=["x_in", "x_sym"],
+        outputs=["r0", "r0_sym"],
+    )
+    prop_r0 = propagate_shapes_and_constants(reshape_0_g)
+    assert prop_r0.nodes["r0"].shape_metadata == (4, 3, 2)
+    assert prop_r0.nodes["r0_sym"].shape_metadata == ("B", 2, 3)
+
+    # Reshape 0-dim out of bounds
+    reshape_oob_g = LogicalGraph(
+        nodes={
+            "x_in": LogicalNode(id="x_in", op_type="Input", shape_metadata=(4,)),
+            "r_oob": LogicalNode(
+                id="r_oob",
+                op_type="Reshape",
+                inputs=["x_in"],
+                attributes={"shape": [4, 0]},
+            ),
+        },
+        inputs=["x_in"],
+        outputs=["r_oob"],
+    )
+    with pytest.raises(ValueError, match="cannot copy dimension 0"):
+        propagate_shapes_and_constants(reshape_oob_g)
+
+    # Reshape negative dimension != -1
+    reshape_neg_g = LogicalGraph(
+        nodes={
+            "x_in": LogicalNode(id="x_in", op_type="Input", shape_metadata=(4, 6)),
+            "r_neg": LogicalNode(
+                id="r_neg",
+                op_type="Reshape",
+                inputs=["x_in"],
+                attributes={"shape": [-2, 12]},
+            ),
+        },
+        inputs=["x_in"],
+        outputs=["r_neg"],
+    )
+    with pytest.raises(ValueError, match="invalid non-positive dimension"):
+        propagate_shapes_and_constants(reshape_neg_g)
+
+    # Invalid Transpose permutation raises ValueError
+    bad_trans_g = LogicalGraph(
+        nodes={
+            "x_in": LogicalNode(id="x_in", op_type="Input", shape_metadata=(4, 6)),
+            "t_bad": LogicalNode(
+                id="t_bad",
+                op_type="Transpose",
+                inputs=["x_in"],
+                attributes={"perm": [0, 0]},
+            ),
+        },
+        inputs=["x_in"],
+        outputs=["t_bad"],
+    )
+    with pytest.raises(ValueError, match="Invalid Transpose permutation"):
+        propagate_shapes_and_constants(bad_trans_g)

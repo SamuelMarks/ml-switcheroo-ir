@@ -85,12 +85,19 @@ class SymbolicConstraintTracker:
 
         Returns:
             int | None: Resolved integer constant or None.
+
+        Raises:
+            TypeError: If dim is a boolean value.
         """
+        if isinstance(dim, bool):
+            raise TypeError(f"Boolean value {dim!r} is not a valid dimension bound.")
         if isinstance(dim, int):
             return dim
         if isinstance(dim, SymConst):
             return dim.value
-        if key.isdigit():
+        if isinstance(dim, (SymNode, SymInt)) and dim.is_constant:
+            return dim.eval({})
+        if key.lstrip("-").isdigit():
             return int(key)
         return self._const_map.get(root)
 
@@ -104,6 +111,8 @@ class SymbolicConstraintTracker:
         Returns:
             bool: True if unit dimension.
         """
+        if isinstance(dim, bool):
+            return False
         return (
             (isinstance(dim, int) and dim == 1)
             or (isinstance(dim, SymConst) and dim.value == 1)
@@ -122,8 +131,11 @@ class SymbolicConstraintTracker:
             b (int | str | SymNode | SymInt): Second dimension.
 
         Raises:
+            TypeError: If either dimension is a boolean value.
             ShapeMismatchError: If the recorded equality causes a contradiction.
         """
+        if isinstance(a, bool) or isinstance(b, bool):
+            raise TypeError("Boolean values are not valid tensor dimensions.")
         if isinstance(a, int) and isinstance(b, int):
             if a != b:
                 self._contradiction = True
@@ -205,12 +217,15 @@ class SymbolicConstraintTracker:
     def solve(self) -> dict[str, int]:
         """Solve for all bound variables and return their resolved values.
 
+        Only returns valid identifier keys (excluding integer literals and
+        composite algebraic expressions).
+
         Returns:
             dict[str, int]: Mapping of variable names to integer values.
         """
         solution: dict[str, int] = {}
         for var, root in list(self._parent.items()):
-            if var.isdigit():
+            if not var.isidentifier():
                 continue
             actual_root = self._find(root)
             if actual_root in self._const_map:

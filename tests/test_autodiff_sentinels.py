@@ -113,3 +113,17 @@ def test_autodiff_sentinels_serialization_roundtrip() -> None:
 
     assert "zt" in from_json_graph.nodes
     assert "nt" in from_json_graph.nodes
+    assert isinstance(from_json_graph.nodes["zt"], ZeroTangent)
+    assert isinstance(from_json_graph.nodes["nt"], NoTangent)
+
+    from ml_switcheroo_ir.sentinels import verify_sentinel_protocol
+
+    assert verify_sentinel_protocol(zt) is zt
+    assert verify_sentinel_protocol(nt) is nt
+
+    cloned_zt = zt.clone(id="zt_cloned")
+    cloned_nt = nt.clone(id="nt_cloned")
+    assert isinstance(cloned_zt, ZeroTangent)
+    assert isinstance(cloned_nt, NoTangent)
+    assert cloned_zt.id == "zt_cloned"
+    assert cloned_nt.id == "nt_cloned"

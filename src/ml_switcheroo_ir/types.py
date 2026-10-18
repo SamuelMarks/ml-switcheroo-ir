@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import builtins
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
-    Iterator,
+    Final,
     List,
-    Mapping,
     Protocol,
-    Sequence,
     Tuple,
     Union,
+    overload,
 )
 from typing_extensions import TypeAlias
 
@@ -41,6 +41,7 @@ __all__ = [
     "TensorShape",
     "TensorSpec",
     "ZeroTangent",
+    "is_dynamic_dimension",
 ]
 
 if TYPE_CHECKING:
@@ -70,14 +71,7 @@ if TYPE_CHECKING:
         Mapping[str, "AttributeValue"],
     ]
 else:
-    _ScalarInit = Union[int, float, bool, str, bytes]
-    InitializerValue = Union[
-        _ScalarInit,
-        List[Union[_ScalarInit, List[_ScalarInit]]],
-        Dict[str, Union[_ScalarInit, List[_ScalarInit]]],
-    ]
-
-    _ScalarAttr = Union[
+    _ScalarAttribute: TypeAlias = Union[
         int,
         float,
         str,
@@ -90,11 +84,36 @@ else:
         "TensorShape",
         "TensorSpec",
     ]
-    AttributeValue = Union[
-        _ScalarAttr,
-        Sequence[_ScalarAttr],
-        Mapping[str, _ScalarAttr],
+    InitializerValue: TypeAlias = Union[
+        int,
+        float,
+        bool,
+        str,
+        bytes,
+        List[object],
+        Dict[str, object],
     ]
+    AttributeValue: TypeAlias = Union[
+        _ScalarAttribute,
+        Sequence[object],
+        Mapping[str, object],
+    ]
+
+
+def is_dynamic_dimension(dim: object) -> bool:
+    """Check whether a single dimension value is symbolic or dynamic.
+
+    Args:
+        dim (object): Dimension entry to inspect.
+
+    Returns:
+        bool: True if the dimension is dynamic, symbolic, negative, or non-integer.
+    """
+    if isinstance(dim, int) and not isinstance(dim, bool):
+        return dim < 0
+    if isinstance(dim, (SymNode, SymInt)):
+        return not dim.is_constant or dim.eval({}) < 0
+    return True
 
 
 class AutodiffSentinelProtocol(Protocol):
@@ -109,6 +128,89 @@ class AutodiffSentinelProtocol(Protocol):
     id: str
     op_type: str
     domain: str
+
+
+_DTYPE_ALIASES: Final[Mapping[str, str]] = {
+    "float": "float32",
+    "double": "float64",
+    "half": "float16",
+    "int": "int32",
+    "long": "int64",
+    "short": "int16",
+    "byte": "uint8",
+    "char": "int8",
+    "boolean": "bool",
+    "str": "string",
+    "obj": "object",
+    "torch.float32": "float32",
+    "torch.float16": "float16",
+    "torch.bfloat16": "bfloat16",
+    "torch.float64": "float64",
+    "torch.int64": "int64",
+    "torch.int32": "int32",
+    "torch.bool": "bool",
+}
+
+_DTYPE_ONNX_MAP: Final[Mapping[str, str]] = {
+    "float32": "FLOAT",
+    "float16": "FLOAT16",
+    "bfloat16": "BFLOAT16",
+    "float64": "DOUBLE",
+    "int64": "INT64",
+    "int32": "INT32",
+    "int16": "INT16",
+    "int8": "INT8",
+    "uint64": "UINT64",
+    "uint32": "UINT32",
+    "uint16": "UINT16",
+    "uint8": "UINT8",
+    "bool": "BOOL",
+    "string": "STRING",
+    "complex64": "COMPLEX64",
+    "complex128": "COMPLEX128",
+    "float8_e4m3fn": "FLOAT8E4M3FN",
+    "float8_e4m3b11fnuz": "FLOAT8E4M3FNUZ",
+    "float8_e5m2": "FLOAT8E5M2",
+    "fp8_e4m3fn": "FLOAT8E4M3FN",
+    "fp8_e4m3fnuz": "FLOAT8E4M3FNUZ",
+    "fp8_e5m2": "FLOAT8E5M2",
+    "fp8_e5m2fnuz": "FLOAT8E5M2FNUZ",
+    "int4": "INT4",
+    "uint4": "UINT4",
+}
+
+_DTYPE_ITEMSIZE_MAP: Final[Mapping[str, float]] = {
+    "complex128": 16.0,
+    "float64": 8.0,
+    "int64": 8.0,
+    "uint64": 8.0,
+    "complex64": 8.0,
+    "float32": 4.0,
+    "int32": 4.0,
+    "uint32": 4.0,
+    "float16": 2.0,
+    "bfloat16": 2.0,
+    "int16": 2.0,
+    "uint16": 2.0,
+    "int8": 1.0,
+    "uint8": 1.0,
+    "bool": 1.0,
+    "qint8": 1.0,
+    "quint8": 1.0,
+    "float8_e4m3fn": 1.0,
+    "float8_e4m3b11fnuz": 1.0,
+    "float8_e5m2": 1.0,
+    "fp8_e4m3fn": 1.0,
+    "fp8_e4m3fnuz": 1.0,
+    "fp8_e5m2": 1.0,
+    "fp8_e5m2fnuz": 1.0,
+    "int4": 0.5,
+    "uint4": 0.5,
+    "qint4": 0.5,
+    "int2": 0.25,
+    "string": 4.0,
+    "object": 4.0,
+}
 
 
 class DType(str, Enum):
@@ -159,28 +261,9 @@ class DType(str, Enum):
             ValueError: If the string cannot be resolved to a known DType.
         """
         clean = val.strip().lower()
-        mapping: dict[str, DType] = {
-            "float": cls.float32,
-            "double": cls.float64,
-            "half": cls.float16,
-            "int": cls.int32,
-            "long": cls.int64,
-            "short": cls.int16,
-            "byte": cls.uint8,
-            "char": cls.int8,
-            "boolean": cls.bool,
-            "str": cls.string,
-            "obj": cls.object,
-            "torch.float32": cls.float32,
-            "torch.float16": cls.float16,
-            "torch.bfloat16": cls.bfloat16,
-            "torch.float64": cls.float64,
-            "torch.int64": cls.int64,
-            "torch.int32": cls.int32,
-            "torch.bool": cls.bool,
-        }
-        if clean in mapping:
-            return mapping[clean]
+        alias_target = _DTYPE_ALIASES.get(clean)
+        if alias_target is not None:
+            return cls(alias_target)
         for member in cls:
             if member.value == clean or member.name.lower() == clean:
                 return member
@@ -200,76 +283,29 @@ class DType(str, Enum):
         Returns:
             str: ONNX TensorProto type string identifier.
         """
-        onnx_map: dict[str, str] = {
-            "float32": "FLOAT",
-            "float16": "FLOAT16",
-            "bfloat16": "BFLOAT16",
-            "float64": "DOUBLE",
-            "int64": "INT64",
-            "int32": "INT32",
-            "int16": "INT16",
-            "int8": "INT8",
-            "uint64": "UINT64",
-            "uint32": "UINT32",
-            "uint16": "UINT16",
-            "uint8": "UINT8",
-            "bool": "BOOL",
-            "string": "STRING",
-            "complex64": "COMPLEX64",
-            "complex128": "COMPLEX128",
-            "float8_e4m3fn": "FLOAT8E4M3FN",
-            "float8_e4m3b11fnuz": "FLOAT8E4M3FNUZ",
-            "float8_e5m2": "FLOAT8E5M2",
-            "fp8_e4m3fn": "FLOAT8E4M3FN",
-            "fp8_e4m3fnuz": "FLOAT8E4M3FNUZ",
-            "fp8_e5m2": "FLOAT8E5M2",
-            "fp8_e5m2fnuz": "FLOAT8E5M2FNUZ",
-            "int4": "INT4",
-            "uint4": "UINT4",
-        }
-        return onnx_map.get(self.value, self.value.upper())
+        return _DTYPE_ONNX_MAP.get(self.value, self.value.upper())
+
+    @property
+    def is_variable_width(self) -> builtins.bool:
+        """Return True if this DType represents an opaque or variable-width descriptor type.
+
+        Returns:
+            bool: True for string and object DTypes, False for fixed-width numeric types.
+        """
+        return self in (DType.string, DType.object)
 
     @property
     def itemsize(self) -> float:
         """Return the storage size in bytes per element for this data type.
 
         Sub-byte quantized types (e.g. int4, uint4, qint4) return fractional byte sizes
-        (e.g. 0.5 bytes for 4-bit, 0.25 bytes for 2-bit).
+        (e.g. 0.5 bytes for 4-bit, 0.25 bytes for 2-bit). Variable-width descriptor types
+        (string, object) return their nominal 4.0-byte reference slot size.
 
         Returns:
             float: Number of bytes per element.
         """
-        sizes: dict[str, float] = {
-            "complex128": 16.0,
-            "float64": 8.0,
-            "int64": 8.0,
-            "uint64": 8.0,
-            "complex64": 8.0,
-            "float32": 4.0,
-            "int32": 4.0,
-            "uint32": 4.0,
-            "float16": 2.0,
-            "bfloat16": 2.0,
-            "int16": 2.0,
-            "uint16": 2.0,
-            "int8": 1.0,
-            "uint8": 1.0,
-            "bool": 1.0,
-            "qint8": 1.0,
-            "quint8": 1.0,
-            "float8_e4m3fn": 1.0,
-            "float8_e4m3b11fnuz": 1.0,
-            "float8_e5m2": 1.0,
-            "fp8_e4m3fn": 1.0,
-            "fp8_e4m3fnuz": 1.0,
-            "fp8_e5m2": 1.0,
-            "fp8_e5m2fnuz": 1.0,
-            "int4": 0.5,
-            "uint4": 0.5,
-            "qint4": 0.5,
-            "int2": 0.25,
-        }
-        return sizes.get(self.value, 4.0)
+        return _DTYPE_ITEMSIZE_MAP[self.value]
 
 
 class _HasDimsProtocol(Protocol):
@@ -306,15 +342,25 @@ class TensorShape:
 
         Args:
             dims (tuple[DimensionType, ...] | Sequence[DimensionType] | TensorShape | _HasDimsProtocol | DimensionType): Dimensions.
+
+        Raises:
+            TypeError: If any dimension is a boolean value.
         """
         if isinstance(dims, tuple):
-            self.dims = dims
+            raw_dims = dims
         elif hasattr(dims, "dims"):
-            self.dims = tuple(dims.dims)
+            raw_dims = tuple(dims.dims)
         elif not isinstance(dims, str) and isinstance(dims, Iterable):
-            self.dims = tuple(dims)
+            raw_dims = tuple(dims)
         else:
-            self.dims = (dims,)
+            raw_dims = (dims,)
+
+        for d in raw_dims:
+            if isinstance(d, bool):
+                raise TypeError(
+                    f"Boolean value {d!r} is not a valid tensor dimension in TensorShape."
+                )
+        self.dims = raw_dims
 
     @property
     def rank(self) -> int:
@@ -332,12 +378,7 @@ class TensorShape:
         Returns:
             bool: True if dynamic or ungrounded symbolic dimensions are present.
         """
-        return any(
-            isinstance(d, str)
-            or (isinstance(d, int) and d < 0)
-            or (isinstance(d, (SymNode, SymInt)) and not d.is_constant)
-            for d in self.dims
-        )
+        return any(is_dynamic_dimension(d) for d in self.dims)
 
     @property
     def static_shape(self) -> tuple[int, ...]:
@@ -372,13 +413,13 @@ class TensorShape:
         """
         res: list[int] = []
         for d in self.dims:
-            if isinstance(d, int):
+            if isinstance(d, int) and not isinstance(d, bool):
                 res.append(d)
             elif isinstance(d, (SymNode, SymInt)):
                 res.append(d.evaluate(bindings))
-            elif d.isdigit():
+            elif isinstance(d, str) and d.isdigit():
                 res.append(int(d))
-            elif d in bindings:
+            elif isinstance(d, str) and d in bindings:
                 res.append(bindings[d])
             else:
                 res.append(SymNode.to_node(d).evaluate(bindings))
@@ -425,6 +466,28 @@ class TensorShape:
             Iterator[DimensionType]: Iterator over dimensions.
         """
         return iter(self.dims)
+
+    @overload
+    def __getitem__(self, idx: int) -> DimensionType:
+        """Retrieve a single dimension by integer index.
+
+        Args:
+            idx (int): Zero-based dimension index.
+
+        Returns:
+            DimensionType: Dimension at index.
+        """
+
+    @overload
+    def __getitem__(self, idx: slice) -> tuple[DimensionType, ...]:
+        """Retrieve a slice of dimensions.
+
+        Args:
+            idx (slice): Slice object.
+
+        Returns:
+            tuple[DimensionType, ...]: Sliced tuple of dimensions.
+        """
 
     def __getitem__(
         self, idx: int | slice
@@ -510,12 +573,7 @@ class TensorSpec:
         Returns:
             bool: True if dynamic dimensions are present.
         """
-        return any(
-            isinstance(d, str)
-            or (isinstance(d, int) and d < 0)
-            or (isinstance(d, (SymNode, SymInt)) and not d.is_constant)
-            for d in self.shape
-        )
+        return any(is_dynamic_dimension(d) for d in self.shape)
 
     @property
     def static_shape(self) -> tuple[int, ...]:
@@ -528,14 +586,8 @@ class TensorSpec:
             ValueError: If the shape is dynamic.
         """
         if self.is_dynamic:
-            raise ValueError(f"Shape {self.shape} has dynamic dimensions.")
-        res: list[int] = []
-        for d in self.shape:
-            if isinstance(d, (SymNode, SymInt)):
-                res.append(d.eval({}))
-            else:
-                res.append(int(d))
-        return tuple(res)
+            raise ValueError(f"TensorSpec shape {self.shape} has dynamic dimensions.")
+        return TensorShape(self.shape).static_shape
 
     @property
     def rank(self) -> int:
@@ -579,7 +631,5 @@ def __getattr__(name: str) -> Any:
     if name in ("ZeroTangent", "NoTangent"):
         from ml_switcheroo_ir import sentinels
 
-        val = getattr(sentinels, name)
-        globals()[name] = val
-        return val
+        return getattr(sentinels, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

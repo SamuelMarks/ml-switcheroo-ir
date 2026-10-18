@@ -1400,7 +1400,9 @@ class SymInt:
         Returns:
             bool: True if expressions are mathematically consistent.
         """
-        if isinstance(other, (SymInt, SymNode, int, str)):
+        if isinstance(other, bool):
+            return False
+        if isinstance(other, (SymInt, SymNode, int)):
             from ml_switcheroo_ir.shapes.parser import SymbolicSolver
 
             return SymbolicSolver.is_consistent(self, other)

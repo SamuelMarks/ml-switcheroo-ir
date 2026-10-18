@@ -1956,3 +1956,40 @@ def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
                 resolve_snapshots_path(ws_empty_fw / "ml-framework-snapshots")
                 == Path(DEFAULT_SNAPSHOT_DIR).resolve()
             )
+
+    from ml_switcheroo_ir.schema.onnx_registry import OpSchema
+    from scripts.verify_grounding import (
+        verify_odl_grounding,
+        verify_quantization_grounding,
+        verify_state_ops_grounding,
+    )
+
+    bad_quant = OpSchema("wrong_q", "bad_dom", 1, {}, [], [])
+    with patch("scripts.verify_grounding.QUANTIZATION_OPS_REGISTRY", {}):
+        assert "QUANTIZATION_OPS_REGISTRY is empty." in verify_quantization_grounding()
+    with patch(
+        "scripts.verify_grounding.QUANTIZATION_OPS_REGISTRY",
+        {"block_quantize": bad_quant},
+    ):
+        q_errs = verify_quantization_grounding()
+        assert len(q_errs) == 2
+
+    bad_state = OpSchema("wrong_s", "bad_dom", 1, {}, [], [])
+    with patch("scripts.verify_grounding.STATE_OPS_REGISTRY", {}):
+        assert "STATE_OPS_REGISTRY is empty." in verify_state_ops_grounding()
+    with patch(
+        "scripts.verify_grounding.STATE_OPS_REGISTRY",
+        {"ReadVariable": bad_state},
+    ):
+        s_errs = verify_state_ops_grounding()
+        assert len(s_errs) == 2
+
+    bad_odl = OpSchema("wrong_o", "bad_dom", 1, {}, [], [])
+    with patch("scripts.verify_grounding.ODL_CATALOG", {}):
+        assert "ODL_CATALOG is empty." in verify_odl_grounding()
+    with patch(
+        "scripts.verify_grounding.ODL_CATALOG",
+        {"add": bad_odl},
+    ):
+        o_errs = verify_odl_grounding()
+        assert len(o_errs) == 2

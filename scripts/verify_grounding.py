@@ -14,10 +14,13 @@ from ml_switcheroo_ir.schema.custom_ops import (
     CANONICAL_ATTENTION_SCHEMAS,
     COLLECTIVE_OPS_REGISTRY,
     CUSTOM_OPS_REGISTRY,
+    QUANTIZATION_OPS_REGISTRY,
+    STATE_OPS_REGISTRY,
 )
 from ml_switcheroo_ir.schema.framework_registries import (
     ARRAY_API_REGISTRY,
     ATEN_REGISTRY,
+    ODL_CATALOG,
 )
 from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
@@ -727,15 +730,75 @@ def verify_wasm_grounding(snapshots_dir: Path) -> list[str]:
     )
 
 
+def verify_quantization_grounding() -> list[str]:
+    """Verify quantization operator schemas in QUANTIZATION_OPS_REGISTRY.
+
+    Returns:
+        list[str]: Diagnostic error messages for quantization schemas.
+    """
+    errors: list[str] = []
+    if not QUANTIZATION_OPS_REGISTRY:
+        errors.append("QUANTIZATION_OPS_REGISTRY is empty.")
+    for op_name, schema in QUANTIZATION_OPS_REGISTRY.items():
+        if not schema.name or (
+            schema.name != op_name and not schema.name.endswith(f".{op_name}")
+        ):
+            errors.append(
+                f"Quantization op key '{op_name}' != schema.name '{schema.name}'."
+            )
+        if schema.domain not in ("quantization", "ml.switcheroo.quant"):
+            errors.append(
+                f"Quantization op '{op_name}' has invalid domain '{schema.domain}'."
+            )
+    return errors
+
+
+def verify_state_ops_grounding() -> list[str]:
+    """Verify state-mutation operator schemas in STATE_OPS_REGISTRY.
+
+    Returns:
+        list[str]: Diagnostic error messages for state schemas.
+    """
+    errors: list[str] = []
+    if not STATE_OPS_REGISTRY:
+        errors.append("STATE_OPS_REGISTRY is empty.")
+    for op_name, schema in STATE_OPS_REGISTRY.items():
+        if schema.name != op_name:
+            errors.append(f"State op key '{op_name}' != schema.name '{schema.name}'.")
+        if schema.domain != "ml.switcheroo.state":
+            errors.append(f"State op '{op_name}' has invalid domain '{schema.domain}'.")
+    return errors
+
+
+def verify_odl_grounding() -> list[str]:
+    """Verify universal Operation Definition Language (ODL) schemas in ODL_CATALOG.
+
+    Returns:
+        list[str]: Diagnostic error messages for ODL schemas.
+    """
+    errors: list[str] = []
+    if not ODL_CATALOG:
+        errors.append("ODL_CATALOG is empty.")
+    for op_name, schema in ODL_CATALOG.items():
+        if schema.name != op_name:
+            errors.append(f"ODL op key '{op_name}' != schema.name '{schema.name}'.")
+        if schema.domain != "odl":
+            errors.append(f"ODL op '{op_name}' has invalid domain '{schema.domain}'.")
+    return errors
+
+
 def _verify_local_schemas_only() -> int:
-    """Verify local custom ops, ONNX, Array API, ATen, and collective registries when snapshot directory is missing or empty.
+    """Verify local custom ops, ONNX, quantization, state, and ODL registries when snapshot directory is missing or empty.
 
     Returns:
         int: Process exit code (0 for success, 1 for failure).
     """
     custom_errors = verify_custom_ops_grounding()
     onnx_errors = verify_onnx_grounding()
-    all_errors = custom_errors + onnx_errors
+    quant_errors = verify_quantization_grounding()
+    state_errors = verify_state_ops_grounding()
+    odl_errors = verify_odl_grounding()
+    all_errors = custom_errors + onnx_errors + quant_errors + state_errors + odl_errors
     if all_errors:
         for err in all_errors:
             print(f"[ERROR] {err}")
@@ -813,6 +876,9 @@ def main(argv: list[str] | None = None) -> int:
     array_api_errors = verify_array_api_grounding(snapshots_dir)
     aten_errors = verify_aten_grounding(snapshots_dir)
     collectives_errors = verify_collectives_grounding(snapshots_dir)
+    quant_errors = verify_quantization_grounding()
+    state_errors = verify_state_ops_grounding()
+    odl_errors = verify_odl_grounding()
 
     all_errors = (
         stablehlo_errors
@@ -829,6 +895,9 @@ def main(argv: list[str] | None = None) -> int:
         + array_api_errors
         + aten_errors
         + collectives_errors
+        + quant_errors
+        + state_errors
+        + odl_errors
     )
 
     print(f"Audited StableHLO schemas: {len(STABLEHLO_REGISTRY)} ops.")
@@ -838,6 +907,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Audited Array API schemas: {len(ARRAY_API_REGISTRY)} ops.")
     print(f"Audited ATen schemas: {len(ATEN_REGISTRY)} ops.")
     print(f"Audited Collective schemas: {len(COLLECTIVE_OPS_REGISTRY)} ops.")
+    print(f"Audited Quantization schemas: {len(QUANTIZATION_OPS_REGISTRY)} ops.")
+    print(f"Audited State schemas: {len(STATE_OPS_REGISTRY)} ops.")
+    print(f"Audited ODL schemas: {len(ODL_CATALOG)} ops.")
     print("Audited Low-Level & Hardware ISAs (RDNA, SASS, WGSL, PTX, Metal, WASM).")
 
     if all_errors:

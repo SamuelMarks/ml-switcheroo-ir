@@ -88,8 +88,10 @@ _ISA_ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
     "nvidia_sass": {
         "barrier_predicate",
         "warp_sync",
+        "memory_space",
         "stall",
         "stall_count",
+        "yield",
         "yield_flag",
         "read_barrier",
         "write_barrier",
@@ -99,12 +101,18 @@ _ISA_ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
         "modifiers",
         "control_codes",
         "register_classes",
+        "src_regs",
+        "srcs",
+        "dst_reg",
+        "dst",
     },
     "sass": {
         "barrier_predicate",
         "warp_sync",
+        "memory_space",
         "stall",
         "stall_count",
+        "yield",
         "yield_flag",
         "read_barrier",
         "write_barrier",
@@ -114,9 +122,31 @@ _ISA_ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
         "modifiers",
         "control_codes",
         "register_classes",
+        "src_regs",
+        "srcs",
+        "dst_reg",
+        "dst",
     },
-    "webgpu_wgsl": {"workgroup_size", "address_space", "qualifier"},
-    "wgsl": {"workgroup_size", "address_space", "qualifier"},
+    "webgpu_wgsl": {
+        "workgroup_size",
+        "address_space",
+        "qualifier",
+        "struct_alignment",
+        "alignment",
+        "array_stride",
+        "builtin",
+        "is_mutating",
+    },
+    "wgsl": {
+        "workgroup_size",
+        "address_space",
+        "qualifier",
+        "struct_alignment",
+        "alignment",
+        "array_stride",
+        "builtin",
+        "is_mutating",
+    },
     "nvidia_ptx": {"vector_widths", "min_sm", "address_space"},
     "ptx": {"vector_widths", "min_sm", "address_space"},
 }
@@ -241,8 +271,24 @@ class Validator:
         }
         return domain_map.get(domain)
 
+    def _filter_by_level(self, errors: list[ValidationError]) -> list[ValidationError]:
+        """Filter accumulated validation diagnostics according to the active severity level.
+
+        Args:
+            errors (list[ValidationError]): Raw validation diagnostics.
+
+        Returns:
+            list[ValidationError]: Filtered validation diagnostics.
+        """
+        if self.level == ValidationLevel.LENIENT:
+            return [e for e in errors if e.level == ValidationLevel.ERROR]
+        return errors
+
     def _get_schema(self, node: LogicalNode) -> OpSchema | None:
         """Retrieve the schema for a node across registered domains.
+
+        Prioritizes the domain-specific registry when ``node.domain != 'ai.onnx'``
+        so ONNX schemas never shadow ATen, Array API, ODL, or low-level dialect schemas.
 
         Args:
             node (LogicalNode): The node to inspect.
@@ -270,13 +316,12 @@ class Validator:
                 outputs=["tangent"],
             )
 
-        primary = self.registry.get(node.op_type)
-        if primary is not None:
-            return primary
-        secondary = self._get_domain_registry(node.domain)
-        if secondary is not None:
-            return secondary.get(node.op_type)
-        return None
+        if node.domain != "ai.onnx":
+            secondary = self._get_domain_registry(node.domain)
+            if secondary is not None and node.op_type in secondary:
+                return secondary[node.op_type]
+
+        return self.registry.get(node.op_type)
 
     def _validate_core_mlir_dialect(self, node: LogicalNode) -> list[ValidationError]:
         """Validate a node belonging to one of the CORE_MLIR_DIALECTS.
@@ -613,10 +658,7 @@ class Validator:
         if populate_defaults:
             self.populate_defaults(node)
 
-        if self.level == ValidationLevel.LENIENT:
-            errors = [e for e in errors if e.level == ValidationLevel.ERROR]
-
-        return errors
+        return self._filter_by_level(errors)
 
     def validate_graph(
         self,
@@ -652,10 +694,7 @@ class Validator:
         errors.extend(self.validate_sharding_propagation(graph))
         errors.extend(self.validate_pipeline_and_checkpointing(graph))
 
-        if self.level == ValidationLevel.LENIENT:
-            errors = [e for e in errors if e.level == ValidationLevel.ERROR]
-
-        return errors
+        return self._filter_by_level(errors)
 
     def validate_vopd_pairing(
         self, opX: LogicalNode, opY: LogicalNode

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, overload
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Protocol, overload
 
 if TYPE_CHECKING:
     from ml_switcheroo_ir.types import TensorSpec
@@ -23,6 +23,7 @@ from ml_switcheroo_ir.shapes.tracker import (
 
 __all__ = [
     "ShapeTracker",
+    "SupportsShapeNodesProtocol",
     "broadcast_dimension",
     "broadcast_shapes",
     "infer_node_shapes",
@@ -30,6 +31,18 @@ __all__ = [
     "normalize_axis",
     "resolve_symbolic_bounds",
 ]
+
+
+class SupportsShapeNodesProtocol(Protocol):
+    """Protocol for graph containers carrying a mapping or sequence of nodes."""
+
+    @property
+    def nodes(self) -> Mapping[str, Any] | Iterable[Any]:
+        """Return mapping or iterable of graph nodes.
+
+        Returns:
+            Mapping[str, Any] | Iterable[Any]: Graph nodes collection.
+        """
 
 
 def broadcast_dimension(
@@ -225,7 +238,7 @@ def normalize_axis(
             raise ValueError(f"Axis {a} is out of bounds for tensor of rank {rank}.")
         return a + rank if a < 0 else a
 
-    if isinstance(axis, int):
+    if isinstance(axis, int) and not isinstance(axis, bool):
         return _normalize_single(axis)
     if isinstance(axis, (tuple, list, Sequence)) and not isinstance(axis, (str, bytes)):
         return tuple(_normalize_single(a) for a in axis)
@@ -279,7 +292,7 @@ class ShapeTracker:
 
         Args:
             feedback_telemetry (Mapping[str, Any]):
-                Observed telemetry mapping node IDs to concrete shapes.
+                Observed telemetry mapping node IDs or 1D dimension variable names to concrete shapes.
             tracker (SymbolicConstraintTracker | None): Optional constraint tracker to unify.
 
         Returns:
@@ -339,26 +352,34 @@ class ShapeTracker:
 
     @staticmethod
     def resolve_dynamic_bounds(
-        graph: Any,
+        graph: SupportsShapeNodesProtocol | Any,
         feedback_telemetry: Mapping[str, Any],
         tracker: SymbolicConstraintTracker | None = None,
+        strict_rank: bool = False,
     ) -> dict[str, int]:
         """Resolve dynamic SymInt variables across a graph into static integer bounds using telemetry.
 
         Args:
-            graph (Any): LogicalGraph instance containing nodes with symbolic dimensions.
+            graph (SupportsShapeNodesProtocol | Any): LogicalGraph instance containing nodes with symbolic dimensions.
             feedback_telemetry (Mapping[str, Any]):
                 Observed runtime telemetry with concrete shapes.
             tracker (SymbolicConstraintTracker | None): Optional constraint tracker for unification.
+            strict_rank (bool): If True, raises ShapeMismatchError when observed telemetry rank
+                differs from the node's symbolic shape rank.
 
         Returns:
             dict[str, int]: Mapping of symbolic dimension names to their resolved static integer bounds.
+
+        Raises:
+            ShapeMismatchError: If strict_rank is True and observed shape rank mismatches node rank.
         """
         concrete_shapes = ShapeTracker.update_from_feedback(feedback_telemetry, tracker)
         resolved_bounds: dict[str, int] = {}
 
         raw_nodes = getattr(graph, "nodes", {})
-        node_iterable = raw_nodes.values() if isinstance(raw_nodes, dict) else raw_nodes
+        node_iterable = (
+            raw_nodes.values() if isinstance(raw_nodes, Mapping) else raw_nodes
+        )
 
         for node in node_iterable:
             node_id = str(getattr(node, "id", ""))
@@ -371,6 +392,11 @@ class ShapeTracker:
                 shape_meta = getattr(node, "shape", None)
 
             if isinstance(shape_meta, (tuple, list)):
+                if strict_rank and len(observed_shape) != len(shape_meta):
+                    raise ShapeMismatchError(
+                        f"Node '{node_id}' observed rank {len(observed_shape)} mismatches "
+                        f"symbolic shape rank {len(shape_meta)}."
+                    )
                 new_shape: list[int] = []
                 for idx, dim in enumerate(shape_meta):
                     concrete_val = (

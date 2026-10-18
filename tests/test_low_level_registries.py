@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ml_switcheroo_ir import LogicalNode
@@ -201,21 +203,23 @@ def test_validate_kind_unknown_ops_across_low_level_domains() -> None:
         assert "not found in domain" in errors[0].message
 
 
-def test_missing_schema_json_files(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_schema_json_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Verify graceful handling when bundled low-level JSON schema files do not exist.
 
     Args:
+        tmp_path (Path): Pytest temporary directory fixture.
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
-    from pathlib import Path
-
     import ml_switcheroo_ir.schema.low_level_registries as ll_mod
     import ml_switcheroo_ir.schema.rdna_registry as rdna_mod
     import ml_switcheroo_ir.schema.sass_registry as sass_mod
 
-    monkeypatch.setattr(Path, "exists", lambda self: False)
-
-    # Calling loaders with nonexistent path
-    rdna_mod._load_rdna_schemas()
-    sass_mod._load_sass_schemas()
+    missing_path = tmp_path / "missing.json"
+    rdna_mod._load_rdna_schemas(json_path=missing_path)
+    sass_mod._load_sass_schemas(json_path=missing_path)
+    monkeypatch.setattr(
+        ll_mod, "find_schema_file", lambda filename, override=None: None
+    )
     assert ll_mod._load_schema_file("missing.json", "dummy") == {}

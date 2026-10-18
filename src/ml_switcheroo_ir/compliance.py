@@ -7,10 +7,32 @@ import json
 import os
 import sys
 import warnings
-from typing import TypedDict
+from typing import Any, TypedDict
 
-from ml_switcheroo_ir.cli import _fallback_tabulate
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+
+
+def _fallback_tabulate(
+    tabular_data: Any,
+    headers: Any = (),
+    **kwargs: Any,
+) -> str:
+    """Format tabular data as a pipe-separated ASCII table when tabulate is unavailable.
+
+    Args:
+        tabular_data (Any): Rows of table cells.
+        headers (Any): Sequence of column header labels.
+        **kwargs (Any): Ignored formatting keyword arguments.
+
+    Returns:
+        str: Formatted table string.
+    """
+    del kwargs
+    res = " | ".join(str(h) for h in headers) + "\n"
+    res += "-" * len(res) + "\n"
+    for row in tabular_data:
+        res += " | ".join(str(c) for c in row) + "\n"
+    return res
 
 
 class FileComplianceResult(TypedDict):

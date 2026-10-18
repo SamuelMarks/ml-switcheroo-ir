@@ -816,3 +816,19 @@ def test_sym_irreducible_and_piecewise_branches() -> None:
 
     pw_non_sym = SymPiecewise([(True, vx), (lambda env: True, vy)], default=c0)
     assert pw_non_sym.free_vars() == {"x", "y"}
+
+    from ml_switcheroo_ir.shapes.parser import _parse_sym_str
+
+    poly_str = Polynomial.from_var("x").mul(Polynomial.from_var("x")).canonical_str()
+    assert poly_str == "x^2"
+    parsed_poly = _parse_sym_str(poly_str)
+    assert parsed_poly.eval({"x": 3}) == 9
+
+    assert _parse_sym_str("+x").eval({"x": 7}) == 7
+    assert _parse_sym_str("abs(x)").eval({"x": -5}) == 5
+    assert _parse_sym_str("min(x, 4)").eval({"x": 10}) == 4
+    assert _parse_sym_str("max(x, 4)").eval({"x": 10}) == 10
+    assert isinstance(_parse_sym_str("abs(x"), SymVar)
+    assert isinstance(_parse_sym_str("min(x, 4"), SymVar)
+    assert isinstance(_parse_sym_str("min(x)"), SymVar)
+    assert (SymInt(1) == True) is False  # noqa: E712

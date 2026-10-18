@@ -15,7 +15,9 @@ from pydantic import BaseModel, Field
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.ghost import ExtendedGhostRef
 from ml_switcheroo_ir.schema.onnx_registry import OpSchema
-from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR
+from ml_switcheroo_ir.snapshots import (
+    get_effective_snapshot_dir as _get_snapshot_dir,
+)
 from ml_switcheroo_ir.validation.core import (
     KNOWN_SYNONYMS,
     ValidationError,
@@ -36,17 +38,6 @@ __all__ = [
     "audit_graph_grounding",
     "audit_grounding",
 ]
-
-
-def _get_snapshot_dir() -> str:
-    """Resolve current DEFAULT_SNAPSHOT_DIR respecting runtime patches on ml_switcheroo_ir.validator.
-
-    Returns:
-        str: Effective default snapshot directory path.
-    """
-    import ml_switcheroo_ir.validator as val_mod
-
-    return str(getattr(val_mod, "DEFAULT_SNAPSHOT_DIR", DEFAULT_SNAPSHOT_DIR))
 
 
 @dataclass

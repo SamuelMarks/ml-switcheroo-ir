@@ -7,6 +7,7 @@ from ml_switcheroo_ir.shapes.ast import (
     SymConst,
     SymInt,
     SymNode,
+    SymUnaryOp,
     SymVar,
 )
 
@@ -36,6 +37,13 @@ class SymbolicExpressionParser:
     def tokenize(expr_str: str) -> list[str]:
         """Tokenize a symbolic expression string into component tokens.
 
+        Supports arithmetic operators (``+``, ``-``, ``*``, ``//``, ``/``, ``%``,
+        ``**``, ``^``), comparison operators (``==``, ``!=``, ``<``, ``<=``,
+        ``>``, ``>=``), parentheses, commas, identifiers, and integer literals.
+        Single ``/`` is normalized to integer floor division ``//`` and ``^`` is
+        normalized to exponentiation ``**`` so canonical polynomial strings
+        (e.g. ``x^2``) roundtrip losslessly.
+
         Args:
             expr_str (str): Input expression string.
 
@@ -50,7 +58,10 @@ class SymbolicExpressionParser:
             c = s[i]
             if c.isspace():
                 i += 1
-            elif c in "()+*":
+            elif c == "^":
+                tokens.append("**")
+                i += 1
+            elif c in "(),+*":
                 if c == "*" and i + 1 < n and s[i + 1] == "*":
                     tokens.append("**")
                     i += 2
@@ -137,8 +148,38 @@ class SymbolicExpressionParser:
             node = SymBinaryOp(op, node, right)
         return node
 
+    def _parse_func_call(self, func_name: str) -> SymNode:
+        """Parse a function call expression such as abs(x), min(a, b), or max(a, b).
+
+        Args:
+            func_name (str): Name of the function ('abs', 'min', or 'max').
+
+        Returns:
+            SymNode: Parsed unary or binary operation node.
+        """
+        self.idx += 1  # consume '('
+        arg1 = self.parse_comparison()
+        if func_name == "abs":
+            if self.idx < len(self.tokens) and self.tokens[self.idx] == ")":
+                self.idx += 1
+            else:
+                self.failed = True
+            return SymUnaryOp("abs", arg1)
+
+        if self.idx < len(self.tokens) and self.tokens[self.idx] == ",":
+            self.idx += 1
+            arg2 = self.parse_comparison()
+            if self.idx < len(self.tokens) and self.tokens[self.idx] == ")":
+                self.idx += 1
+            else:
+                self.failed = True
+            return SymBinaryOp(func_name, arg1, arg2)
+
+        self.failed = True
+        return SymConst(0)
+
     def parse_factor(self) -> SymNode:
-        """Parse factor, power expression, parenthesized expression, or unary negative.
+        """Parse factor, power expression, function call, parenthesized expression, or unary operator.
 
         Returns:
             SymNode: Root parsed factor node.
@@ -159,12 +200,22 @@ class SymbolicExpressionParser:
                 exponent = self.parse_factor()
                 node = SymBinaryOp("**", node, exponent)
             return node
+        if tok == "+":
+            self.idx += 1
+            return self.parse_factor()
         if tok == "-":
             self.idx += 1
             inner = self.parse_factor()
             return SymBinaryOp("-", SymConst(0), inner)
         self.idx += 1
-        base_node: SymNode = SymConst(int(tok)) if tok.isdigit() else SymVar(tok)
+        if (
+            tok in ("abs", "min", "max")
+            and self.idx < len(self.tokens)
+            and self.tokens[self.idx] == "("
+        ):
+            base_node = self._parse_func_call(tok)
+        else:
+            base_node = SymConst(int(tok)) if tok.isdigit() else SymVar(tok)
         if self.idx < len(self.tokens) and self.tokens[self.idx] == "**":
             self.idx += 1
             exponent = self.parse_factor()
@@ -225,7 +276,12 @@ class SymbolicSolver:
         Returns:
             bool: True if expressions evaluate to identical canonical representations.
         """
-        if isinstance(expr1, int) and isinstance(expr2, int):
+        if (
+            isinstance(expr1, int)
+            and not isinstance(expr1, bool)
+            and isinstance(expr2, int)
+            and not isinstance(expr2, bool)
+        ):
             return expr1 == expr2
 
         n1 = SymNode.to_node(expr1)

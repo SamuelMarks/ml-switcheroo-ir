@@ -28,11 +28,16 @@ __all__ = [
 ]
 
 
-_VGPR_PATTERN = re.compile(r"^(?:v|vgpr)(\d+)$|^(\d+)$", re.IGNORECASE)
+_VGPR_ATTR_PATTERN = re.compile(r"^(?:v|vgpr)(\d+)$|^(\d+)$", re.IGNORECASE)
+_VGPR_PORT_PATTERN = re.compile(r"^(?:v|vgpr)(\d+)$", re.IGNORECASE)
 
 
 def _extract_vgpr_indices(node: LogicalNode) -> list[int]:
     """Extract VGPR operand integer indices from a node.
+
+    Explicit ``vgpr_operands`` and ``src_vgprs`` attributes accept integers or
+    ``v<N>`` / ``vgpr<N>`` strings, while ``node.inputs`` only match explicit
+    ``v<N>`` or ``vgpr<N>`` register names so numeric node IDs are not misparsed.
 
     Args:
         node (LogicalNode): The node to extract VGPR indices from.
@@ -48,14 +53,14 @@ def _extract_vgpr_indices(node: LogicalNode) -> list[int]:
                 if isinstance(item, int) and not isinstance(item, bool):
                     indices.append(item)
                 else:
-                    m = _VGPR_PATTERN.match(str(item).strip())
+                    m = _VGPR_ATTR_PATTERN.match(str(item).strip())
                     if m:
                         indices.append(int(m.group(1) or m.group(2)))
 
     for inp in node.inputs:
-        m = _VGPR_PATTERN.match(str(inp).strip())
+        m = _VGPR_PORT_PATTERN.match(str(inp).strip())
         if m:
-            indices.append(int(m.group(1) or m.group(2)))
+            indices.append(int(m.group(1)))
 
     return indices
 
@@ -75,13 +80,13 @@ def _extract_dst_vgpr(node: LogicalNode) -> int | None:
     if isinstance(dst, int) and not isinstance(dst, bool):
         return dst
     if dst is not None:
-        m = _VGPR_PATTERN.match(str(dst).strip())
+        m = _VGPR_ATTR_PATTERN.match(str(dst).strip())
         if m:
             return int(m.group(1) or m.group(2))
     for out in node.outputs:
-        m = _VGPR_PATTERN.match(str(out).strip())
+        m = _VGPR_PORT_PATTERN.match(str(out).strip())
         if m:
-            return int(m.group(1) or m.group(2))
+            return int(m.group(1))
     return None
 
 
@@ -607,6 +612,10 @@ def validate_sass_scoreboarding_sequence(
         elif isinstance(wait_mask, list):
             cleared_barriers.update(
                 b for b in wait_mask if isinstance(b, int) and not isinstance(b, bool)
+            )
+        elif isinstance(wait_mask, str):
+            cleared_barriers.update(
+                int(ch) for ch in wait_mask if ch in {"0", "1", "2", "3", "4", "5"}
             )
 
         if cleared_barriers:

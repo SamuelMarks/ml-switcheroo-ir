@@ -669,3 +669,47 @@ def test_pipeline_and_checkpointing_validation() -> None:
         "Cross-stage dataflow skipping stages (0 -> 2)" in e.message for e in errs_skip
     )
     assert any(e.level == ValidationLevel.WARNING for e in errs_skip)
+
+    # Gemm with transA=1 and transB=1 sharding propagation
+    n_gemm_a = LogicalNode(
+        id="ga",
+        op_type="Input",
+        shape_metadata=(16, 8),
+        sharding=PartitionSpec(axes=("model", "data")),
+    )
+    n_gemm_b = LogicalNode(
+        id="gb",
+        op_type="Input",
+        shape_metadata=(32, 16),
+        sharding=PartitionSpec(axes=(None, "model")),
+    )
+    n_gemm_1d_a = LogicalNode(
+        id="ga1",
+        op_type="Input",
+        shape_metadata=(16,),
+        sharding=PartitionSpec(axes=("model",)),
+    )
+    n_gemm = LogicalNode(
+        id="gemm_tr",
+        op_type="Gemm",
+        inputs=["ga", "gb"],
+        attributes={"transA": 1, "transB": 1},
+    )
+    n_gemm_1d = LogicalNode(
+        id="gemm_tr_1d",
+        op_type="Gemm",
+        inputs=["ga1", "gb"],
+        attributes={"transA": 1, "transB": 1},
+    )
+    g_gemm_tr = LogicalGraph(
+        nodes={
+            "ga": n_gemm_a,
+            "gb": n_gemm_b,
+            "ga1": n_gemm_1d_a,
+            "gemm_tr": n_gemm,
+            "gemm_tr_1d": n_gemm_1d,
+        },
+        outputs=["gemm_tr", "gemm_tr_1d"],
+        mesh=LogicalMesh(shape={"data": 2, "model": 4}),
+    )
+    assert v.validate_sharding_propagation(g_gemm_tr) == []

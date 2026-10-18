@@ -580,3 +580,24 @@ def test_tensor_shape_and_node_edge_coverage() -> None:
     unpickled = pickle.loads(pickled)
     assert "n1" in unpickled
     assert unpickled["n1"].op_type == "Relu"
+
+    assert DType.string.is_variable_width is True
+    assert DType.object.is_variable_width is True
+    assert DType.float32.is_variable_width is False
+
+    with pytest.raises(TypeError, match="Boolean value"):
+        TensorShape((True, 4))
+    with pytest.raises(TypeError, match="Boolean value"):
+        LogicalNode(id="b1", op_type="Relu", shape_metadata=(False, 2))
+    with pytest.raises(TypeError, match="Boolean value"):
+        LogicalNode(id="b2", op_type="Relu", shape_metadata=(x for x in [True, 2]))
+
+    from ml_switcheroo_ir.shapes import SymConst
+
+    s_const = TensorShape((SymConst(4), SymConst(8)))
+    assert s_const.is_dynamic is False
+    assert s_const.static_shape == (4, 8)
+    assert s_const.evaluate({}) == (4, 8)
+    s_neg = TensorShape((SymConst(-1),))
+    with pytest.raises(ValueError, match="dynamic or symbolic"):
+        _ = s_neg.static_shape

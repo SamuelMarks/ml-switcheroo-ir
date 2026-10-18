@@ -23,31 +23,9 @@ from ml_switcheroo_ir import (
 from ml_switcheroo_ir.schema.custom_ops import Registry
 from ml_switcheroo_ir.validator import ValidationError, ValidationLevel, Validator
 
+from ml_switcheroo_ir.compliance import _fallback_tabulate
+
 __all__ = ["main", "tabulate"]
-
-
-def _fallback_tabulate(
-    tabular_data: Any,
-    headers: Any = (),
-    **kwargs: Any,
-) -> str:
-    """Format tabular data as a pipe-separated ASCII table when tabulate is unavailable.
-
-    Args:
-        tabular_data (Any): Rows of table cells.
-        headers (Any): Sequence of column header labels.
-        **kwargs (Any): Ignored formatting keyword arguments.
-
-    Returns:
-        str: Formatted table string.
-    """
-    del kwargs
-    res = " | ".join(str(h) for h in headers) + "\n"
-    res += "-" * len(res) + "\n"
-    for row in tabular_data:
-        res += " | ".join(str(c) for c in row) + "\n"
-    return res
-
 
 try:
     from tabulate import tabulate
@@ -165,6 +143,7 @@ def _handle_validate(parsed_args: argparse.Namespace) -> None:
     Args:
         parsed_args (argparse.Namespace): Parsed CLI arguments.
     """
+    from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
     from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 
     json_data = parsed_args.infile.read()
@@ -175,7 +154,12 @@ def _handle_validate(parsed_args: argparse.Namespace) -> None:
         registry.load_custom_ops_from_json(parsed_args.custom_ops)
 
     merged_schemas = {**ONNX_REGISTRY, **registry.schemas}
-    validator = Validator(registry=merged_schemas, strict=bool(parsed_args.strict))
+    merged_custom = {**CUSTOM_OPS_REGISTRY, **registry.schemas}
+    validator = Validator(
+        registry=merged_schemas,
+        custom_registry=merged_custom,
+        strict=bool(parsed_args.strict),
+    )
     errors = validator.validate_graph(graph)
 
     if not errors:

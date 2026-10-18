@@ -127,6 +127,18 @@ def get_default_snapshots_dir() -> str:
 DEFAULT_SNAPSHOT_DIR: str = get_default_snapshots_dir()
 
 
+def get_effective_snapshot_dir() -> str:
+    """Return the active default snapshot directory, respecting overrides on validator.DEFAULT_SNAPSHOT_DIR.
+
+    Returns:
+        str: Effective default snapshot directory path.
+    """
+    import sys
+
+    val_mod = sys.modules.get("ml_switcheroo_ir.validator")
+    return str(getattr(val_mod, "DEFAULT_SNAPSHOT_DIR", DEFAULT_SNAPSHOT_DIR))
+
+
 def _has_snapshot_files(directory: Path) -> bool:
     """Return True if the directory exists and contains at least one JSON snapshot file.
 

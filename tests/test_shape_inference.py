@@ -383,3 +383,33 @@ def test_shape_tracker_inference_and_feedback() -> None:
     # broadcast_dimension raising when incompatible static and dynamic without tracker
     with pytest.raises(ShapeMismatchError, match="Incompatible dimensions"):
         broadcast_dimension(5, "dim_x", tracker=None)
+
+    from ml_switcheroo_ir import LogicalGraph, LogicalNode
+    from ml_switcheroo_ir.shapes import SymBinaryOp
+
+    tr = SymbolicConstraintTracker()
+    with pytest.raises(TypeError, match="Boolean"):
+        tr.record_equality(True, 4)
+    with pytest.raises(TypeError, match="Boolean"):
+        tr._extract_const_value(False, "False", "False")
+    assert tr._is_unit_dimension(True) is False
+    const_expr = SymBinaryOp("+", SymConst(2), SymConst(3))
+    tr.record_equality("dim_k", const_expr)
+    tr.record_equality("a + b", 10)
+    sol = tr.solve()
+    assert sol["dim_k"] == 5
+    assert "a + b" not in sol
+
+    g_strict = LogicalGraph(
+        nodes={
+            "n_rank": LogicalNode(
+                id="n_rank", op_type="Relu", shape_metadata=("B", "N")
+            )
+        },
+    )
+    with pytest.raises(ShapeMismatchError, match="observed rank"):
+        ShapeTracker.resolve_dynamic_bounds(
+            g_strict,
+            {"n_rank": (4,)},
+            strict_rank=True,
+        )

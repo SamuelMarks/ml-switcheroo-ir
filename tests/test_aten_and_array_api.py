@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from ml_switcheroo_ir import LogicalNode
 from ml_switcheroo_ir.schema.framework_registries import (
@@ -90,12 +89,15 @@ def test_validator_aten_and_array_api_validation() -> None:
     assert "not found in domain 'array_api'" in errs_aapi[0].message
 
 
-def test_missing_framework_schema_file(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_framework_schema_file(tmp_path: Path) -> None:
     """Verify graceful handling when framework JSON schema file does not exist.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+        tmp_path (Path): Pytest temporary directory fixture.
     """
-    monkeypatch.setattr(Path, "exists", lambda self: False)
-    res = _load_framework_schema_file("nonexistent.json", "dummy")
+    res = _load_framework_schema_file(
+        "nonexistent.json",
+        "dummy",
+        json_path=tmp_path / "nonexistent.json",
+    )
     assert res == {}

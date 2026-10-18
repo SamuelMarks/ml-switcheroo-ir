@@ -295,3 +295,14 @@ def test_sass_scoreboarding_latency_hazard_detection() -> None:
     )
     graph_errors = v.validate_graph(graph)
     assert any("Scoreboard dependency hazard" in e.message for e in graph_errors)
+
+    # String wait_barrier_mask clearing barrier 0
+    consumer_str_mask = LogicalNode(
+        id="inst_cons_str",
+        op_type="FADD",
+        domain="nvidia_sass",
+        inputs=["R2", "R3"],
+        outputs=["R4"],
+        attributes={"stall": 1, "wait_barrier_mask": "0-----"},
+    )
+    assert v.validate_sass_scoreboarding([producer, consumer_str_mask]) == []

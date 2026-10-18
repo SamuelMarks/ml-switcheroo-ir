@@ -91,23 +91,28 @@ def test_load_onnx_schemas_branches(tmp_path: Path) -> None:
     assert "alpha" in custom_reg["CustomOp"].attributes
     assert custom_reg["CustomOp"].attributes["alpha"].default == 1.0
 
-    # 4. OpAttribute and OpSchema dataclass fields
-    attr = OpAttribute(name="dim", type="int", required=True, default=0)
-    assert attr.name == "dim"
-    assert attr.type == "int"
-    assert attr.required is True
-    assert attr.default == 0
-
+    # 4. OpAttribute and OpSchema behavioral validation (required, types, defaults)
+    dim_attr = OpAttribute(name="dim", type="int", required=True, default=0)
+    scale_attr = OpAttribute(name="scale", type="float", required=False, default=0.5)
     schema = OpSchema(
         name="Op",
         domain="ai.onnx",
         version=1,
-        attributes={"dim": attr},
+        attributes={"dim": dim_attr, "scale": scale_attr},
         inputs=["in"],
         outputs=["out"],
     )
-    assert schema.name == "Op"
-    assert schema.domain == "ai.onnx"
-    assert schema.version == 1
-    assert schema.inputs == ["in"]
-    assert schema.outputs == ["out"]
+    val = Validator(registry={"Op": schema})
+    missing_req_node = LogicalNode(id="n_req", op_type="Op", attributes={})
+    req_errs = val.validate_required_attributes(missing_req_node)
+    assert len(req_errs) == 1
+    assert req_errs[0].attribute == "dim"
+
+    bad_type_node = LogicalNode(id="n_bad", op_type="Op", attributes={"dim": "not_int"})
+    type_errs = val.validate_attribute_types(bad_type_node)
+    assert len(type_errs) == 1
+    assert type_errs[0].attribute == "dim"
+
+    valid_node = LogicalNode(id="n_ok", op_type="Op", attributes={"dim": 2})
+    val.populate_defaults(valid_node)
+    assert valid_node.attributes["scale"] == 0.5

@@ -3,9 +3,52 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+@dataclass
+class LogicalAxis:
+    """Represents a named dimension for tensor sizes and sharding (e.g., 'batch', 'embed', 'heads').
+
+    Attributes:
+        name (str): Name of the logical axis.
+        size (Optional[int]): Optional fixed size of the axis.
+    """
+
+    name: str
+    size: int | None = None
+
+
+@dataclass
+class PartitionSpec:
+    """Describes how a tensor's dimensions are mapped to a logical mesh.
+
+    Each element in `axes` corresponds to a tensor dimension. An element can be:
+    - A string representing the mesh axis name (e.g., 'data').
+    - A tuple of strings for multi-axis sharding (e.g., ('data', 'model')).
+    - None for a replicated/unsharded dimension.
+
+    Attributes:
+        axes (Tuple[Optional[Union[str, Tuple[str, ...]]], ...]): Tuple mapping tensor dimensions to mesh axes.
+    """
+
+    axes: tuple[str | tuple[str, ...] | None, ...]
+
+
+@dataclass
+class LogicalMesh:
+    """Represents a multi-dimensional grid of devices for distributed execution.
+
+    Attributes:
+        shape (Dict[str, int]): Mapping of mesh axis names to their sizes (e.g., {'data': 4, 'model': 2}).
+        webrtc_topology (Optional[WebRTCSignalingTopology]): WebRTC cluster mesh signaling configuration.
+    """
+
+    shape: dict[str, int]
+    webrtc_topology: WebRTCSignalingTopology | None = None
 
 
 class MicrobatchSplittingDict(TypedDict):

@@ -190,6 +190,7 @@ class ExtendedGhostParam(GhostParam):
             Any: Normalized data with canonical constraint fields populated.
         """
         if isinstance(data, dict):
+            data = dict(data)
             if "dtypes" in data and (
                 "allowed_dtypes" not in data or data["allowed_dtypes"] is None
             ):
