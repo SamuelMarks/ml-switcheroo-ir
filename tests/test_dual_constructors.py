@@ -1,8 +1,9 @@
-"""Unit tests for dual constructor ergonomics and symmetrical API compatibility."""
+"""Unit tests for canonical LogicalNode, LogicalGraph, and streaming parser constructors."""
 
 from __future__ import annotations
 
-from dataclasses import asdict
+import io
+import json
 
 import pytest
 
@@ -12,6 +13,7 @@ from ml_switcheroo_ir import (
     LogicalMesh,
     LogicalNode,
     PartitionSpec,
+    TensorShape,
 )
 
 
@@ -24,81 +26,32 @@ def test_logical_node_op_type_and_attributes() -> None:
     )
     assert node.id == "conv1"
     assert node.op_type == "Conv"
-    with pytest.deprecated_call():
-        assert node.kind == "Conv"
     assert node.attributes == {"kernel_size": 3, "stride": 1}
-    with pytest.deprecated_call():
-        assert node.metadata == {"kernel_size": 3, "stride": 1}
     assert node.outputs == ["conv1"]
 
 
-def test_logical_node_kind_and_metadata() -> None:
-    """Test LogicalNode constructor with legacy kind and metadata."""
-    with pytest.deprecated_call():
-        node = LogicalNode(
-            id="relu1",
-            kind="Relu",
-            metadata={"alpha": 0.2},
-        )
-    assert node.id == "relu1"
-    assert node.op_type == "Relu"
-    with pytest.deprecated_call():
-        assert node.kind == "Relu"
-    assert node.attributes == {"alpha": 0.2}
-    with pytest.deprecated_call():
-        assert node.metadata == {"alpha": 0.2}
-
-
-def test_logical_node_both_matching() -> None:
-    """Test LogicalNode constructor when both op_type and kind are provided and match."""
-    with pytest.deprecated_call():
-        node = LogicalNode(
-            id="n1",
-            op_type="Relu",
-            kind="Relu",
-            attributes={"a": 1},
-            metadata={"b": 2},
-        )
-    assert node.op_type == "Relu"
-    with pytest.deprecated_call():
-        assert node.kind == "Relu"
-    assert node.attributes == {"a": 1, "b": 2}
-
-
-def test_logical_node_conflicting_op_type_and_kind() -> None:
-    """Test LogicalNode constructor raises ValueError when op_type and kind conflict."""
-    with pytest.warns(DeprecationWarning), pytest.raises(
-        ValueError, match="Conflicting op_type"
-    ):
-        LogicalNode(id="n1", op_type="Conv", kind="Relu")
-
-
-def test_logical_node_neither_op_type_nor_kind() -> None:
-    """Test LogicalNode constructor raises ValueError when neither is provided."""
+def test_logical_node_empty_id_or_op_type() -> None:
+    """Test LogicalNode constructor raises ValueError when id or op_type is empty."""
+    with pytest.raises(ValueError, match="LogicalNode 'id' must be a non-empty string"):
+        LogicalNode(id="", op_type="Relu")
     with pytest.raises(
-        ValueError, match="Either 'op_type' or 'kind' must be specified"
+        ValueError, match="LogicalNode 'op_type' must be a non-empty string"
     ):
-        LogicalNode(id="n1")
+        LogicalNode(id="n1", op_type="")
 
 
 def test_logical_node_setters() -> None:
-    """Test kind and metadata property setters on LogicalNode."""
+    """Test op_type and attributes assignment on LogicalNode."""
     node = LogicalNode(id="n1", op_type="Relu")
-    with pytest.deprecated_call():
-        node.kind = "Gelu"
+    node.op_type = "Gelu"
     assert node.op_type == "Gelu"
-    with pytest.deprecated_call():
-        assert node.kind == "Gelu"
 
-    with pytest.deprecated_call():
-        node.metadata = {"approximate": "tanh"}
+    node.attributes = {"approximate": "tanh"}
     assert node.attributes == {"approximate": "tanh"}
-    with pytest.deprecated_call():
-        assert node.metadata == {"approximate": "tanh"}
 
 
-def test_logical_node_dataclass_asdict_and_repr() -> None:
-    """Test that dataclass asdict and repr function correctly with custom __init__."""
+def test_logical_node_model_dump_and_repr() -> None:
+    """Test that Pydantic model_dump and repr function correctly on LogicalNode."""
     spec = PartitionSpec(axes=("data", None))
     node = LogicalNode(
         id="n1",
@@ -107,11 +60,12 @@ def test_logical_node_dataclass_asdict_and_repr() -> None:
         sharding=spec,
         source_ast_ref="test.py:10",
     )
-    d = asdict(node)
+    d = node.model_dump()
     assert d["id"] == "n1"
     assert d["op_type"] == "MatMul"
     assert d["outputs"] == ["n1"]
-    assert "LogicalNode(id='n1', op_type='MatMul'" in repr(node)
+    assert "id='n1'" in repr(node)
+    assert "op_type='MatMul'" in repr(node)
 
 
 def test_logical_graph_nodes_as_dict() -> None:
@@ -124,15 +78,11 @@ def test_logical_graph_nodes_as_dict() -> None:
     assert graph.outputs == ["n2"]
 
 
-def test_logical_graph_nodes_as_list() -> None:
-    """Test LogicalGraph initialized with a list of nodes."""
+def test_logical_graph_rejects_nodes_as_list() -> None:
+    """Test LogicalGraph raises TypeError when initialized with a list of nodes."""
     n1 = LogicalNode(id="n1", op_type="Input")
-    n2 = LogicalNode(id="n2", op_type="Relu", inputs=["n1"])
-    with pytest.deprecated_call():
-        graph = LogicalGraph(name="ListGraph", nodes=[n1, n2])
-    assert set(graph.nodes.keys()) == {"n1", "n2"}
-    assert graph.nodes["n1"] == n1
-    assert graph.outputs == ["n2"]
+    with pytest.raises(TypeError, match="must be a Mapping"):
+        LogicalGraph(name="ListGraph", nodes=[n1])  # type: ignore[arg-type]
 
 
 def test_logical_graph_explicit_edges() -> None:
@@ -141,8 +91,8 @@ def test_logical_graph_explicit_edges() -> None:
     n2 = LogicalNode(id="n2", op_type="Relu")
     edges = [
         LogicalEdge(source="n1", target="n2"),
-        LogicalEdge(source="n1", target="n2"),  # Duplicate to test deduplication
-        LogicalEdge(source="n1", target="non_existent"),  # Target not in graph
+        LogicalEdge(source="n1", target="n2"),
+        LogicalEdge(source="n1", target="non_existent"),
     ]
     graph = LogicalGraph(name="EdgeGraph", nodes={"n1": n1, "n2": n2}, edges=edges)
     assert n2.inputs == ["n1"]
@@ -152,7 +102,6 @@ def test_logical_graph_explicit_edges() -> None:
 
 def test_logical_graph_outputs_deduction_and_override() -> None:
     """Test deduction of graph outputs and explicit override."""
-    # Explicit outputs
     n1 = LogicalNode(id="n1", op_type="Input")
     n2 = LogicalNode(id="n2", op_type="Relu", inputs=["n1"])
     graph_explicit = LogicalGraph(
@@ -160,25 +109,19 @@ def test_logical_graph_outputs_deduction_and_override() -> None:
     )
     assert graph_explicit.outputs == ["custom_out"]
 
-    # Empty graph
     graph_empty = LogicalGraph()
     assert graph_empty.outputs == []
 
-    # Cycle: both consume each other -> empty out-degree zero
     c1 = LogicalNode(id="c1", op_type="Op", inputs=["c2"])
     c2 = LogicalNode(id="c2", op_type="Op", inputs=["c1"])
     graph_cycle = LogicalGraph(nodes={"c1": c1, "c2": c2})
     assert graph_cycle.outputs == []
 
-    # Multi-output SSA node consumed by downstream
     split = LogicalNode(id="split", op_type="Split", outputs=["s0", "s1"])
     c_s0 = LogicalNode(id="c_s0", op_type="Relu", inputs=["s0"])
     graph_multi = LogicalGraph(nodes={"split": split, "c_s0": c_s0})
-    # split's s0 is consumed, but split's id is not directly consumed, yet s0 is part of split.outputs
-    # c_s0 is completely unconsumed, so c_s0 is the output
     assert "c_s0" in graph_multi.outputs
 
-    # Output node inputs extraction with duplicate input entries
     in_n = LogicalNode(id="in_n", op_type="Input")
     out_n = LogicalNode(id="out_n", op_type="Output", inputs=["in_n", "in_n"])
     graph_with_output_op = LogicalGraph(nodes={"in_n": in_n, "out_n": out_n})
@@ -186,30 +129,29 @@ def test_logical_graph_outputs_deduction_and_override() -> None:
 
 
 def test_logical_graph_roundtrip_instantiation() -> None:
-    """Test roundtrip construction using Format B CST syntax."""
+    """Test roundtrip construction using canonical LogicalNode and LogicalGraph syntax."""
     mesh = LogicalMesh(shape={"data": 2, "model": 4})
-    with pytest.deprecated_call():
-        node1 = LogicalNode(
-            id="x",
-            kind="Input",
-            domain="ai.onnx",
-            version=17,
-            metadata={"dtype": "float32"},
-            sharding=PartitionSpec(axes=("data", None, "model")),
-        )
-        node2 = LogicalNode(
-            id="norm1",
-            kind="RMSNorm",
-            domain="ml.switcheroo.custom",
-            version=1,
-            metadata={"eps": 1e-6},
-        )
-        graph = LogicalGraph(
-            name="TransformerLayer",
-            mesh=mesh,
-            nodes=[node1, node2],
-            edges=[LogicalEdge("x", "norm1")],
-        )
+    node1 = LogicalNode(
+        id="x",
+        op_type="Input",
+        domain="ai.onnx",
+        version=17,
+        attributes={"dtype": "float32"},
+        sharding=PartitionSpec(axes=("data", None, "model")),
+    )
+    node2 = LogicalNode(
+        id="norm1",
+        op_type="RMSNorm",
+        domain="ml.switcheroo.custom",
+        version=1,
+        attributes={"eps": 1e-6},
+    )
+    graph = LogicalGraph(
+        name="TransformerLayer",
+        mesh=mesh,
+        nodes={"x": node1, "norm1": node2},
+        edges=[LogicalEdge("x", "norm1")],
+    )
 
     assert graph.name == "TransformerLayer"
     assert graph.nodes["norm1"].inputs == ["x"]
@@ -217,80 +159,34 @@ def test_logical_graph_roundtrip_instantiation() -> None:
     assert graph.edges == [LogicalEdge(source="x", target="norm1")]
 
 
-class BadShape:
-    """Mock shape object that raises TypeError on iteration."""
-
-    def __iter__(self) -> BadShape:
-        """Iterate over elements, deliberately raising TypeError.
-
-        Raises:
-            TypeError: Always raised to simulate non-iterable custom shape objects.
-        """
-        raise TypeError("BadShape iteration not supported")
-
-
-class ArbitraryObject:
-    """Mock custom object without __iter__ or shape attribute."""
-
-
-class MockMeta:
-    """Duck-typed metadata object defining a shape property."""
-
-    def __init__(self, shape: tuple[int, ...] | list[int] | range | str) -> None:
-        """Initialize MockMeta with shape.
-
-        Args:
-            shape (Union[Tuple[int, ...], List[int], range, str]): Inner shape representation.
-        """
-        self.shape = shape
-
-
-class DummyShape:
-    """Duck-typed metadata object defining a shape property with non-iterable shape."""
-
-    def __init__(self, shape: int) -> None:
-        """Initialize DummyShape with integer shape.
-
-        Args:
-            shape (int): Integer scalar shape.
-        """
-        self.shape = shape
-
-
-def test_logical_node_bad_shape_and_arbitrary_object() -> None:
-    """Test behavior when passing unsupported shape metadata types and arbitrary objects."""
-    from ml_switcheroo_ir import LogicalNode
+def test_logical_node_rejects_invalid_shape_metadata() -> None:
+    """Test that LogicalNode rejects arbitrary objects and invalid shape metadata."""
 
     class BadShape:
         """A class simulating an invalid shape."""
 
-    bad_shape = BadShape()
-    node4 = LogicalNode(id="n4", op_type="Linear", shape_metadata=bad_shape)
-    assert node4.shape_metadata == bad_shape
+    with pytest.raises(TypeError, match="not a valid DimensionType"):
+        LogicalNode(id="n4", op_type="Linear", shape_metadata=BadShape())  # type: ignore[arg-type]
 
-    # Arbitrary object (fallback to original reference without tuple conversion)
-    obj = object()
-    node5 = LogicalNode(id="n5", op_type="Custom", shape_metadata=obj)
-    assert node5.shape_metadata == obj
+    with pytest.raises(TypeError, match="not a valid DimensionType"):
+        LogicalNode(id="n5", op_type="Custom", shape_metadata=object())  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="Invalid shape_metadata"):
+        LogicalNode(id="n6", op_type="Custom", shape_metadata="invalid_str")
 
 
-def test_logical_node_duck_typed_shape() -> None:
-    """Test LogicalNode initialization with duck-typed MockMeta and DummyShape."""
-    meta_list = MockMeta(shape=[3, 224, 224])
-    node1 = LogicalNode(id="n1", op_type="Conv", shape_metadata=meta_list)
+def test_logical_node_shape_from_tensor_shape_and_iterables() -> None:
+    """Test LogicalNode initialization with TensorShape, tuples, lists, and ranges."""
+    node1 = LogicalNode(
+        id="n1", op_type="Conv", shape_metadata=TensorShape((3, 224, 224))
+    )
     assert node1.shape_metadata == (3, 224, 224)
 
-    meta_tuple = MockMeta(shape=(1, 10))
-    node2 = LogicalNode(id="n2", op_type="Linear", shape_metadata=meta_tuple)
+    node2 = LogicalNode(id="n2", op_type="Linear", shape_metadata=(1, 10))
     assert node2.shape_metadata == (1, 10)
 
-    meta_iter = MockMeta(shape=range(3))
-    node_iter = LogicalNode(id="n_iter", op_type="Linear", shape_metadata=meta_iter)
+    node_iter = LogicalNode(id="n_iter", op_type="Linear", shape_metadata=range(3))
     assert node_iter.shape_metadata == (0, 1, 2)
-
-    dummy = DummyShape(shape=512)
-    node3 = LogicalNode(id="n3", op_type="Embedding", shape_metadata=dummy)
-    assert node3.shape_metadata == 512
 
 
 def test_logical_node_dynamic_string_dimensions() -> None:
@@ -317,20 +213,12 @@ def test_logical_node_scalar_and_none_shapes() -> None:
     node_none = LogicalNode(id="n2", op_type="Constant", shape_metadata=None)
     assert node_none.shape_metadata is None
 
-    with pytest.deprecated_call(match="Passing a mapping as 'domain' is deprecated"):
-        node_dict_domain = LogicalNode(id="n3", op_type="Add", domain={"axis": 1})
-    assert node_dict_domain.domain == "ai.onnx"
-    assert node_dict_domain.attributes["axis"] == 1
-
     node_zero_out = LogicalNode(id="sink", op_type="Barrier", outputs=[])
     assert node_zero_out.outputs == []
 
 
 def test_stream_parse_graph_chunked_boundaries() -> None:
     """Test chunked incremental streaming JSON parser with small chunk boundaries and error paths."""
-    import io
-    import json
-
     from ml_switcheroo_ir.graph import _decode_next_json_value, _stream_parse_graph
 
     raw_dict_nodes = (
@@ -343,9 +231,9 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
     assert list(g1.nodes.keys()) == ["n1", "n2"]
     assert g1.nodes["n2"].inputs == ["n1"]
 
-    raw_list_nodes = b'{"name": "ListModel", "nodes": [{"id": "n1", "op_type": "Relu"}], "outputs": ["n1"]}'
-    g2 = _stream_parse_graph(io.BytesIO(raw_list_nodes), LogicalGraph, chunk_size=7)
-    assert g2.name == "ListModel"
+    raw_bytes_nodes = b'{"name": "BytesModel", "nodes": {"n1": {"id": "n1", "op_type": "Relu"}}, "outputs": ["n1"]}'
+    g2 = _stream_parse_graph(io.BytesIO(raw_bytes_nodes), LogicalGraph, chunk_size=7)
+    assert g2.name == "BytesModel"
     assert "n1" in g2.nodes
 
     with pytest.raises(json.JSONDecodeError, match="Expected top-level JSON object"):
@@ -356,21 +244,12 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
     ):
         _stream_parse_graph(io.StringIO('{"name": "X"'), LogicalGraph, chunk_size=4)
 
-    with pytest.raises(
-        json.JSONDecodeError, match="Expected '\\{' or '\\[' for nodes section"
-    ):
+    with pytest.raises(json.JSONDecodeError, match=r"Expected '\{' for nodes section"):
         _stream_parse_graph(io.StringIO('{"nodes": 123}'), LogicalGraph, chunk_size=4)
 
     with pytest.raises(json.JSONDecodeError, match="Unterminated nodes object"):
         _stream_parse_graph(
             io.StringIO('{"nodes": {"n1": {"id": "n1", "op_type": "Relu"}'),
-            LogicalGraph,
-            chunk_size=8,
-        )
-
-    with pytest.raises(json.JSONDecodeError, match="Unterminated nodes array"):
-        _stream_parse_graph(
-            io.StringIO('{"nodes": [{"id": "n1", "op_type": "Relu"}'),
             LogicalGraph,
             chunk_size=8,
         )
@@ -382,11 +261,9 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
             chunk_size=4,
         )
 
-    # Test primitive token (multi-digit number) split across chunk boundaries
     dec = json.JSONDecoder()
     val_split, _, _ = _decode_next_json_value(dec, "12", 0, io.StringIO("345}"), 4)
     assert val_split == 12345
 
-    # Test primitive token at exact EOF of stream
     val_eof, _, _ = _decode_next_json_value(dec, "123", 0, io.StringIO(""), 3)
     assert val_eof == 123

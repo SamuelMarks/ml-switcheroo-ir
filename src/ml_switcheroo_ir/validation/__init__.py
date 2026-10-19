@@ -10,6 +10,7 @@ from ml_switcheroo_ir.validation.core import (
     compute_levenshtein,
 )
 from ml_switcheroo_ir.validation.distributed import (
+    CommunicationVolumeReport,
     estimate_communication_volume,
     estimate_graph_communication_volume,
     validate_pipeline_and_checkpointing_graph,
@@ -20,44 +21,39 @@ from ml_switcheroo_ir.validation.grounding import (
     DiagnosticSeverity,
     GroundingAuditReport,
     GroundingDiagnostic,
+    GroundingEngineProtocol,
     GroundingReport,
-    GroundingSeverity,
     GroundingValidator,
+    SnapshotManifestType,
     audit_graph_grounding,
-    audit_grounding,
 )
 from ml_switcheroo_ir.validation.hardware import (
-    _extract_dst_vgpr,
-    _extract_sass_registers,
-    _extract_vgpr_indices,
     validate_isa_instruction_node,
     validate_sass_scoreboarding_sequence,
     validate_vopd_pairing,
 )
-from ml_switcheroo_ir.validation.quantization import validate_quantization_node
+from ml_switcheroo_ir.validation.quantization import (
+    validate_quantization_node,
+)
 from ml_switcheroo_ir.validation.schema_validator import (
-    MultiDialectValidator,
     Validator,
 )
 
 __all__ = [
     "CORE_MLIR_DIALECTS",
+    "CommunicationVolumeReport",
     "DiagnosticSeverity",
     "GroundingAuditReport",
     "GroundingDiagnostic",
+    "GroundingEngineProtocol",
     "GroundingReport",
-    "GroundingSeverity",
     "GroundingValidator",
     "KNOWN_SYNONYMS",
-    "MultiDialectValidator",
+    "SnapshotManifestType",
     "ValidationError",
     "ValidationLevel",
     "Validator",
-    "_extract_dst_vgpr",
-    "_extract_sass_registers",
-    "_extract_vgpr_indices",
     "audit_graph_grounding",
-    "audit_grounding",
     "compute_levenshtein",
     "estimate_communication_volume",
     "estimate_graph_communication_volume",

@@ -12,7 +12,8 @@ import json
 import keyword
 from pathlib import Path
 import re
-from typing import Any
+import typing
+from typing_extensions import TypeAlias
 
 from pydantic import TypeAdapter
 
@@ -36,34 +37,45 @@ from ml_switcheroo_ir.shapes import (
     SymUnaryOp,
     SymVar,
 )
-from ml_switcheroo_ir.types import DType, TensorShape, TensorSpec
+from ml_switcheroo_ir.types import DType, JsonValue, TensorShape, TensorSpec
 
 DRAFT_2020_12_SCHEMA_URI: str = "https://json-schema.org/draft/2020-12/schema"
 
+SchemaTargetLiteral: TypeAlias = typing.Literal[
+    "LogicalGraph",
+    "LogicalNode",
+    "SnapshotEnvelope",
+    "ZeroTangent",
+    "NoTangent",
+    "PipelineTopologyConfig",
+    "WebRTCSignalingTopology",
+    "all",
+]
 
-def get_json_schema(target: str = "LogicalGraph") -> dict[str, Any]:
+
+def get_json_schema(
+    target: SchemaTargetLiteral | str = "LogicalGraph",
+) -> dict[str, JsonValue]:
     """Emit canonical JSON Schema conforming to Draft 2020-12 specification.
 
     Args:
-        target (str): Target model ('LogicalGraph', 'LogicalNode', 'SnapshotEnvelope',
+        target (SchemaTargetLiteral | str): Target model ('LogicalGraph', 'LogicalNode', 'SnapshotEnvelope',
             'ZeroTangent', 'NoTangent', 'PipelineTopologyConfig',
             'WebRTCSignalingTopology', or 'all'). Defaults to 'LogicalGraph'.
 
     Returns:
-        dict[str, Any]: Generated JSON Schema dictionary.
+        dict[str, JsonValue]: Generated JSON Schema dictionary.
 
     Raises:
         ValueError: If target is not recognized.
     """
     target_clean = target.strip()
     if target_clean == "LogicalGraph":
-        schema: dict[str, Any] = TypeAdapter(LogicalGraph).json_schema()
-        schema.update(schema.get("$defs", {}).get("LogicalGraph", {}))
+        schema: dict[str, JsonValue] = LogicalGraph.model_json_schema()
         schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
         return schema
     if target_clean == "LogicalNode":
-        schema = TypeAdapter(LogicalNode).json_schema()
-        schema.update(schema.get("$defs", {}).get("LogicalNode", {}))
+        schema = LogicalNode.model_json_schema()
         schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
         return schema
     if target_clean == "SnapshotEnvelope":
@@ -197,7 +209,6 @@ export interface SymUnaryOp {
 export interface SymPiecewise {
   type: "piecewise";
   cases?: [SymNode | string | boolean, SymNode][];
-  conditions?: [SymNode, string][];
   default?: SymNode;
 }
 
@@ -273,9 +284,6 @@ export interface LogicalNode {
   device?: string | null;
   stream?: string | null;
   sharding?: PartitionSpec | null;
-  subgraph?: LogicalGraph | null;
-  kind?: string;
-  metadata?: Record<string, AttributeValue>;
 }
 
 export interface ZeroTangent extends LogicalNode {
@@ -290,7 +298,7 @@ export interface NoTangent extends LogicalNode {
 
 export interface LogicalGraph {
   name?: string;
-  nodes: Record<string, LogicalNode> | LogicalNode[];
+  nodes: Record<string, LogicalNode>;
   inputs?: string[];
   input_specs?: Record<string, TensorSpec>;
   outputs?: string[];
@@ -318,11 +326,11 @@ export interface SnapshotEnvelope {
     )
 
 
-def _format_sym_node(node: DimensionType | object) -> str:
+def _format_sym_node(node: DimensionType) -> str:
     """Recursively format a symbolic shape node into executable Python code.
 
     Args:
-        node (Union[DimensionType, object]): Symbolic node, integer, or string dimension.
+        node (DimensionType): Symbolic node, integer, or string dimension.
 
     Returns:
         str: Python code expression creating the symbol.
@@ -348,12 +356,12 @@ def _format_sym_node(node: DimensionType | object) -> str:
 
 
 def _format_shape_tuple(
-    shape: Sequence[DimensionType | object] | TensorShape | None,
+    shape: Sequence[DimensionType] | TensorShape | None,
 ) -> str:
     """Format shape metadata or dimension tuple into Python representation.
 
     Args:
-        shape (Optional[Union[Sequence[Union[DimensionType, object]], TensorShape]]): Shape tuple, list, or None.
+        shape (Sequence[DimensionType] | TensorShape | None): Shape tuple, list, or None.
 
     Returns:
         str: Python tuple representation.

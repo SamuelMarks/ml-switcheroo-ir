@@ -126,7 +126,7 @@ def test_readme_quickstart_json_serialization() -> None:
         outputs=["attn_out"],
     )
 
-    json_payload = graph.to_json(format="canonical", indent=2)
+    json_payload = graph.to_json(indent=2)
     assert "FlashAttention" in json_payload
     assert "edges" in json_payload
 
@@ -196,7 +196,7 @@ def test_readme_frontend_backend_contracts() -> None:
             )
             return LogicalGraph(nodes={"dense": node}, outputs=["dense"])
 
-    class MyCompilerBackend(CompilerBackend):
+    class MyCompilerBackend(CompilerBackend[str]):
         """Example compiler backend emitting target assembly instructions."""
 
         def compile(self, graph: LogicalGraph) -> str:
@@ -388,7 +388,7 @@ def test_usage_frontend_and_backend() -> None:
                 name="ParsedModel", nodes={"fc1": node}, outputs=["fc1_out"]
             )
 
-    class WebGPUBackend(CompilerBackend):
+    class WebGPUBackend(CompilerBackend[str]):
         """Compiles LogicalGraph into WGSL shader bindings."""
 
         def compile(self, graph: LogicalGraph) -> str:

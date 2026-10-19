@@ -9,11 +9,10 @@ from ml_switcheroo_ir import (
     NoTangent,
     ZeroTangent,
 )
-from ml_switcheroo_ir.types import (
-    NoTangent as NoTangentFromTypes,
-)
-from ml_switcheroo_ir.types import (
-    ZeroTangent as ZeroTangentFromTypes,
+from ml_switcheroo_ir.sentinels import (
+    NoTangent as NoTangentFromSentinels,
+    ZeroTangent as ZeroTangentFromSentinels,
+    verify_sentinel_protocol,
 )
 from ml_switcheroo_ir.validator import Validator
 
@@ -40,20 +39,13 @@ def test_no_tangent_initialization() -> None:
     assert nt.domain == "ml.switcheroo.ad"
 
 
-def test_import_from_types() -> None:
-    """Test importing ZeroTangent and NoTangent from ml_switcheroo_ir.types."""
-    import pytest
-
-    import ml_switcheroo_ir.types as ir_types
-
-    zt = ZeroTangentFromTypes(id="zt_types")
-    nt = NoTangentFromTypes(id="nt_types")
+def test_import_from_sentinels() -> None:
+    """Test importing ZeroTangent and NoTangent from ml_switcheroo_ir.sentinels."""
+    zt = ZeroTangentFromSentinels(id="zt_sentinels")
+    nt = NoTangentFromSentinels(id="nt_sentinels")
 
     assert isinstance(zt, ZeroTangent)
     assert isinstance(nt, NoTangent)
-
-    with pytest.raises(AttributeError):
-        _ = ir_types.UnknownAttr123
 
 
 def test_autodiff_sentinels_strict_validation() -> None:
@@ -98,9 +90,7 @@ def test_autodiff_sentinels_serialization_roundtrip() -> None:
     assert "zt" in restored.nodes
     assert restored.nodes["zt"].op_type == "ZeroTangent"
     assert restored.nodes["zt"].domain == "ml.switcheroo.ad"
-    assert restored.nodes["zt"].shape_metadata == [2, 4] or restored.nodes[
-        "zt"
-    ].shape_metadata == (2, 4)
+    assert restored.nodes["zt"].shape_metadata == (2, 4)
     assert restored.nodes["zt"].dtype == DType.float16
 
     assert "nt" in restored.nodes
@@ -115,8 +105,6 @@ def test_autodiff_sentinels_serialization_roundtrip() -> None:
     assert "nt" in from_json_graph.nodes
     assert isinstance(from_json_graph.nodes["zt"], ZeroTangent)
     assert isinstance(from_json_graph.nodes["nt"], NoTangent)
-
-    from ml_switcheroo_ir.sentinels import verify_sentinel_protocol
 
     assert verify_sentinel_protocol(zt) is zt
     assert verify_sentinel_protocol(nt) is nt

@@ -4,23 +4,11 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Final,
-    List,
-    Protocol,
-    Tuple,
-    Union,
-    overload,
-)
+import typing
 from typing_extensions import TypeAlias
 
-if TYPE_CHECKING:
-    from ml_switcheroo_ir.sentinels import NoTangent, ZeroTangent
+import pydantic
 
 from ml_switcheroo_ir.shapes import (
     DimensionType,
@@ -36,78 +24,56 @@ __all__ = [
     "DType",
     "DimensionType",
     "InitializerValue",
-    "NoTangent",
+    "JsonValue",
     "ShapeMetadataType",
     "TensorShape",
     "TensorSpec",
-    "ZeroTangent",
+    "_validate_dimension_tuple",
     "is_dynamic_dimension",
 ]
 
-if TYPE_CHECKING:
-    InitializerValue: TypeAlias = Union[
-        int,
-        float,
-        bool,
-        str,
-        bytes,
-        List["InitializerValue"],
-        Dict[str, "InitializerValue"],
-    ]
+JsonScalar: TypeAlias = typing.Union[str, int, float, bool, None]
 
-    AttributeValue: TypeAlias = Union[
-        int,
-        float,
-        str,
-        bool,
-        bytes,
-        None,
-        SymNode,
-        SymInt,
-        "DType",
-        "TensorShape",
-        "TensorSpec",
-        Sequence["AttributeValue"],
-        Mapping[str, "AttributeValue"],
-    ]
+if typing.TYPE_CHECKING:
+    JsonValue: TypeAlias = (
+        str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+    )
+    InitializerValue: TypeAlias = (
+        int
+        | float
+        | bool
+        | str
+        | bytes
+        | list["InitializerValue"]
+        | dict[str, "InitializerValue"]
+    )
 else:
-    _ScalarAttribute: TypeAlias = Union[
-        int,
-        float,
-        str,
-        bool,
-        bytes,
-        None,
-        SymNode,
-        SymInt,
-        "DType",
-        "TensorShape",
-        "TensorSpec",
+    JsonValue: TypeAlias = typing.Union[
+        JsonScalar,
+        list[object],
+        dict[str, object],
     ]
-    InitializerValue: TypeAlias = Union[
+    InitializerValue: TypeAlias = typing.Union[
         int,
         float,
         bool,
         str,
         bytes,
-        List[object],
-        Dict[str, object],
-    ]
-    AttributeValue: TypeAlias = Union[
-        _ScalarAttribute,
-        Sequence[object],
-        Mapping[str, object],
+        list[object],
+        dict[str, object],
     ]
 
 
-def is_dynamic_dimension(dim: object) -> bool:
+def is_dynamic_dimension(
+    dim: DimensionType | object,
+) -> typing.TypeGuard[str | SymNode | SymInt]:
     """Check whether a single dimension value is symbolic or dynamic.
 
     Args:
-        dim (object): Dimension entry to inspect.
+        dim (DimensionType | object): Dimension entry to inspect.
 
     Returns:
-        bool: True if the dimension is dynamic, symbolic, negative, or non-integer.
+        typing.TypeGuard[str | SymNode | SymInt]: True if the dimension is dynamic, symbolic, negative, or non-integer.
     """
     if isinstance(dim, int) and not isinstance(dim, bool):
         return dim < 0
@@ -116,7 +82,7 @@ def is_dynamic_dimension(dim: object) -> bool:
     return True
 
 
-class AutodiffSentinelProtocol(Protocol):
+class AutodiffSentinelProtocol(typing.Protocol):
     """Protocol representing autodiff sentinel nodes (ZeroTangent, NoTangent).
 
     Attributes:
@@ -130,7 +96,7 @@ class AutodiffSentinelProtocol(Protocol):
     domain: str
 
 
-_DTYPE_ALIASES: Final[Mapping[str, str]] = {
+_DTYPE_ALIASES: typing.Final[Mapping[str, str]] = {
     "float": "float32",
     "double": "float64",
     "half": "float16",
@@ -151,7 +117,7 @@ _DTYPE_ALIASES: Final[Mapping[str, str]] = {
     "torch.bool": "bool",
 }
 
-_DTYPE_ONNX_MAP: Final[Mapping[str, str]] = {
+_DTYPE_ONNX_MAP: typing.Final[Mapping[str, str]] = {
     "float32": "FLOAT",
     "float16": "FLOAT16",
     "bfloat16": "BFLOAT16",
@@ -179,7 +145,7 @@ _DTYPE_ONNX_MAP: Final[Mapping[str, str]] = {
     "uint4": "UINT4",
 }
 
-_DTYPE_ITEMSIZE_MAP: Final[Mapping[str, float]] = {
+_DTYPE_ITEMSIZE_MAP: typing.Final[Mapping[str, float]] = {
     "complex128": 16.0,
     "float64": 8.0,
     "int64": 8.0,
@@ -308,59 +274,100 @@ class DType(str, Enum):
         return _DTYPE_ITEMSIZE_MAP[self.value]
 
 
-class _HasDimsProtocol(Protocol):
-    """Protocol for duck-typed shape objects carrying a .dims sequence."""
+def _validate_dimension_tuple(
+    dims: tuple[DimensionType, ...]
+    | Sequence[DimensionType]
+    | Iterable[DimensionType]
+    | TensorShape
+    | DimensionType,
+) -> tuple[DimensionType, ...]:
+    """Validate and normalize dimensions into a tuple of DimensionType.
 
-    @property
-    def dims(self) -> Sequence[DimensionType]:
-        """Return sequence of dimensions.
+    Args:
+        dims (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType):
+            Input dimensions.
 
-        Returns:
-            Sequence[DimensionType]: Dimension sequence.
-        """
+    Returns:
+        tuple[DimensionType, ...]: Validated dimension tuple.
+
+    Raises:
+        TypeError: If any dimension is a boolean or not a valid DimensionType.
+    """
+    if isinstance(dims, TensorShape):
+        raw_dims: tuple[object, ...] = dims.dims
+    elif isinstance(dims, tuple):
+        raw_dims = dims
+    elif not isinstance(dims, (str, bytes, Mapping)) and isinstance(dims, Iterable):
+        raw_dims = tuple(dims)
+    else:
+        raw_dims = (dims,)
+
+    validated: list[DimensionType] = []
+    for d in raw_dims:
+        if isinstance(d, bool):
+            raise TypeError(
+                f"Boolean value {d!r} is not a valid tensor dimension in TensorShape."
+            )
+        if not isinstance(d, (int, str, SymNode, SymInt)):
+            raise TypeError(
+                f"Value {d!r} of type {type(d).__name__} is not a valid DimensionType."
+            )
+        validated.append(d)
+    return tuple(validated)
 
 
-@dataclass
-class TensorShape:
+class TensorShape(pydantic.BaseModel):
     """Represents a tensor shape with dimension query and symbolic manipulation capabilities.
 
     Attributes:
         dims (tuple[DimensionType, ...]): Tensor dimension sizes, symbolic names, or SymNode expressions.
     """
 
-    dims: tuple[DimensionType, ...]
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    dims: tuple[DimensionType, ...] = ()
 
     def __init__(
         self,
         dims: tuple[DimensionType, ...]
         | Sequence[DimensionType]
+        | Iterable[DimensionType]
         | TensorShape
-        | _HasDimsProtocol
-        | DimensionType,
+        | DimensionType = (),
     ) -> None:
         """Initialize TensorShape normalizing inputs into a tuple.
 
         Args:
-            dims (tuple[DimensionType, ...] | Sequence[DimensionType] | TensorShape | _HasDimsProtocol | DimensionType): Dimensions.
+            dims (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType): Dimensions.
 
         Raises:
-            TypeError: If any dimension is a boolean value.
+            TypeError: If any dimension is a boolean value or invalid DimensionType.
         """
-        if isinstance(dims, tuple):
-            raw_dims = dims
-        elif hasattr(dims, "dims"):
-            raw_dims = tuple(dims.dims)
-        elif not isinstance(dims, str) and isinstance(dims, Iterable):
-            raw_dims = tuple(dims)
-        else:
-            raw_dims = (dims,)
+        validated_dims = _validate_dimension_tuple(dims)
+        super().__init__(dims=validated_dims)
 
-        for d in raw_dims:
-            if isinstance(d, bool):
-                raise TypeError(
-                    f"Boolean value {d!r} is not a valid tensor dimension in TensorShape."
-                )
-        self.dims = raw_dims
+    @classmethod
+    def from_sequence(
+        cls,
+        seq: Sequence[DimensionType] | Iterable[DimensionType] | TensorShape,
+    ) -> TensorShape:
+        """Construct a TensorShape from a sequence or iterable of dimensions.
+
+        Args:
+            seq (Sequence[DimensionType] | Iterable[DimensionType] | TensorShape): Dimension sequence.
+
+        Returns:
+            TensorShape: Constructed TensorShape instance.
+        """
+        return cls(seq)
+
+    def to_list(self) -> list[DimensionType]:
+        """Return dimensions as a list.
+
+        Returns:
+            list[DimensionType]: List of dimensions.
+        """
+        return list(self.dims)
 
     @property
     def rank(self) -> int:
@@ -459,7 +466,7 @@ class TensorShape:
         """
         return len(self.dims)
 
-    def __iter__(self) -> Iterator[DimensionType]:
+    def __iter__(self) -> Iterator[DimensionType]:  # type: ignore[override]
         """Iterate over dimension sizes.
 
         Returns:
@@ -467,7 +474,7 @@ class TensorShape:
         """
         return iter(self.dims)
 
-    @overload
+    @typing.overload
     def __getitem__(self, idx: int) -> DimensionType:
         """Retrieve a single dimension by integer index.
 
@@ -478,24 +485,26 @@ class TensorShape:
             DimensionType: Dimension at index.
         """
 
-    @overload
-    def __getitem__(self, idx: slice) -> tuple[DimensionType, ...]:
+    @typing.overload
+    def __getitem__(
+        self, idx: builtins.slice[int | None, int | None, int | None]
+    ) -> tuple[DimensionType, ...]:
         """Retrieve a slice of dimensions.
 
         Args:
-            idx (slice): Slice object.
+            idx (slice[int | None, int | None, int | None]): Slice object.
 
         Returns:
             tuple[DimensionType, ...]: Sliced tuple of dimensions.
         """
 
     def __getitem__(
-        self, idx: int | slice
+        self, idx: int | builtins.slice[int | None, int | None, int | None]
     ) -> DimensionType | tuple[DimensionType, ...]:
         """Retrieve dimension size by index or slice.
 
         Args:
-            idx (int | slice): Index or slice.
+            idx (int | slice[int | None, int | None, int | None]): Index or slice.
 
         Returns:
             DimensionType | tuple[DimensionType, ...]: Dimension size or tuple of sizes.
@@ -517,16 +526,25 @@ class TensorShape:
             return self.dims == tuple(other)
         return False
 
+    def __hash__(self) -> int:
+        """Compute hash from dimensions tuple.
 
-ShapeMetadataType: TypeAlias = Union[
-    Tuple[DimensionType, ...],
+        Returns:
+            int: Hash code.
+        """
+        return hash(self.dims)
+
+
+ShapeMetadataType: TypeAlias = typing.Union[
+    tuple[DimensionType, ...],
+    Sequence[DimensionType],
     TensorShape,
+    DimensionType,
     None,
 ]
 
 
-@dataclass
-class TensorSpec:
+class TensorSpec(pydantic.BaseModel):
     """Specification for tensor values including shape, dtype, and sparsity.
 
     Attributes:
@@ -534,6 +552,8 @@ class TensorSpec:
         dtype (DType): Tensor data type.
         sparsity (str | None): Sparsity layout or format if applicable.
     """
+
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     shape: tuple[DimensionType, ...]
     dtype: DType
@@ -552,19 +572,9 @@ class TensorSpec:
             dtype (DType | str): Data type as DType enum or string name.
             sparsity (str | None): Optional sparsity layout.
         """
-        if isinstance(shape, TensorShape):
-            self.shape = shape.dims
-        elif isinstance(shape, tuple):
-            self.shape = shape
-        else:
-            self.shape = tuple(shape)
-
-        if isinstance(dtype, DType):
-            self.dtype = dtype
-        else:
-            self.dtype = DType.from_str(dtype)
-
-        self.sparsity = sparsity
+        norm_shape = _validate_dimension_tuple(shape)
+        norm_dtype = dtype if isinstance(dtype, DType) else DType.from_str(dtype)
+        super().__init__(shape=norm_shape, dtype=norm_dtype, sparsity=sparsity)
 
     @property
     def is_dynamic(self) -> bool:
@@ -616,20 +626,47 @@ class TensorSpec:
         )
 
 
-def __getattr__(name: str) -> Any:
-    """Lazily resolve ZeroTangent and NoTangent from ml_switcheroo_ir.sentinels.
+class _AttributeValuePydanticAnnotation:
+    """Custom Pydantic annotation preserving AttributeValue dictionaries, lists, tuples, and IR types without coercion."""
 
-    Args:
-        name (str): Attribute name to retrieve.
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: object,
+        handler: pydantic.GetCoreSchemaHandler,
+    ) -> object:
+        """Return core_schema.any_schema() for runtime AttributeValue preservation.
 
-    Returns:
-        Any: Exported sentinel class.
+        Args:
+            source_type (object): Annotated type.
+            handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
 
-    Raises:
-        AttributeError: If attribute is not found.
-    """
-    if name in ("ZeroTangent", "NoTangent"):
-        from ml_switcheroo_ir import sentinels
+        Returns:
+            object: Pydantic CoreSchema instance.
+        """
+        from pydantic_core import core_schema
 
-        return getattr(sentinels, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        del source_type, handler
+        return core_schema.any_schema()
+
+
+if typing.TYPE_CHECKING:
+    AttributeValue: TypeAlias = (
+        int
+        | float
+        | str
+        | bool
+        | bytes
+        | None
+        | SymNode
+        | SymInt
+        | DType
+        | TensorShape
+        | TensorSpec
+        | Sequence["AttributeValue"]
+        | Mapping[str, "AttributeValue"]
+    )
+else:
+    AttributeValue: TypeAlias = typing.Annotated[
+        object, _AttributeValuePydanticAnnotation
+    ]

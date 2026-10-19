@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from ml_switcheroo_ir import LogicalGraph, LogicalNode
@@ -30,7 +28,7 @@ def test_validation_error_str() -> None:
 
 
 def test_validator_init_levels_and_aliases() -> None:
-    """Test Validator initialization with various levels and backward compatibility aliases."""
+    """Test Validator initialization with various levels."""
     v_default = Validator()
     assert v_default.level == ValidationLevel.WARNING
 
@@ -42,9 +40,6 @@ def test_validator_init_levels_and_aliases() -> None:
 
     v_lenient = Validator(level=ValidationLevel.LENIENT)
     assert v_lenient.level == ValidationLevel.LENIENT
-
-    v_error_alias = Validator(level=ValidationLevel.ERROR)
-    assert v_error_alias.level == ValidationLevel.LENIENT
 
 
 def test_validator_strict_mode_promotions() -> None:
@@ -136,7 +131,7 @@ def test_validator_lenient_mode_filters_warnings() -> None:
 
 def test_validator_grounding_integration() -> None:
     """Test Validator with integrated GroundingValidator."""
-    manifest: dict[str, Any] = {
+    manifest: dict[str, object] = {
         "classes": {},
         "functions": {"ai.onnx.Add": {}},
         "methods": {},

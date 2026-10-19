@@ -3,39 +3,40 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Sequence
 import json
 import os
 import sys
-import warnings
-from typing import Any, TypedDict
+import typing
 
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 
 
 def _fallback_tabulate(
-    tabular_data: Any,
-    headers: Any = (),
-    **kwargs: Any,
+    tabular_data: Sequence[Sequence[object]],
+    headers: Sequence[str] = (),
+    tablefmt: str = "grid",
 ) -> str:
     """Format tabular data as a pipe-separated ASCII table when tabulate is unavailable.
 
     Args:
-        tabular_data (Any): Rows of table cells.
-        headers (Any): Sequence of column header labels.
-        **kwargs (Any): Ignored formatting keyword arguments.
+        tabular_data (Sequence[Sequence[object]]): Rows of table cells.
+        headers (Sequence[str]): Sequence of column header labels.
+        tablefmt (str): Table formatting style identifier.
 
     Returns:
         str: Formatted table string.
     """
-    del kwargs
-    res = " | ".join(str(h) for h in headers) + "\n"
-    res += "-" * len(res) + "\n"
+    del tablefmt
+    nl = chr(10)
+    res = " | ".join(str(h) for h in headers) + nl
+    res += "-" * len(res) + nl
     for row in tabular_data:
-        res += " | ".join(str(c) for c in row) + "\n"
+        res += " | ".join(str(c) for c in row) + nl
     return res
 
 
-class FileComplianceResult(TypedDict):
+class FileComplianceResult(typing.TypedDict):
     """Typed dictionary representing the compliance analysis of a Python file.
 
     Attributes:
@@ -53,17 +54,8 @@ class FileComplianceResult(TypedDict):
     fw_score: tuple[int, int]
 
 
-def _warn_deprecation() -> None:
-    """Emit a standard deprecation warning."""
-    warnings.warn(
-        "ml_switcheroo_ir.compliance is deprecated and will be removed in version 0.1.0; "
-        "use ml_ecosystem_snapshots.compliance instead.",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-
-
 __all__ = [
+    "FileComplianceResult",
     "analyze_python_file",
     "collect_files",
     "extract_dynamic_definitions",
@@ -467,18 +459,14 @@ def run_compliance_check(
     targets: list[str],
     verbose: bool = False,
     mapping_file: str | None = None,
-    warn: bool = True,
 ) -> None:
     """Run the compliance check on the specified targets and print reports.
 
     Args:
-        targets: List of file or directory paths to check.
-        verbose: Whether to print detailed missing operation schemas.
-        mapping_file: Optional path to a mapping JSON file to report implemented APIs.
-        warn: Whether to emit a deprecation warning.
+        targets (list[str]): List of file or directory paths to check.
+        verbose (bool): Whether to print detailed missing operation schemas.
+        mapping_file (str | None): Optional path to a mapping JSON file to report implemented APIs.
     """
-    if warn:
-        _warn_deprecation()
     if not targets:
         print("Error: No targets provided.")
         sys.exit(1)

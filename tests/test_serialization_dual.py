@@ -1,8 +1,10 @@
-"""Tests for dual serialization and deserialization in LogicalGraph."""
+"""Tests for canonical serialization and deserialization in LogicalGraph."""
 
 from __future__ import annotations
 
 import json
+
+import pytest
 
 from ml_switcheroo_ir import (
     LogicalEdge,
@@ -33,42 +35,38 @@ def test_from_json_with_nodes_as_dict() -> None:
     assert graph.outputs == ["n1"]
 
 
-def test_from_json_with_nodes_as_list() -> None:
-    """Test parsing list-based node layout."""
+def test_from_json_rejects_nodes_as_list() -> None:
+    """Test that from_json rejects legacy list-based node layout."""
     data = {
         "name": "ListModel",
         "nodes": [
             {
                 "id": "node_a",
-                "kind": "Relu",
-                "metadata": {"test_attr": 42},
+                "op_type": "Relu",
+                "attributes": {"test_attr": 42},
                 "inputs": ["node_input"],
             }
         ],
     }
-    graph = LogicalGraph.from_json(json.dumps(data))
-    assert graph.name == "ListModel"
-    assert "node_a" in graph.nodes
-    assert graph.nodes["node_a"].op_type == "Relu"
-    assert graph.nodes["node_a"].attributes == {"test_attr": 42}
-    assert graph.nodes["node_a"].inputs == ["node_input"]
+    with pytest.raises(TypeError, match="expected 'nodes' to be a Mapping"):
+        LogicalGraph.from_json(json.dumps(data))
 
 
 def test_from_json_with_explicit_edges() -> None:
     """Test parsing explicit edges array and populating node inputs."""
     data = {
         "name": "EdgeModel",
-        "nodes": [
-            {"id": "a", "op_type": "Input"},
-            {"id": "b", "op_type": "Relu"},
-        ],
+        "nodes": {
+            "a": {"id": "a", "op_type": "Input"},
+            "b": {"id": "b", "op_type": "Relu"},
+        },
         "edges": [
             {"source": "a", "target": "b"},
             {
                 "source": "a",
                 "target": "b",
-            },  # Duplicate edge shouldn't duplicate in inputs
-            {"source": "unknown", "target": "unknown_target"},  # Safely handled
+            },
+            {"source": "unknown", "target": "unknown_target"},
         ],
     }
     graph = LogicalGraph.from_json(json.dumps(data))
@@ -92,13 +90,11 @@ def test_to_json_deterministic() -> None:
         name="DeterministicGraph", nodes={"n1": n1, "n2": n2}, mesh=mesh
     )
 
-    json1 = graph.to_json(format="canonical", indent=2)
-    json2 = graph.to_json(format="canonical", indent=2)
+    json1 = graph.to_json(indent=2)
+    json2 = graph.to_json(indent=2)
     assert json1 == json2
-
-    json_legacy = graph.to_json(format="legacy", indent=2)
-    assert "edges" not in json.loads(json_legacy)
-    assert "edges" not in graph.to_dict(format="legacy")
+    assert "edges" in json.loads(json1)
+    assert "edges" in graph.to_dict()
 
 
 def test_roundtrip_json_serialization() -> None:

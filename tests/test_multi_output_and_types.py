@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import pickle
-from typing import Any
 
 import pytest
 
@@ -211,14 +210,14 @@ def test_serialization_roundtrip_with_outputs() -> None:
 
 
 def test_from_json_outputs_omitted_and_null() -> None:
-    """Test from_json handles omitted outputs and null outputs."""
+    """Test LogicalGraph.from_json when node outputs are omitted or null."""
     raw_json = json.dumps(
         {
             "name": "TestModel",
-            "nodes": [
-                {"id": "n1", "op_type": "Relu"},
-                {"id": "n2", "op_type": "Sigmoid", "outputs": None},
-            ],
+            "nodes": {
+                "n1": {"id": "n1", "op_type": "Relu"},
+                "n2": {"id": "n2", "op_type": "Sigmoid", "outputs": None},
+            },
         }
     )
     graph = LogicalGraph.from_json(raw_json)
@@ -332,14 +331,11 @@ def test_tensor_shape_operations_and_properties() -> None:
     s2 = TensorShape([2, 4])
     assert s2.dims == (2, 4)
 
-    # From object with .dims attribute
-    class DummyShapeObj:
-        """Mock object providing dims tuple for shape normalization."""
-
-        dims = (8, 16)
-
-    s3 = TensorShape(DummyShapeObj())
+    # From TensorShape
+    s3 = TensorShape.from_sequence(TensorShape((8, 16)))
     assert s3.dims == (8, 16)
+    assert s3.to_list() == [8, 16]
+    assert hash(s3) == hash((8, 16))
 
     # From scalar/non-iterable
     s4 = TensorShape(42)
@@ -486,25 +482,25 @@ def test_nested_subgraphs_and_transforms() -> None:
     assert restored_loop.dtype == DType.float32
 
 
-def test_legacy_subgraph_attributes_migration() -> None:
-    """Test from_dict migrates legacy subgraph attributes into node.subgraphs."""
-    sub_raw: dict[str, Any] = {
-        "name": "LegacySub",
+def test_canonical_subgraphs_deserialization() -> None:
+    """Test from_dict deserializes canonical subgraphs dictionary into node.subgraphs."""
+    sub_raw: dict[str, object] = {
+        "name": "CanonicalSub",
         "nodes": {"n1": {"id": "n1", "op_type": "Relu"}},
         "outputs": ["n1"],
     }
-    raw_data: dict[str, Any] = {
-        "name": "ModelWithLegacyAttrs",
+    raw_data: dict[str, object] = {
+        "name": "ModelWithSubgraphs",
         "nodes": {
             "node_body": {
                 "id": "node_body",
                 "op_type": "While",
-                "attributes": {"body_subgraph": sub_raw},
+                "subgraphs": {"body": sub_raw},
             },
             "node_bwd": {
                 "id": "node_bwd",
                 "op_type": "CustomGrad",
-                "attributes": {"bwd_graph": sub_raw},
+                "subgraphs": {"bwd": sub_raw},
             },
         },
     }
@@ -523,14 +519,14 @@ def test_tensor_shape_and_node_edge_coverage() -> None:
     assert ts != "not_a_shape"
     assert ts != (1, 2)
 
-    # Non-sequence shape_metadata property checks
+    # Scalar integer shape_metadata normalized to 1-tuple
     node_custom = LogicalNode(id="nc", op_type="Custom", shape_metadata=999)
-    assert node_custom.shape is None
-    assert node_custom.rank == 0
+    assert node_custom.shape == TensorShape((999,))
+    assert node_custom.rank == 1
 
-    # Float dimension in dynamic shape check
-    node_float_dim = LogicalNode(id="nf", op_type="Custom", shape_metadata=(1.5, 2))
-    assert node_float_dim.is_dynamic_shape
+    # Reject float dimension in shape_metadata
+    with pytest.raises(TypeError, match="not a valid DimensionType"):
+        LogicalNode(id="nf", op_type="Custom", shape_metadata=(1.5, 2))  # type: ignore[arg-type]
 
     # Shape property setter tests
     node_prop = LogicalNode(id="np", op_type="Relu")
@@ -544,32 +540,25 @@ def test_tensor_shape_and_node_edge_coverage() -> None:
     assert node_prop.shape_metadata == (8, 9)
 
     node_prop.shape = 42
-    assert node_prop.shape_metadata == 42
+    assert node_prop.shape_metadata == (42,)
 
-    # Duck-typed metadata.shape handling branches
-    class MockMetaStr:
-        """Mock metadata with string shape."""
+    node_prop.shape = None
+    assert node_prop.shape_metadata is None
+
+    # Invalid shape object rejection
+    class MockMetaInvalid:
+        """Mock metadata with invalid shape."""
 
         shape = "static_str"
 
-    class MockMetaInt:
-        """Mock metadata with integer shape."""
+    with pytest.raises(TypeError, match="not a valid DimensionType"):
+        LogicalNode(id="nis", op_type="Op", shape_metadata=MockMetaInvalid())
 
-        shape = 123
+    with pytest.raises(TypeError, match="Invalid shape_metadata"):
+        LogicalNode(id="n_str", op_type="Custom", shape_metadata="not_a_seq")
 
-    node_inner_str = LogicalNode(id="nis", op_type="Op", shape_metadata=MockMetaStr())
-    assert node_inner_str.shape_metadata == "static_str"
-
-    node_inner_int = LogicalNode(id="nii", op_type="Op", shape_metadata=MockMetaInt())
-    assert node_inner_int.shape_metadata == 123
-
-    node_str = LogicalNode(id="n_str", op_type="Custom", shape_metadata="not_a_seq")
-    assert node_str.shape_metadata == "not_a_seq"
-
-    node_dict = LogicalNode(
-        id="n_dict", op_type="Custom", shape_metadata={"shape": (2, 2)}
-    )
-    assert node_dict.shape_metadata == {"shape": (2, 2)}
+    with pytest.raises(TypeError, match="Invalid shape_metadata"):
+        LogicalNode(id="n_dict", op_type="Custom", shape_metadata={"shape": (2, 2)})
 
     # NodeDict pickle serialization roundtrip
     g = LogicalGraph(

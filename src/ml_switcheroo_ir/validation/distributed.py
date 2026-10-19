@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+import typing
 
+from ml_switcheroo_ir.distributed import PartitionAxisElement
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalMesh, LogicalNode
 from ml_switcheroo_ir.types import DType
 from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel
@@ -18,7 +19,7 @@ __all__ = [
 ]
 
 
-class CommunicationVolumeReport(TypedDict):
+class CommunicationVolumeReport(typing.TypedDict):
     """Typed dictionary reporting analytical collective communication volume.
 
     Attributes:
@@ -175,14 +176,14 @@ def validate_sharding_node(
         )
 
     def check_axis(
-        axis: str | tuple[Any, ...] | list[Any] | object | None,
+        axis: PartitionAxisElement,
         dim_idx: int | None = None,
     ) -> None:
         """Recursively check axis names and dimension divisibility against mesh shape.
 
         Args:
-            axis (Union[str, tuple[Any, ...], list[Any], object, None]): Sharding axis specification.
-            dim_idx (Optional[int]): Tensor dimension index being checked.
+            axis (PartitionAxisElement): Sharding axis specification.
+            dim_idx (int | None): Tensor dimension index being checked.
         """
         if axis is None:
             return

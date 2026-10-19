@@ -10,20 +10,19 @@ import importlib.util
 import inspect
 import json
 import os
+from pathlib import Path
 import re
 import sys
-from pathlib import Path
-from typing import Any
 
 from ml_switcheroo_ir import (
     CompilerBackend,
     LogicalGraph,
     topological_sort,
 )
-from ml_switcheroo_ir.schema.custom_ops import Registry
-from ml_switcheroo_ir.validator import ValidationError, ValidationLevel, Validator
-
 from ml_switcheroo_ir.compliance import _fallback_tabulate
+from ml_switcheroo_ir.schema.custom_ops import Registry
+from ml_switcheroo_ir.types import JsonValue
+from ml_switcheroo_ir.validator import ValidationError, ValidationLevel, Validator
 
 __all__ = ["main", "tabulate"]
 
@@ -276,6 +275,7 @@ def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
     from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
     from ml_switcheroo_ir.schema.ghost import (
         ExtendedGhostParam,
+        ExtendedGhostRef,
         GhostMlirRef,
         GhostParam,
         GhostRef,
@@ -286,10 +286,10 @@ def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
     from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
     from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 
-    snapshot_entries: dict[str, dict[str, Any]] = {}
-    onnx_list: list[dict[str, Any]] = []
-    custom_list: list[dict[str, Any]] = []
-    stablehlo_list: list[dict[str, Any]] = []
+    snapshot_entries: dict[str, dict[str, JsonValue]] = {}
+    onnx_list: list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef] = []
+    custom_list: list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef] = []
+    stablehlo_list: list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef] = []
 
     for op_name, schema in ONNX_REGISTRY.items():
         params = [
@@ -364,10 +364,15 @@ def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
             )
             for inp in schema.inputs
         ]
-        attrs_dict: dict[str, Any] = {
+        attrs_dict: dict[str, JsonValue] = {
             attr_name: {
                 "type": attr.type,
-                "default": attr.default,
+                "default": (
+                    attr.default
+                    if isinstance(attr.default, (str, int, float, bool))
+                    or attr.default is None
+                    else str(attr.default)
+                ),
                 "required": attr.required,
             }
             for attr_name, attr in schema.attributes.items()
@@ -611,7 +616,6 @@ def main(args: list[str] | None = None) -> None:
             parsed_args.target,
             verbose=parsed_args.verbose,
             mapping_file=parsed_args.mapping,
-            warn=False,
         )
     elif parsed_args.command == "list-ops":
         _handle_list_ops(parsed_args)

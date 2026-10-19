@@ -14,7 +14,6 @@ from ml_switcheroo_ir.shapes.ast import (
 __all__ = [
     "SymbolicExpressionParser",
     "SymbolicSolver",
-    "_ExprParser",
     "_parse_sym_str",
     "_tokenize_expr",
 ]
@@ -221,9 +220,6 @@ class SymbolicExpressionParser:
             exponent = self.parse_factor()
             base_node = SymBinaryOp("**", base_node, exponent)
         return base_node
-
-
-_ExprParser = SymbolicExpressionParser
 
 
 def _tokenize_expr(expr_str: str) -> list[str]:

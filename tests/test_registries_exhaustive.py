@@ -354,16 +354,24 @@ def test_stablehlo_loader_error_and_malformed_entries() -> None:
     """Verify _load_stablehlo_schemas error branch and malformed entry skips."""
     from pathlib import Path
 
-    with mock.patch("builtins.open", side_effect=OSError("Read error")), mock.patch(
-        "ml_switcheroo_ir.schema.stablehlo.find_schema_file",
-        return_value=Path("/dummy/stablehlo_ops.json"),
-    ), mock.patch("pathlib.Path.exists", return_value=True):
+    with (
+        mock.patch("builtins.open", side_effect=OSError("Read error")),
+        mock.patch(
+            "ml_switcheroo_ir.schema.stablehlo.find_schema_file",
+            return_value=Path("/dummy/stablehlo_ops.json"),
+        ),
+        mock.patch("pathlib.Path.exists", return_value=True),
+    ):
         stablehlo._load_stablehlo_schemas()
 
     # Hit the fallback branch exception
-    with mock.patch("builtins.open", side_effect=OSError("Read error")), mock.patch(
-        "ml_switcheroo_ir.schema.stablehlo.find_schema_file", return_value=None
-    ), mock.patch("pathlib.Path.exists", return_value=True):
+    with (
+        mock.patch("builtins.open", side_effect=OSError("Read error")),
+        mock.patch(
+            "ml_switcheroo_ir.schema.stablehlo.find_schema_file", return_value=None
+        ),
+        mock.patch("pathlib.Path.exists", return_value=True),
+    ):
         stablehlo._load_stablehlo_schemas()
 
     malformed_data = {
@@ -382,10 +390,13 @@ def test_stablehlo_loader_error_and_malformed_entries() -> None:
         ]
     }
     try:
-        with mock.patch(
-            "builtins.open",
-            mock.mock_open(read_data=json.dumps(malformed_data)),
-        ), mock.patch("pathlib.Path.exists", return_value=True):
+        with (
+            mock.patch(
+                "builtins.open",
+                mock.mock_open(read_data=json.dumps(malformed_data)),
+            ),
+            mock.patch("pathlib.Path.exists", return_value=True),
+        ):
             stablehlo._load_stablehlo_schemas()
             assert "op_with_malformed_attr" in stablehlo.STABLEHLO_REGISTRY
             loaded_op = stablehlo.STABLEHLO_REGISTRY["op_with_malformed_attr"]
@@ -474,20 +485,26 @@ def test_onnx_loader_framework_dict_attrs_and_exceptions() -> None:
             "attributes": None,
         },
     ]
-    with mock.patch(
-        "ml_ecosystem_snapshots.frameworks.onnx_spec._load_onnx_ops",
-        return_value=mock_ops,
-    ), mock.patch.dict(onnx_registry.ONNX_REGISTRY, {}, clear=True):
+    with (
+        mock.patch(
+            "ml_ecosystem_snapshots.frameworks.onnx_spec._load_onnx_ops",
+            return_value=mock_ops,
+        ),
+        mock.patch.dict(onnx_registry.ONNX_REGISTRY, {}, clear=True),
+    ):
         res = onnx_registry.load_onnx_schemas()
         assert "OpWithDictAttrs" in res
         assert "OpWithMixedListAttrs" in res
         assert "OpWithNoneAttrs" in res
 
     # Exception path
-    with mock.patch(
-        "ml_ecosystem_snapshots.frameworks.onnx_spec._load_onnx_ops",
-        side_effect=ImportError("Mock import failure"),
-    ), mock.patch.dict(onnx_registry.ONNX_REGISTRY, {}, clear=True):
+    with (
+        mock.patch(
+            "ml_ecosystem_snapshots.frameworks.onnx_spec._load_onnx_ops",
+            side_effect=ImportError("Mock import failure"),
+        ),
+        mock.patch.dict(onnx_registry.ONNX_REGISTRY, {}, clear=True),
+    ):
         res_err = onnx_registry.load_onnx_schemas()
         assert res_err == {}
 
@@ -512,9 +529,11 @@ def test_snapshots_discovery_precedence(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache_snapshots"
     cache_dir.mkdir()
     (cache_dir / "sample.json").write_text("{}", encoding="utf-8")
-    with mock.patch.dict("os.environ", {}, clear=True), mock.patch(
-        "os.path.expanduser", return_value=str(cache_dir)
-    ), mock.patch("os.path.isdir", side_effect=lambda p: str(p) == str(cache_dir)):
+    with (
+        mock.patch.dict("os.environ", {}, clear=True),
+        mock.patch("os.path.expanduser", return_value=str(cache_dir)),
+        mock.patch("os.path.isdir", side_effect=lambda p: str(p) == str(cache_dir)),
+    ):
         resolved_cache = get_default_snapshots_dir()
         assert resolved_cache == str(cache_dir.resolve())
 

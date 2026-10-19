@@ -19,7 +19,6 @@ from ml_switcheroo_ir.schema.ghost import (
     ParameterKind,
     RegisterClass,
     SnapshotEnvelope,
-    migrate_ghost_ref,
     migrate_ghost_ref_v2,
 )
 from ml_switcheroo_ir.validator import ValidationLevel, Validator
@@ -48,22 +47,20 @@ def test_ghost_v2_enums_and_results() -> None:
 
 
 def test_extended_ghost_param() -> None:
-    """Test ExtendedGhostParam with direction, role, dtypes, rank, and constraints."""
+    """Test ExtendedGhostParam with direction, role, allowed_dtypes, and rank_constraint."""
     param = ExtendedGhostParam(
         name="lhs",
         kind=ParameterKind.POSITIONAL_OR_KEYWORD,
         direction=OperandDirection.READ,
         role=IRParameterRole.OPERAND,
-        dtypes=["float32", "bfloat16"],
-        rank=2,
+        allowed_dtypes=["float32", "bfloat16"],
         rank_constraint="==2",
         is_contracting_dim=True,
     )
     assert param.name == "lhs"
     assert param.direction == OperandDirection.READ
     assert param.role == IRParameterRole.OPERAND
-    assert param.dtypes == ["float32", "bfloat16"]
-    assert param.rank == 2
+    assert param.allowed_dtypes == ["float32", "bfloat16"]
     assert param.rank_constraint == "==2"
     assert param.is_contracting_dim is True
 
@@ -115,7 +112,8 @@ def test_ghost_isa_ref() -> None:
     assert ref.domain_type == "isa"
     assert ref.predicate_guards == ["@P0", "@!PT"]
     assert ref.register_classes == {"op0": "R0", "op1": "R1"}
-    assert ref.control_codes == {"latency": 4}
+    assert ref.control_codes is not None
+    assert ref.control_codes["latency"] == 4
     assert ref.instruction_modifiers == [".SAT", ".FTZ"]
     assert ref.operand_signatures == [["vgpr", "vgpr", "sgpr"]]
     assert ref.allowed_modifiers == [".SAT", ".FTZ"]
@@ -309,7 +307,9 @@ def test_extended_ghost_param_and_isa_advanced_fields() -> None:
         supported_architectures=["sm_80", "sm_90"],
     )
     assert isa.structured_modifiers == {"rounding": "rn"}
-    assert isa.structured_operands == [{"role": "dst", "reg": "R0"}]
+    assert isa.structured_operands is not None
+    assert isa.structured_operands[0]["role"] == "dst"
+    assert isa.structured_operands[0]["reg"] == "R0"
     assert isa.condition_codes == ["CC.EQ"]
     assert isa.supported_architectures == ["sm_80", "sm_90"]
 
@@ -365,7 +365,7 @@ def test_rdna_instruction_grounding_and_bank_conflicts() -> None:
         assert op_name in RDNA_INSTRUCTION_PRIMITIVES
         prim = RDNA_INSTRUCTION_PRIMITIVES[op_name]
         assert prim["mnemonic"] == op_name
-        assert prim["register_classes"]["dst"] == RegisterClass.VGPR
+        assert prim.register_classes["dst"] == RegisterClass.VGPR
 
     v_strict = Validator(level=ValidationLevel.STRICT)
     v_warn = Validator(level=ValidationLevel.WARNING)
@@ -653,10 +653,6 @@ def test_ghost_v2_c_extension_and_accepted_kwargs() -> None:
         "is_c_extension": True,
         "accepted_kwargs": ["alpha", "out"],
     }
-    migrated_v1_ref = migrate_ghost_ref(v1_data)
-    assert migrated_v1_ref.is_c_extension is True
-    assert migrated_v1_ref.accepted_kwargs == ["alpha", "out"]
-
     migrated_v2_ref = migrate_ghost_ref_v2(v1_data)
     assert migrated_v2_ref.is_c_extension is True
     assert migrated_v2_ref.accepted_kwargs == ["alpha", "out"]

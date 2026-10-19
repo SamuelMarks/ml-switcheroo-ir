@@ -10,58 +10,18 @@ def get_default_snapshots_dir() -> str:
     """Discover and return default snapshot directory location.
 
     Checks locations in the following precedence order:
-        1. ML_FRAMEWORK_SNAPSHOTS_DIR or ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable.
-        2. Sibling directory ../ml-framework-snapshots/src/ml_framework_snapshots/snapshots/.
-        3. Sibling directory ../ml-ecosystem-snapshots/src/ml_framework_snapshots/snapshots/
-           and ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/.
-        4. User cache directory (~/.cache/ml_framework_snapshots or ~/.cache/ml_ecosystem_snapshots).
-        5. Installed ml_framework_snapshots or ml_ecosystem_snapshots package directory.
-        6. Bundled offline fixture snapshots in tests/fixtures/snapshots.
+        1. ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable.
+        2. Sibling directory ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/.
+        3. User cache directory (~/.cache/ml_ecosystem_snapshots).
+        4. Installed ml_ecosystem_snapshots package directory.
+        5. Bundled offline fixture snapshots in tests/fixtures/snapshots.
 
     Returns:
         str: Absolute path to snapshot directory.
     """
-    env_fw = os.environ.get("ML_FRAMEWORK_SNAPSHOTS_DIR")
-    if env_fw and os.path.isdir(env_fw):
-        return os.path.abspath(env_fw)
-
     env_eco = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
     if env_eco and os.path.isdir(env_eco):
         return os.path.abspath(env_eco)
-
-    sibling_fw = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "..",
-            "ml-framework-snapshots",
-            "src",
-            "ml_framework_snapshots",
-            "snapshots",
-        )
-    )
-    if os.path.isdir(sibling_fw) and any(
-        f.endswith((".json", ".json.gz")) for f in os.listdir(sibling_fw)
-    ):
-        return sibling_fw
-
-    sibling_eco_fw = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "..",
-            "ml-ecosystem-snapshots",
-            "src",
-            "ml_framework_snapshots",
-            "snapshots",
-        )
-    )
-    if os.path.isdir(sibling_eco_fw) and any(
-        f.endswith((".json", ".json.gz")) for f in os.listdir(sibling_eco_fw)
-    ):
-        return sibling_eco_fw
 
     sibling_eco = os.path.abspath(
         os.path.join(
@@ -86,23 +46,16 @@ def get_default_snapshots_dir() -> str:
     ):
         return os.path.abspath(user_cache_eco)
 
-    user_cache_fw = os.path.expanduser("~/.cache/ml_framework_snapshots")
-    if os.path.isdir(user_cache_fw) and any(
-        f.endswith((".json", ".json.gz")) for f in os.listdir(user_cache_fw)
-    ):
-        return os.path.abspath(user_cache_fw)
-
     try:
         import importlib.util
 
-        for pkg_name in ("ml_framework_snapshots", "ml_ecosystem_snapshots"):
-            spec = importlib.util.find_spec(pkg_name)
-            if spec and spec.origin:
-                pkg_dir = os.path.join(os.path.dirname(spec.origin), "snapshots")
-                if os.path.isdir(pkg_dir) and any(
-                    f.endswith((".json", ".json.gz")) for f in os.listdir(pkg_dir)
-                ):
-                    return os.path.abspath(pkg_dir)
+        spec = importlib.util.find_spec("ml_ecosystem_snapshots")
+        if spec and spec.origin:
+            pkg_dir = os.path.join(os.path.dirname(spec.origin), "snapshots")
+            if os.path.isdir(pkg_dir) and any(
+                f.endswith((".json", ".json.gz")) for f in os.listdir(pkg_dir)
+            ):
+                return os.path.abspath(pkg_dir)
     except (ImportError, AttributeError, ValueError):
         pass
 
@@ -157,47 +110,24 @@ def resolve_snapshots_path(override_path: Path | str) -> Path | None:
     """Resolve an explicit snapshots directory path, supporting repo-root and sibling layouts.
 
     Args:
-        override_path (Union[Path, str]): Explicit path provided via CLI flag or API parameter.
+        override_path (Path | str): Explicit path provided via CLI flag or API parameter.
 
     Returns:
-        Optional[Path]: Resolved snapshots directory path if found, or None.
+        Path | None: Resolved snapshots directory path if found, or None.
     """
     p = Path(override_path).resolve()
     if p.is_dir():
         nested_eco = p / "src" / "ml_ecosystem_snapshots" / "snapshots"
-        nested_fw = p / "src" / "ml_framework_snapshots" / "snapshots"
         if _has_snapshot_files(nested_eco):
             return nested_eco
-        if nested_fw.is_dir():
-            return nested_fw
         if nested_eco.is_dir():
-            return nested_eco
-        return p
-    if p.name == "ml-framework-snapshots":
-        unified_eco = (
-            p.parent
-            / "ml-ecosystem-snapshots"
-            / "src"
-            / "ml_ecosystem_snapshots"
-            / "snapshots"
-        )
-        if _has_snapshot_files(unified_eco):
-            return unified_eco
-        unified_fw = (
-            p.parent
-            / "ml-ecosystem-snapshots"
-            / "src"
-            / "ml_framework_snapshots"
-            / "snapshots"
-        )
-        if unified_fw.is_dir():
             if (
-                not _has_snapshot_files(unified_fw)
-                and p.parent.resolve()
+                p.parent.resolve()
                 == Path(__file__).resolve().parent.parent.parent.parent
             ):
                 return Path(DEFAULT_SNAPSHOT_DIR).resolve()
-            return unified_fw
+            return nested_eco
+        return p
     return None
 
 
@@ -208,10 +138,10 @@ def find_schema_file(
 
     Args:
         filename (str): Name of the file to resolve (e.g. 'onnx_ops.json').
-        override_path (Optional[Union[Path, str]]): Explicit file path override.
+        override_path (Path | str | None): Explicit file path override.
 
     Returns:
-        Optional[Path]: Resolved Path if the file exists on disk, or None.
+        Path | None: Resolved Path if the file exists on disk, or None.
     """
     if override_path is not None:
         p = Path(override_path)

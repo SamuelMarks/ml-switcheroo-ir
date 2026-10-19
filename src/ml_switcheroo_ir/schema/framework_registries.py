@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
 
 from ml_switcheroo_ir.schema.base import (
     REGISTRY_LOCK,
@@ -251,14 +251,17 @@ def _load_framework_schema_file(
         dict[str, OpSchema]: Mapping from operator names to OpSchema instances.
     """
 
-    def _record_dialects(op_data: Mapping[str, Any]) -> None:
+    def _record_dialects(op_data: Mapping[str, object]) -> None:
         """Record dialect mappings from an ODL operator entry if present.
 
         Args:
-            op_data (Mapping[str, Any]): Raw operator definition dictionary.
+            op_data (Mapping[str, object]): Raw operator definition dictionary.
         """
-        if "dialects" in op_data and isinstance(op_data["dialects"], dict):
-            ODL_DIALECT_MAPPINGS[str(op_data["name"])] = dict(op_data["dialects"])
+        raw_dialects = op_data.get("dialects")
+        if isinstance(raw_dialects, Mapping):
+            ODL_DIALECT_MAPPINGS[str(op_data["name"])] = {
+                str(k): str(v) for k, v in raw_dialects.items()
+            }
 
     return load_op_schema_catalog(
         filename,

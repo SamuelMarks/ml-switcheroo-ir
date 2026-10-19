@@ -19,7 +19,10 @@ from ml_switcheroo_ir.shapes.ast import (
     SymVar,
 )
 from ml_switcheroo_ir.shapes.inference import (
+    ShapeNodeProtocol,
     ShapeTracker,
+    SupportsShapeNodesProtocol,
+    TelemetryValueType,
     broadcast_dimension,
     broadcast_shapes,
     infer_node_shapes,
@@ -30,35 +33,30 @@ from ml_switcheroo_ir.shapes.inference import (
 from ml_switcheroo_ir.shapes.parser import (
     SymbolicExpressionParser,
     SymbolicSolver,
-    _ExprParser,
     _parse_sym_str,
     _tokenize_expr,
 )
 from ml_switcheroo_ir.shapes.polynomial import (
-    Monomial,
     MonomialType,
     Polynomial,
     _poly_to_symnode,
 )
 from ml_switcheroo_ir.shapes.tracker import (
-    ConstraintSolver,
     DimensionBound,
-    ShapeConstraintTracker,
     ShapeMismatchError,
     SymbolicConstraintTracker,
 )
 
 __all__ = [
-    "ConstraintSolver",
     "DimensionBound",
     "DimensionType",
-    "Monomial",
     "MonomialType",
     "Polynomial",
-    "ShapeConstraintTracker",
     "ShapeMismatchError",
+    "ShapeNodeProtocol",
     "ShapeTracker",
     "ShapeType",
+    "SupportsShapeNodesProtocol",
     "SymBinaryOp",
     "SymCondition",
     "SymConst",
@@ -70,7 +68,7 @@ __all__ = [
     "SymbolicConstraintTracker",
     "SymbolicExpressionParser",
     "SymbolicSolver",
-    "_ExprParser",
+    "TelemetryValueType",
     "_parse_sym_str",
     "_poly_to_symnode",
     "_tokenize_expr",

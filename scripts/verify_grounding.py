@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import importlib
 import json
 import os
-import sys
 from pathlib import Path
-from typing import Any
+import sys
 
 from ml_switcheroo_ir.schema.custom_ops import (
     CANONICAL_ATTENTION_SCHEMAS,
@@ -25,6 +25,7 @@ from ml_switcheroo_ir.schema.framework_registries import (
 from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
+from ml_switcheroo_ir.types import JsonValue
 from ml_switcheroo_ir.validator import (
     CORE_MLIR_DIALECTS,
     DEFAULT_SNAPSHOT_DIR,
@@ -62,12 +63,11 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     if override_path:
         return _resolve_override_snapshots_path(override_path)
 
-    for env_var in ("ML_ECOSYSTEM_SNAPSHOTS_DIR", "ML_FRAMEWORK_SNAPSHOTS_DIR"):
-        env_val = os.environ.get(env_var)
-        if env_val:
-            resolved_env = _resolve_override_snapshots_path(env_val)
-            if resolved_env is not None:
-                return resolved_env
+    env_val = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
+    if env_val:
+        resolved_env = _resolve_override_snapshots_path(env_val)
+        if resolved_env is not None:
+            return resolved_env
 
     default_path = Path(DEFAULT_SNAPSHOT_DIR).resolve()
     if default_path.is_dir():
@@ -82,28 +82,30 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     return None
 
 
-def _load_snapshot_symbol_map(snapshot_file: Path) -> dict[str, Any]:
+def _load_snapshot_symbol_map(
+    snapshot_file: Path,
+) -> dict[str, dict[str, JsonValue]]:
     """Load a snapshot JSON file and index its category entries by name and api_path.
 
     Args:
         snapshot_file (Path): Path to the JSON snapshot file.
 
     Returns:
-        dict[str, Any]: Mapping from symbol name / api_path to its snapshot record.
+        dict[str, dict[str, JsonValue]]: Mapping from symbol name / api_path to its snapshot record.
     """
     with open(snapshot_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    snap_symbols: dict[str, Any] = {}
+    snap_symbols: dict[str, dict[str, JsonValue]] = {}
     for cat_items in data.get("categories", {}).values():
         if isinstance(cat_items, list):
             for item in cat_items:
                 if isinstance(item, dict):
                     name = item.get("name")
                     api_path = item.get("api_path")
-                    if name:
+                    if isinstance(name, str) and name:
                         snap_symbols[name] = item
-                    if api_path:
+                    if isinstance(api_path, str) and api_path:
                         snap_symbols[api_path] = item
                         snap_symbols[api_path.split(".")[-1]] = item
     return snap_symbols
@@ -151,22 +153,24 @@ def _verify_category_items_have_identifiers(
     return errors
 
 
-def _extract_known_attributes(sym_record: dict[str, Any]) -> set[str]:
+def _extract_known_attributes(sym_record: Mapping[str, object]) -> set[str]:
     """Extract known parameter and attribute names from a snapshot symbol record.
 
     Args:
-        sym_record: Snapshot symbol dictionary.
+        sym_record (Mapping[str, object]): Snapshot symbol dictionary.
 
     Returns:
-        Set of grounded attribute/parameter names.
+        set[str]: Set of grounded attribute/parameter names.
     """
     known: set[str] = set()
-    for p in sym_record.get("params") or []:
-        if isinstance(p, dict) and p.get("name"):
-            known.add(str(p["name"]))
+    raw_params = sym_record.get("params")
+    if isinstance(raw_params, list):
+        for p in raw_params:
+            if isinstance(p, dict) and p.get("name"):
+                known.add(str(p["name"]))
     attrs_obj = sym_record.get("attributes")
     if isinstance(attrs_obj, dict):
-        known.update(attrs_obj.keys())
+        known.update(str(k) for k in attrs_obj.keys())
     elif isinstance(attrs_obj, list):
         for a in attrs_obj:
             if isinstance(a, dict) and a.get("name"):
@@ -183,7 +187,7 @@ def _find_stablehlo_snapshot_file(snapshots_dir: Path) -> Path | None:
         snapshots_dir (Path): Path to framework snapshots directory.
 
     Returns:
-        Optional[Path]: Resolved Path to StableHLO JSON file if found, or None.
+        Path | None: Resolved Path to StableHLO JSON file if found, or None.
     """
     exhaustive_candidate = snapshots_dir / "stablehlo_exhaustive.json"
     if exhaustive_candidate.is_file():
@@ -197,9 +201,7 @@ def _find_stablehlo_snapshot_file(snapshots_dir: Path) -> Path | None:
     if candidates:
         return candidates[-1]
 
-    if "ml-ecosystem-snapshots" in str(
-        snapshots_dir
-    ) or "ml_framework_snapshots" in str(snapshots_dir):
+    if "ml-ecosystem-snapshots" in str(snapshots_dir):
         try:
             from ml_ecosystem_snapshots.frameworks import __file__ as pkg_fw_file
 
@@ -335,12 +337,15 @@ def verify_array_api_grounding(snapshots_dir: Path) -> list[str]:
             continue
 
         sym_record = snap_symbols.get(op_name) or snap_symbols[f"array_api.{op_name}"]
-        snap_params = sym_record.get("params") or []
+        raw_params = sym_record.get("params")
+        snap_params = raw_params if isinstance(raw_params, list) else []
         if schema.inputs:
             pos_params = [
-                p["name"]
+                str(p["name"])
                 for p in snap_params
-                if p.get("kind") in ("POSITIONAL_ONLY", "POSITIONAL_OR_KEYWORD")
+                if isinstance(p, dict)
+                and p.get("kind") in ("POSITIONAL_ONLY", "POSITIONAL_OR_KEYWORD")
+                and isinstance(p.get("name"), str)
             ]
             for idx, inp in enumerate(schema.inputs):
                 if (
@@ -353,13 +358,21 @@ def verify_array_api_grounding(snapshots_dir: Path) -> list[str]:
                     )
         if schema.attributes:
             kw_params = {
-                p["name"]: p for p in snap_params if p.get("kind") == "KEYWORD_ONLY"
+                str(p["name"]): p
+                for p in snap_params
+                if isinstance(p, dict)
+                and p.get("kind") == "KEYWORD_ONLY"
+                and isinstance(p.get("name"), str)
             }
+            raw_kwargs = sym_record.get("kwargs")
+            kwargs_list = (
+                [str(k) for k in raw_kwargs] if isinstance(raw_kwargs, list) else []
+            )
             for attr_name in schema.attributes:
                 if (
                     kw_params
                     and attr_name not in kw_params
-                    and attr_name not in sym_record.get("kwargs", [])
+                    and attr_name not in kwargs_list
                 ):
                     errors.append(
                         f"Array API op '{op_name}' attribute '{attr_name}' is not recognized in {array_api_file.name}."
@@ -374,7 +387,7 @@ def verify_aten_grounding(snapshots_dir: Path) -> list[str]:
         snapshots_dir (Path): Path to framework snapshots directory.
 
     Returns:
-        List[str]: Diagnostic error messages for ungrounded ATen operations.
+        list[str]: Diagnostic error messages for ungrounded ATen operations.
     """
     candidates = sorted(snapshots_dir.glob("*aten*.json"))
     if not candidates:
@@ -393,9 +406,11 @@ def verify_aten_grounding(snapshots_dir: Path) -> list[str]:
 
         sym_record = snap_symbols.get(op_name) or snap_symbols[f"aten.{op_name}"]
         if schema.attributes:
+            raw_params = sym_record.get("params")
+            snap_params = raw_params if isinstance(raw_params, list) else []
             known_params = {
-                p["name"]
-                for p in sym_record.get("params") or []
+                str(p["name"])
+                for p in snap_params
                 if isinstance(p, dict) and p.get("name")
             }
             for attr_name in schema.attributes:
@@ -502,14 +517,15 @@ def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
         data = json.load(f)
 
     known_dialects: set[str] = set()
-    known_symbols: dict[str, dict[str, Any]] = {}
+    known_symbols: dict[str, dict[str, JsonValue]] = {}
     for cat_items in data.get("categories", {}).values():
         if isinstance(cat_items, list):
             for item in cat_items:
-                if isinstance(item, dict) and "api_path" in item:
-                    prefix = item["api_path"].split(".")[0]
+                if isinstance(item, dict) and isinstance(item.get("api_path"), str):
+                    api_p = str(item["api_path"])
+                    prefix = api_p.split(".")[0]
                     known_dialects.add(prefix)
-                    known_symbols[item["api_path"]] = item
+                    known_symbols[api_p] = item
 
     for dialect in CORE_MLIR_DIALECTS:
         if known_dialects and dialect not in known_dialects:

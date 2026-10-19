@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Protocol, overload
+import typing
+from typing_extensions import TypeAlias
 
-if TYPE_CHECKING:
+if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.types import TensorSpec
 
 from ml_switcheroo_ir.shapes.ast import (
@@ -22,8 +23,10 @@ from ml_switcheroo_ir.shapes.tracker import (
 )
 
 __all__ = [
+    "ShapeNodeProtocol",
     "ShapeTracker",
     "SupportsShapeNodesProtocol",
+    "TelemetryValueType",
     "broadcast_dimension",
     "broadcast_shapes",
     "infer_node_shapes",
@@ -32,16 +35,32 @@ __all__ = [
     "resolve_symbolic_bounds",
 ]
 
+TelemetryValueType: TypeAlias = typing.Union[
+    Sequence[int], Mapping[str, object], int, str, float, bool, None
+]
 
-class SupportsShapeNodesProtocol(Protocol):
-    """Protocol for graph containers carrying a mapping or sequence of nodes."""
+
+class ShapeNodeProtocol(typing.Protocol):
+    """Protocol for graph nodes carrying an ID and optional shape metadata."""
 
     @property
-    def nodes(self) -> Mapping[str, Any] | Iterable[Any]:
+    def id(self) -> str:
+        """Return node identifier.
+
+        Returns:
+            str: Node identifier.
+        """
+
+
+class SupportsShapeNodesProtocol(typing.Protocol):
+    """Protocol for graph containers carrying a mapping or iterable of nodes."""
+
+    @property
+    def nodes(self) -> Mapping[str, ShapeNodeProtocol] | Iterable[ShapeNodeProtocol]:
         """Return mapping or iterable of graph nodes.
 
         Returns:
-            Mapping[str, Any] | Iterable[Any]: Graph nodes collection.
+            Mapping[str, ShapeNodeProtocol] | Iterable[ShapeNodeProtocol]: Graph nodes collection.
         """
 
 
@@ -179,7 +198,7 @@ def matmul_shape(shape_a: ShapeType, shape_b: ShapeType) -> tuple[DimensionType,
     return out_batch + (m_dim, n_dim)
 
 
-@overload
+@typing.overload
 def normalize_axis(axis: int, rank: int) -> int:
     """Normalize a single axis index to positive 0-indexed integer.
 
@@ -192,7 +211,7 @@ def normalize_axis(axis: int, rank: int) -> int:
     """
 
 
-@overload
+@typing.overload
 def normalize_axis(axis: Sequence[int], rank: int) -> tuple[int, ...]:
     """Normalize a sequence of axis indices to positive 0-indexed integers.
 
@@ -285,13 +304,13 @@ class ShapeTracker:
 
     @staticmethod
     def update_from_feedback(
-        feedback_telemetry: Mapping[str, Any],
+        feedback_telemetry: Mapping[str, TelemetryValueType],
         tracker: SymbolicConstraintTracker | None = None,
     ) -> dict[str, tuple[int, ...]]:
         """Update shape tracking state and record constraints from observed runtime telemetry.
 
         Args:
-            feedback_telemetry (Mapping[str, Any]):
+            feedback_telemetry (Mapping[str, TelemetryValueType]):
                 Observed telemetry mapping node IDs or 1D dimension variable names to concrete shapes.
             tracker (SymbolicConstraintTracker | None): Optional constraint tracker to unify.
 
@@ -300,7 +319,7 @@ class ShapeTracker:
         """
         raw_shapes: dict[str, tuple[int, ...]] = {}
         shapes_val = feedback_telemetry.get("shapes")
-        if isinstance(shapes_val, dict):
+        if isinstance(shapes_val, Mapping):
             for k, val in shapes_val.items():
                 if isinstance(val, (list, tuple)):
                     raw_shapes[str(k)] = tuple(int(x) for x in val)
@@ -324,7 +343,7 @@ class ShapeTracker:
 
     @staticmethod
     def _record_dynamic_dim_bound(
-        dim: Any,
+        dim: DimensionType,
         concrete_val: int,
         resolved_bounds: dict[str, int],
         tracker: SymbolicConstraintTracker | None,
@@ -332,7 +351,7 @@ class ShapeTracker:
         """Record a concrete integer bound for a single symbolic dimension.
 
         Args:
-            dim (Any): Symbolic dimension entry.
+            dim (DimensionType): Symbolic dimension entry.
             concrete_val (int): Observed concrete dimension size.
             resolved_bounds (dict[str, int]): Output bounds dictionary to update.
             tracker (SymbolicConstraintTracker | None): Optional constraint tracker.
@@ -352,16 +371,16 @@ class ShapeTracker:
 
     @staticmethod
     def resolve_dynamic_bounds(
-        graph: SupportsShapeNodesProtocol | Any,
-        feedback_telemetry: Mapping[str, Any],
+        graph: SupportsShapeNodesProtocol | object,
+        feedback_telemetry: Mapping[str, TelemetryValueType],
         tracker: SymbolicConstraintTracker | None = None,
         strict_rank: bool = False,
     ) -> dict[str, int]:
         """Resolve dynamic SymInt variables across a graph into static integer bounds using telemetry.
 
         Args:
-            graph (SupportsShapeNodesProtocol | Any): LogicalGraph instance containing nodes with symbolic dimensions.
-            feedback_telemetry (Mapping[str, Any]):
+            graph (SupportsShapeNodesProtocol | object): LogicalGraph instance containing nodes with symbolic dimensions.
+            feedback_telemetry (Mapping[str, TelemetryValueType]):
                 Observed runtime telemetry with concrete shapes.
             tracker (SymbolicConstraintTracker | None): Optional constraint tracker for unification.
             strict_rank (bool): If True, raises ShapeMismatchError when observed telemetry rank
@@ -408,9 +427,9 @@ class ShapeTracker:
                     new_shape.append(concrete_val)
 
                 if hasattr(node, "shape_metadata"):
-                    node.shape_metadata = tuple(new_shape)
+                    setattr(node, "shape_metadata", tuple(new_shape))
                 if hasattr(node, "shape"):
-                    node.shape = tuple(new_shape)
+                    setattr(node, "shape", tuple(new_shape))
 
         return resolved_bounds
 

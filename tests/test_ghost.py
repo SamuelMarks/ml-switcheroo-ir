@@ -6,13 +6,15 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from ml_switcheroo_ir.schema.ghost import (
+    ExtendedGhostParam,
     GhostParam,
     GhostRef,
     LogicOp,
     ParameterKind,
     SemanticTier,
+    SnapshotEnvelope,
     StandardMap,
-    migrate_ghost_ref,
+    migrate_ghost_ref_v2,
 )
 
 
@@ -48,7 +50,7 @@ def test_ghost_ref_model() -> None:
     assert ref.name == "foo"
     assert ref.api_path == "pkg.foo"
     assert ref.kind == "function"
-    assert ref.schema_version == "1.2"
+    assert ref.schema_version == "2.0.0"
     assert not ref.has_varargs
 
     assert ref.has_arg("x") is True
@@ -68,8 +70,8 @@ def test_standard_map_model() -> None:
     assert sm.macro_template is None
 
 
-def test_migrate_ghost_ref_v1() -> None:
-    """Test migrating v1.x schema dict to v2.x GhostRef."""
+def test_migrate_ghost_ref_v2_hydration() -> None:
+    """Test hydrating schema dicts into v2.0.0 ExtendedGhostRef."""
     v1_data = {
         "name": "old_func",
         "api_path": "old.func",
@@ -87,9 +89,9 @@ def test_migrate_ghost_ref_v1() -> None:
         ],
     }
 
-    ref = migrate_ghost_ref(v1_data)
+    ref = migrate_ghost_ref_v2(v1_data)
 
-    assert ref.schema_version == "1.2"
+    assert ref.schema_version == "2.0.0"
     assert ref.name == "old_func"
     assert ref.has_varargs is True
     assert len(ref.params) == 2
@@ -99,14 +101,14 @@ def test_migrate_ghost_ref_v1() -> None:
     assert ref.params[1].kind == ParameterKind.POSITIONAL_OR_KEYWORD
 
 
-def test_migrate_ghost_ref_v2() -> None:
-    """Test migrating v2.x schema dict (noop behavior) to GhostRef."""
+def test_migrate_ghost_ref_v2_preserves_version() -> None:
+    """Test migrating v2.x schema dict to ExtendedGhostRef."""
     v2_data = {
         "name": "new_func",
         "api_path": "new.func",
         "kind": "function",
         "has_varargs": False,
-        "schema_version": "1.3",
+        "schema_version": "2.0.0",
         "params": [
             {
                 "name": "c",
@@ -115,8 +117,8 @@ def test_migrate_ghost_ref_v2() -> None:
         ],
     }
 
-    ref = migrate_ghost_ref(v2_data)
-    assert ref.schema_version == "1.3"
+    ref = migrate_ghost_ref_v2(v2_data)
+    assert ref.schema_version == "2.0.0"
     assert ref.name == "new_func"
     assert ref.params[0].kind == ParameterKind.POSITIONAL_ONLY
 
@@ -129,8 +131,8 @@ def test_migrate_ghost_ref_no_params() -> None:
         "kind": "function",
         "has_varargs": False,
     }
-    ref = migrate_ghost_ref(v1_data)
-    assert ref.schema_version == "1.2"
+    ref = migrate_ghost_ref_v2(v1_data)
+    assert ref.schema_version == "2.0.0"
     assert len(ref.params) == 0
 
 
@@ -143,44 +145,36 @@ def test_migrate_ghost_ref_param_no_kind() -> None:
         "params": [{"name": "x"}],
     }
     with pytest.raises(ValueError):
-        # pydantic will raise validation error since kind is missing
-        migrate_ghost_ref(v1_data)
+        migrate_ghost_ref_v2(v1_data)
 
 
-def test_extended_ghost_param_normalization() -> None:
-    """Test ExtendedGhostParam validator migrating dtypes and rank to canonical fields."""
-    from ml_switcheroo_ir.schema.ghost import ExtendedGhostParam, SnapshotEnvelope
-
-    # dtypes -> allowed_dtypes
+def test_extended_ghost_param_canonical_constraints() -> None:
+    """Test ExtendedGhostParam canonical allowed_dtypes and rank_constraint fields."""
     p1 = ExtendedGhostParam(
         name="p1",
         kind=ParameterKind.POSITIONAL_OR_KEYWORD,
-        dtypes=["float32", "bfloat16"],
-        rank=2,
+        allowed_dtypes=["float32", "bfloat16"],
+        rank_constraint="==2",
     )
     assert p1.allowed_dtypes == ["float32", "bfloat16"]
     assert p1.rank_constraint == "==2"
 
-    # allowed_dtypes -> dtypes
     p2 = ExtendedGhostParam(
         name="p2",
         kind=ParameterKind.POSITIONAL_OR_KEYWORD,
         allowed_dtypes=["int32"],
-        rank=">=1",
+        rank_constraint=">=1",
     )
-    assert p2.dtypes == ["int32"]
+    assert p2.allowed_dtypes == ["int32"]
     assert p2.rank_constraint == ">=1"
 
-    # rank=None
     p3 = ExtendedGhostParam(
         name="p3",
         kind=ParameterKind.POSITIONAL_OR_KEYWORD,
-        rank=None,
+        rank_constraint=None,
     )
-    assert p3.rank is None
     assert p3.rank_constraint is None
 
-    # SnapshotEnvelope with operations and instructions
     env = SnapshotEnvelope(
         target="mlir",
         operations=[{"name": "arith.addi"}],
@@ -198,15 +192,12 @@ def test_parameter_kind_enum_roundtrip() -> None:
 
         kind: ParameterKind
 
-    # Valid string parsing
     model = DummyModel.model_validate_json('{"kind": "POSITIONAL_OR_KEYWORD"}')
     assert model.kind == ParameterKind.POSITIONAL_OR_KEYWORD
 
-    # JSON serialization
     serialized = json.loads(model.model_dump_json())
     assert serialized["kind"] == "POSITIONAL_OR_KEYWORD"
 
-    # Invalid enum value
     with pytest.raises(ValidationError):
         DummyModel.model_validate_json('{"kind": "INVALID_KIND"}')
 

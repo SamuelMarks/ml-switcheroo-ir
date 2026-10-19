@@ -160,6 +160,9 @@ def test_split_and_merge_qkv_weights() -> None:
     # Split list
     qkv_list = list(range(combined_len))
     q, k, v = engine.split_qkv_weights(qkv_list, num_heads, head_dim)
+    assert isinstance(q, list)
+    assert isinstance(k, list)
+    assert isinstance(v, list)
     assert len(q) == proj_size
     assert len(k) == proj_size
     assert len(v) == proj_size

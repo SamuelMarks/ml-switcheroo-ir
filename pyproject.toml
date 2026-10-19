@@ -9,7 +9,7 @@ authors = [
     { name = "Samuel Marks <807580+SamuelMarks@users.noreply.github.com>" }
 ]
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -17,8 +17,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Compilers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -57,6 +55,11 @@ branch = true
 
 [tool.mypy]
 python_version = "3.10"
+plugins = ["pydantic.mypy"]
+strict = true
+disallow_any_explicit = true
+disallow_any_generics = true
+disallow_subclassing_any = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
@@ -67,7 +70,19 @@ warn_unused_ignores = true
 warn_no_return = true
 warn_return_any = true
 warn_unused_configs = true
+warn_unreachable = true
 strict_equality = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+warn_untyped_fields = true
+
+[[tool.mypy.overrides]]
+module = ["tests", "tests.*"]
+disallow_untyped_decorators = false
+warn_unreachable = false
 
 [[tool.mypy.overrides]]
 module = [
@@ -79,6 +94,10 @@ module = [
     "onnx.*",
     "numpy",
     "numpy.*",
+    "hypothesis",
+    "hypothesis.*",
+    "pytest",
+    "_pytest.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

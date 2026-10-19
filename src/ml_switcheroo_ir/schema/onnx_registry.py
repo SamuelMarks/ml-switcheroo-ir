@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import json
 import logging
 from pathlib import Path
 import re
-from typing import Any, Mapping, Sequence
 
 from ml_switcheroo_ir.schema.base import REGISTRY_LOCK, OpAttribute, OpSchema
 from ml_switcheroo_ir.snapshots import find_schema_file
+from ml_switcheroo_ir.types import AttributeValue
 
 _logger = logging.getLogger(__name__)
-_REGISTRY_LOCK = REGISTRY_LOCK
-_LOCK = REGISTRY_LOCK
 
 __all__ = [
     "ONNX_REGISTRY",
@@ -25,14 +24,14 @@ __all__ = [
 ]
 
 
-def _parse_onnx_proto_default(raw: Any) -> Any:
+def _parse_onnx_proto_default(raw: AttributeValue) -> AttributeValue:
     """Parse protobuf text format attribute default value into a native Python scalar or list.
 
     Args:
-        raw (Any): Raw default representation from snapshot.
+        raw (AttributeValue): Raw default representation from snapshot.
 
     Returns:
-        Any: Parsed Python int, float, string, or original value.
+        AttributeValue: Parsed Python int, float, string, or original value.
     """
     if not isinstance(raw, str):
         return raw
@@ -49,12 +48,12 @@ def _parse_onnx_proto_default(raw: Any) -> Any:
 
 
 def _parse_onnx_fallback_ops(
-    raw_ops: Sequence[Mapping[str, Any]],
+    raw_ops: Sequence[Mapping[str, object]],
 ) -> dict[str, OpSchema]:
     """Convert raw upstream ONNX snapshot operator entries into OpSchema instances.
 
     Args:
-        raw_ops (Sequence[Mapping[str, Any]]): Raw operator records from _load_onnx_ops().
+        raw_ops (Sequence[Mapping[str, object]]): Raw operator records from _load_onnx_ops().
 
     Returns:
         dict[str, OpSchema]: Mapping of operator names to OpSchema definitions.
@@ -96,15 +95,30 @@ def _parse_onnx_fallback_ops(
                     required=bool(val_req),
                     default=val_def,
                 )
-        ver = int(op_data.get("since_version") or op_data.get("version") or 1)
+        raw_ver = op_data.get("since_version") or op_data.get("version") or 1
+        ver = int(raw_ver) if isinstance(raw_ver, (int, str)) else 1
         raw_sv = op_data.get("schema_version")
+        raw_inputs = op_data.get("inputs", [])
+        inputs_list = (
+            [str(i) for i in raw_inputs]
+            if isinstance(raw_inputs, Sequence)
+            and not isinstance(raw_inputs, (str, bytes))
+            else []
+        )
+        raw_outputs = op_data.get("outputs", [])
+        outputs_list = (
+            [str(o) for o in raw_outputs]
+            if isinstance(raw_outputs, Sequence)
+            and not isinstance(raw_outputs, (str, bytes))
+            else []
+        )
         loaded[name] = OpSchema(
             name=name,
             domain=str(op_data.get("domain") or "ai.onnx"),
             version=ver,
             attributes=attributes,
-            inputs=[str(i) for i in op_data.get("inputs", [])],
-            outputs=[str(o) for o in op_data.get("outputs", [])],
+            inputs=inputs_list,
+            outputs=outputs_list,
             schema_version=int(raw_sv) if isinstance(raw_sv, int) else ver,
             deprecated=bool(op_data.get("deprecated", False)),
         )

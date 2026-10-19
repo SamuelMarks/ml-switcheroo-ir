@@ -67,8 +67,12 @@ def test_webrtc_signaling_topology_and_mesh_integration() -> None:
 
     g_dict = graph.to_dict()
     assert "mesh" in g_dict
-    assert "webrtc_topology" in g_dict["mesh"]
-    assert g_dict["mesh"]["webrtc_topology"]["chunk_size_bytes"] == 131072
+    mesh_dict = g_dict["mesh"]
+    assert isinstance(mesh_dict, dict)
+    assert "webrtc_topology" in mesh_dict
+    webrtc_dict = mesh_dict["webrtc_topology"]
+    assert isinstance(webrtc_dict, dict)
+    assert webrtc_dict["chunk_size_bytes"] == 131072
     assert "webrtc_topology" in graph.to_json()
 
     g_restored = LogicalGraph.from_dict(g_dict)
@@ -87,5 +91,7 @@ def test_webrtc_signaling_topology_and_mesh_integration() -> None:
         outputs=["n1"],
         mesh=LogicalMesh(shape={"data": 2}),
     )
-    assert plain_graph.to_dict()["mesh"]["webrtc_topology"] is None
+    plain_mesh_dict = plain_graph.to_dict()["mesh"]
+    assert isinstance(plain_mesh_dict, dict)
+    assert plain_mesh_dict["webrtc_topology"] is None
     assert "PlainMeshGraph" in plain_graph.to_json()

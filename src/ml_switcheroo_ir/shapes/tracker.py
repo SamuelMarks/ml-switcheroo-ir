@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Union, overload
+import typing
+from typing_extensions import TypeAlias
 
 from ml_switcheroo_ir.shapes.ast import DimensionType, SymConst, SymInt, SymNode
 
-DimensionBound = Union[int, str, SymNode, SymInt]
+DimensionBound: TypeAlias = typing.Union[int, str, SymNode, SymInt]
 
 __all__ = [
-    "ConstraintSolver",
     "DimensionBound",
-    "ShapeConstraintTracker",
     "ShapeMismatchError",
     "SymbolicConstraintTracker",
 ]
@@ -232,7 +231,7 @@ class SymbolicConstraintTracker:
                 solution[var] = self._const_map[actual_root]
         return solution
 
-    @overload
+    @typing.overload
     def substitute(
         self, dim_or_shape: tuple[DimensionType, ...]
     ) -> tuple[DimensionType, ...]:
@@ -245,7 +244,7 @@ class SymbolicConstraintTracker:
             tuple[DimensionType, ...]: Substituted shape tuple.
         """
 
-    @overload
+    @typing.overload
     def substitute(self, dim_or_shape: DimensionType) -> DimensionType:
         """Substitute known resolved values into a single dimension.
 
@@ -287,7 +286,3 @@ class SymbolicConstraintTracker:
             return val
 
         return dim_or_shape
-
-
-ShapeConstraintTracker = SymbolicConstraintTracker
-ConstraintSolver = SymbolicConstraintTracker

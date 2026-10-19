@@ -167,10 +167,13 @@ def test_translation_engine_merge_roles() -> None:
 
     mocked_open = mock_open(read_data=json.dumps(main_map))
 
-    with patch("ml_switcheroo_ir.translation.os.path.isfile", return_value=True), patch(
-        "ml_switcheroo_ir.translation.open", mocked_open
-    ), patch(
-        "ml_switcheroo_ir.translation._CANONICAL_FALLBACK_TRANSLATIONS", fallback_map
+    with (
+        patch("ml_switcheroo_ir.translation.os.path.isfile", return_value=True),
+        patch("ml_switcheroo_ir.translation.open", mocked_open),
+        patch(
+            "ml_switcheroo_ir.translation._CANONICAL_FALLBACK_TRANSLATIONS",
+            fallback_map,
+        ),
     ):
         engine = ParameterTranslationEngine()
 
@@ -195,12 +198,15 @@ def test_parameter_translation_engine_bundled_fallback() -> None:
     """Test ParameterTranslationEngine fallback to bundled concept_map when snapshot directory is missing."""
     from unittest.mock import patch
 
-    with patch(
-        "ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR",
-        "/nonexistent_snapshots_dir",
-    ), patch(
-        "ml_switcheroo_ir.translation.DEFAULT_SNAPSHOT_DIR",
-        "/nonexistent_snapshots_dir",
+    with (
+        patch(
+            "ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR",
+            "/nonexistent_snapshots_dir",
+        ),
+        patch(
+            "ml_switcheroo_ir.translation.DEFAULT_SNAPSHOT_DIR",
+            "/nonexistent_snapshots_dir",
+        ),
     ):
         engine = ParameterTranslationEngine()
         assert "matmul" in engine.translations

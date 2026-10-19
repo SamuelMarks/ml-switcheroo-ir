@@ -3,27 +3,38 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
+import copy
 import json
 import string
-from typing import TYPE_CHECKING, IO, Any, TextIO, cast
+import typing
 
 from ml_switcheroo_ir.distributed import (
     LogicalMesh,
+    PartitionAxisAtom,
+    PartitionAxisElement,
     PartitionSpec,
     PipelineTopologyConfig,
     WebRTCSignalingTopology,
 )
+from ml_switcheroo_ir.shapes import DimensionType
 from ml_switcheroo_ir.types import (
     AttributeValue,
     DType,
+    InitializerValue,
+    JsonValue,
     TensorSpec,
 )
 
-if TYPE_CHECKING:
+if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.graph import LogicalEdge, LogicalGraph, LogicalNode, NodeDict
 
 __all__ = [
+    "SerializedEdgeDict",
+    "SerializedGraphDict",
+    "SerializedNodeDict",
+    "ZstdCompressorProtocol",
+    "ZstdDecompressorProtocol",
+    "ZstdModuleProtocol",
     "_apply_edges_list",
     "_build_graph_from_parsed_sections",
     "_decode_next_json_value",
@@ -43,11 +54,105 @@ __all__ = [
 ]
 
 
-def _load_zstandard() -> Any:
+class SerializedEdgeDict(typing.TypedDict):
+    """Serialized dictionary representation of a LogicalEdge."""
+
+    source: str
+    source_idx: int | None
+    target: str
+    target_idx: int
+    value_name: str | None
+
+
+class SerializedNodeDict(typing.TypedDict):
+    """Serialized dictionary representation of a LogicalNode."""
+
+    attributes: dict[str, AttributeValue]
+    device: str | None
+    domain: str
+    dtype: DType | None
+    id: str
+    inputs: list[str]
+    op_type: str
+    output_specs: list[dict[str, object]]
+    outputs: list[str]
+    shape_metadata: tuple[DimensionType, ...] | None
+    sharding: dict[str, tuple[PartitionAxisElement, ...]] | None
+    source_ast_ref: str | None
+    stream: str | None
+    subgraphs: dict[str, object]
+    version: int
+
+
+class SerializedGraphDict(typing.TypedDict):
+    """Serialized dictionary representation of a LogicalGraph."""
+
+    edges: list[SerializedEdgeDict]
+    initializers: dict[str, InitializerValue]
+    input_specs: dict[str, dict[str, object]]
+    inputs: list[str]
+    mesh: dict[str, object] | None
+    name: str
+    nodes: dict[str, SerializedNodeDict]
+    outputs: list[str]
+    pipeline_topology: dict[str, object] | None
+
+
+class ZstdCompressorProtocol(typing.Protocol):
+    """Protocol for zstandard.ZstdCompressor."""
+
+    def stream_writer(
+        self, writer: typing.BinaryIO
+    ) -> typing.ContextManager[typing.BinaryIO]:
+        """Return context-managed binary stream writer.
+
+        Args:
+            writer (typing.BinaryIO): Underlying binary writer.
+
+        Returns:
+            typing.ContextManager[typing.BinaryIO]: Context manager yielding binary stream.
+        """
+
+
+class ZstdDecompressorProtocol(typing.Protocol):
+    """Protocol for zstandard.ZstdDecompressor."""
+
+    def stream_reader(
+        self, source: typing.BinaryIO
+    ) -> typing.ContextManager[typing.BinaryIO]:
+        """Return context-managed binary stream reader.
+
+        Args:
+            source (typing.BinaryIO): Underlying binary reader.
+
+        Returns:
+            typing.ContextManager[typing.BinaryIO]: Context manager yielding binary stream.
+        """
+
+
+class ZstdModuleProtocol(typing.Protocol):
+    """Protocol for optional zstandard module."""
+
+    def ZstdCompressor(self) -> ZstdCompressorProtocol:
+        """Instantiate a ZstdCompressor.
+
+        Returns:
+            ZstdCompressorProtocol: Compressor instance.
+        """
+
+    def ZstdDecompressor(self) -> ZstdDecompressorProtocol:
+        """Instantiate a ZstdDecompressor.
+
+        Returns:
+            ZstdDecompressorProtocol: Decompressor instance.
+        """
+
+
+def _load_zstandard() -> ZstdModuleProtocol | None:
     """Import and return the optional zstandard module if installed.
 
     Returns:
-        Any: The zstandard module, or None if unavailable.
+        ZstdModuleProtocol | None: The zstandard module, or None if unavailable.
     """
     try:
         import zstandard as zstd
@@ -56,17 +161,43 @@ def _load_zstandard() -> Any:
     return zstd
 
 
-zstandard: Any = _load_zstandard()
+zstandard: ZstdModuleProtocol | None = _load_zstandard()
+
+
+def _normalize_partition_axis_atom(raw: object) -> PartitionAxisAtom:
+    """Normalize a single leaf partition axis element.
+
+    Args:
+        raw (object): Raw leaf element.
+
+    Returns:
+        PartitionAxisAtom: Normalized atom.
+    """
+    return raw if raw is None or isinstance(raw, (str, int)) else str(raw)
+
+
+def _normalize_partition_axis(raw: object) -> PartitionAxisElement:
+    """Recursively normalize raw JSON sharding axis into PartitionAxisElement.
+
+    Args:
+        raw (object): Raw axis element from JSON.
+
+    Returns:
+        PartitionAxisElement: Normalized axis element.
+    """
+    if isinstance(raw, (list, tuple)):
+        return tuple(_normalize_partition_axis(item) for item in raw)  # type: ignore[misc]
+    return _normalize_partition_axis_atom(raw)
 
 
 def _parse_node_dict(
-    ndata: Mapping[str, Any],
+    ndata: Mapping[str, object],
     graph_cls: type[LogicalGraph],
 ) -> LogicalNode:
     """Deserialize a single LogicalNode from a raw dictionary representation.
 
     Args:
-        ndata (Mapping[str, Any]): Raw dictionary describing a node.
+        ndata (Mapping[str, object]): Raw dictionary describing a node.
         graph_cls (type[LogicalGraph]): LogicalGraph class used for recursive subgraphs.
 
     Returns:
@@ -75,132 +206,241 @@ def _parse_node_dict(
     from ml_switcheroo_ir.graph import LogicalNode
     from ml_switcheroo_ir.sentinels import NoTangent, ZeroTangent
 
-    ndata_copy = dict(ndata)
-    if "kind" in ndata_copy and "op_type" not in ndata_copy:
-        ndata_copy["op_type"] = ndata_copy.pop("kind")
-    if "metadata" in ndata_copy and "attributes" not in ndata_copy:
-        ndata_copy["attributes"] = ndata_copy.pop("metadata")
-    sharding = ndata_copy.get("sharding")
-    if sharding:
-        ndata_copy["sharding"] = PartitionSpec(
-            axes=tuple(tuple(a) if isinstance(a, list) else a for a in sharding["axes"])
+    node_id = str(ndata.get("id", ""))
+    op_type_val = str(ndata.get("op_type", ""))
+    domain_val = str(ndata.get("domain", "ai.onnx"))
+    raw_ver = ndata.get("version", 1)
+    version_val = int(raw_ver) if isinstance(raw_ver, (int, str)) else 1
+
+    raw_attrs = ndata.get("attributes")
+    attributes_val: dict[str, AttributeValue] = (
+        dict(raw_attrs) if isinstance(raw_attrs, Mapping) else {}
+    )
+
+    raw_inputs = ndata.get("inputs")
+    inputs_val: list[str] = (
+        [str(x) for x in raw_inputs]
+        if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, (str, bytes))
+        else []
+    )
+
+    raw_outputs = ndata.get("outputs")
+    outputs_val: list[str] | None = (
+        [str(x) for x in raw_outputs]
+        if isinstance(raw_outputs, Sequence)
+        and not isinstance(raw_outputs, (str, bytes))
+        else None
+    )
+
+    raw_shape = ndata.get("shape_metadata")
+    shape_val: tuple[DimensionType, ...] | None = (
+        tuple(int(d) if isinstance(d, int) else str(d) for d in raw_shape)
+        if isinstance(raw_shape, Sequence) and not isinstance(raw_shape, (str, bytes))
+        else None
+    )
+
+    sharding_raw = ndata.get("sharding")
+    sharding_val: PartitionSpec | None = None
+    if isinstance(sharding_raw, PartitionSpec):
+        sharding_val = sharding_raw
+    elif isinstance(sharding_raw, Mapping):
+        raw_axes = sharding_raw.get("axes", ())
+        axes_seq = (
+            raw_axes
+            if isinstance(raw_axes, Sequence) and not isinstance(raw_axes, (str, bytes))
+            else ()
         )
-    if "outputs" in ndata_copy and ndata_copy["outputs"] is not None:
-        ndata_copy["outputs"] = list(ndata_copy["outputs"])
+        sharding_val = PartitionSpec(
+            axes=tuple(_normalize_partition_axis(a) for a in axes_seq)
+        )
 
-    dtype_val = ndata_copy.get("dtype")
-    if dtype_val is not None and not isinstance(dtype_val, DType):
-        ndata_copy["dtype"] = DType.from_str(str(dtype_val))
+    dtype_raw = ndata.get("dtype")
+    dtype_val: DType | None = (
+        dtype_raw
+        if isinstance(dtype_raw, DType)
+        else (DType.from_str(str(dtype_raw)) if dtype_raw is not None else None)
+    )
 
-    output_specs_raw = ndata_copy.get("output_specs")
-    if output_specs_raw:
-        ndata_copy["output_specs"] = [
-            TensorSpec(**s) if isinstance(s, dict) else s for s in output_specs_raw
-        ]
+    output_specs_raw = ndata.get("output_specs")
+    output_specs_val: list[TensorSpec] = []
+    for s in (
+        output_specs_raw
+        if isinstance(output_specs_raw, Sequence)
+        and not isinstance(output_specs_raw, (str, bytes))
+        else []
+    ):
+        if isinstance(s, TensorSpec):
+            output_specs_val.append(s)
+        else:
+            s_map = s if isinstance(s, Mapping) else {}
+            raw_s_shape = s_map.get("shape", ())
+            s_shape: list[DimensionType] = (
+                [int(x) if isinstance(x, int) else str(x) for x in raw_s_shape]
+                if isinstance(raw_s_shape, Sequence)
+                and not isinstance(raw_s_shape, (str, bytes))
+                else []
+            )
+            s_dtype = str(s_map.get("dtype", "float32"))
+            raw_sparsity = s_map.get("sparsity")
+            s_sparsity = str(raw_sparsity) if raw_sparsity is not None else None
+            output_specs_val.append(
+                TensorSpec(shape=s_shape, dtype=s_dtype, sparsity=s_sparsity)
+            )
 
-    ndata_copy["subgraphs"] = _parse_subgraphs_from_node_dict(ndata_copy, graph_cls)
-    op_type_val = ndata_copy.get("op_type")
-    domain_val = ndata_copy.get("domain", "ai.onnx")
-    if domain_val == "ml.switcheroo.ad" and op_type_val in ("ZeroTangent", "NoTangent"):
-        sentinel_cls = ZeroTangent if op_type_val == "ZeroTangent" else NoTangent
-        return sentinel_cls(**ndata_copy)
-    return LogicalNode(**ndata_copy)
+    subgraphs_val = _parse_subgraphs_from_node_dict(ndata, graph_cls)
+    raw_ast_ref = ndata.get("source_ast_ref")
+    ast_ref_val = str(raw_ast_ref) if raw_ast_ref is not None else None
+    raw_device = ndata.get("device")
+    device_val = str(raw_device) if raw_device is not None else None
+    raw_stream = ndata.get("stream")
+    stream_val = str(raw_stream) if raw_stream is not None else None
+
+    if domain_val == "ml.switcheroo.ad" and op_type_val == "ZeroTangent":
+        return ZeroTangent(
+            id=node_id,
+            op_type=op_type_val,
+            domain=domain_val,
+            version=version_val,
+            attributes=attributes_val,
+            inputs=inputs_val,
+            outputs=outputs_val,
+            shape_metadata=shape_val,
+            source_ast_ref=ast_ref_val,
+            sharding=sharding_val,
+            dtype=dtype_val,
+            output_specs=output_specs_val,
+            subgraphs=subgraphs_val,
+            device=device_val,
+            stream=stream_val,
+        )
+    if domain_val == "ml.switcheroo.ad" and op_type_val == "NoTangent":
+        return NoTangent(
+            id=node_id,
+            op_type=op_type_val,
+            domain=domain_val,
+            version=version_val,
+            attributes=attributes_val,
+            inputs=inputs_val,
+            outputs=outputs_val,
+            shape_metadata=shape_val,
+            source_ast_ref=ast_ref_val,
+            sharding=sharding_val,
+            dtype=dtype_val,
+            output_specs=output_specs_val,
+            subgraphs=subgraphs_val,
+            device=device_val,
+            stream=stream_val,
+        )
+    return LogicalNode(
+        id=node_id,
+        op_type=op_type_val,
+        domain=domain_val,
+        version=version_val,
+        attributes=attributes_val,
+        inputs=inputs_val,
+        outputs=outputs_val,
+        shape_metadata=shape_val,
+        source_ast_ref=ast_ref_val,
+        sharding=sharding_val,
+        dtype=dtype_val,
+        output_specs=output_specs_val,
+        subgraphs=subgraphs_val,
+        device=device_val,
+        stream=stream_val,
+    )
 
 
 def _parse_subgraphs_from_node_dict(
-    ndata_copy: dict[str, Any],
+    ndata: Mapping[str, object],
     graph_cls: type[LogicalGraph],
 ) -> dict[str, LogicalGraph | AttributeValue]:
-    """Extract and deserialize nested subgraphs from node dictionary and legacy attributes.
+    """Extract and deserialize nested subgraphs from a node dictionary.
 
     Args:
-        ndata_copy (dict[str, Any]): Mutable node dictionary.
+        ndata (Mapping[str, object]): Node dictionary.
         graph_cls (type[LogicalGraph]): LogicalGraph class for recursive deserialization.
 
     Returns:
         dict[str, LogicalGraph | AttributeValue]: Mapping of subgraph names to LogicalGraph instances or AttributeValues.
     """
-    from ml_switcheroo_ir.graph import LogicalGraph as _LogicalGraph
-
     resolved_subgraphs: dict[str, LogicalGraph | AttributeValue] = {}
-    subgraphs_data = ndata_copy.get("subgraphs")
-    if subgraphs_data and isinstance(subgraphs_data, dict):
+    subgraphs_data = ndata.get("subgraphs")
+    if isinstance(subgraphs_data, Mapping):
         for sub_k, sub_v in subgraphs_data.items():
-            if isinstance(sub_v, dict) and ("nodes" in sub_v or "name" in sub_v):
-                resolved_subgraphs[sub_k] = graph_cls.from_dict(sub_v)
-            elif isinstance(sub_v, _LogicalGraph):
-                resolved_subgraphs[sub_k] = sub_v
+            if isinstance(sub_v, Mapping) and ("nodes" in sub_v or "name" in sub_v):
+                resolved_subgraphs[str(sub_k)] = graph_cls.from_dict(sub_v)
             else:
-                resolved_subgraphs[sub_k] = cast("AttributeValue", sub_v)
-
-    attrs = ndata_copy.get("attributes")
-    if isinstance(attrs, dict):
-        for legacy_key in (
-            "subgraph",
-            "body_subgraph",
-            "bwd_graph",
-            "custom_backward_subgraph",
-            "jvp_graph",
-        ):
-            if legacy_key in attrs and legacy_key not in resolved_subgraphs:
-                val = attrs[legacy_key]
-                canonical_key = (
-                    "body"
-                    if "body" in legacy_key
-                    else ("bwd" if "bwd" in legacy_key else legacy_key)
-                )
-                if isinstance(val, dict):
-                    resolved_subgraphs[canonical_key] = graph_cls.from_dict(val)
-                elif isinstance(val, _LogicalGraph):
-                    resolved_subgraphs[canonical_key] = val
+                resolved_subgraphs[str(sub_k)] = sub_v
     return resolved_subgraphs
 
 
-def _parse_mesh_dict(mesh_data: Mapping[str, Any] | None) -> LogicalMesh | None:
+def _parse_mesh_dict(mesh_data: object) -> LogicalMesh | None:
     """Deserialize an optional LogicalMesh dictionary.
 
     Args:
-        mesh_data (Optional[Mapping[str, Any]]): Raw mesh dictionary or None.
+        mesh_data (object): Raw mesh dictionary or None.
 
     Returns:
-        Optional[LogicalMesh]: Deserialized LogicalMesh or None.
+        LogicalMesh | None: Deserialized LogicalMesh or None.
     """
-    if not mesh_data:
+    if not isinstance(mesh_data, Mapping) or not mesh_data:
         return None
+    raw_webrtc = mesh_data.get("webrtc_topology")
     webrtc_topo = (
-        WebRTCSignalingTopology.from_dict(mesh_data["webrtc_topology"])
-        if mesh_data.get("webrtc_topology")
+        WebRTCSignalingTopology.from_dict(raw_webrtc)
+        if isinstance(raw_webrtc, Mapping)
         else None
     )
-    return LogicalMesh(shape=mesh_data["shape"], webrtc_topology=webrtc_topo)
+    raw_shape = mesh_data.get("shape", {})
+    shape_dict: dict[str, int] = (
+        {str(k): int(v) for k, v in raw_shape.items() if isinstance(v, (int, str))}
+        if isinstance(raw_shape, Mapping)
+        else {}
+    )
+    return LogicalMesh(shape=shape_dict, webrtc_topology=webrtc_topo)
 
 
 def _parse_input_specs_dict(
-    input_specs_raw: Mapping[str, Any] | None,
+    input_specs_raw: object,
 ) -> dict[str, TensorSpec]:
     """Deserialize an optional input_specs dictionary into TensorSpec instances.
 
     Args:
-        input_specs_raw (Optional[Mapping[str, Any]]): Raw input specs dictionary.
+        input_specs_raw (object): Raw input specs dictionary.
 
     Returns:
         dict[str, TensorSpec]: Parsed input specifications.
     """
     input_specs: dict[str, TensorSpec] = {}
-    if input_specs_raw and isinstance(input_specs_raw, dict):
+    if isinstance(input_specs_raw, Mapping):
         for k, v in input_specs_raw.items():
-            if isinstance(v, dict):
-                input_specs[k] = TensorSpec(**v)
-            elif isinstance(v, TensorSpec):
-                input_specs[k] = v
+            if isinstance(v, TensorSpec):
+                input_specs[str(k)] = v
+            elif isinstance(v, Mapping):
+                raw_shape = v.get("shape", ())
+                shape_seq: list[DimensionType] = (
+                    [int(x) if isinstance(x, int) else str(x) for x in raw_shape]
+                    if isinstance(raw_shape, Sequence)
+                    and not isinstance(raw_shape, (str, bytes))
+                    else []
+                )
+                dtype_str = str(v.get("dtype", "float32"))
+                raw_sparsity = v.get("sparsity")
+                sparsity_str = str(raw_sparsity) if raw_sparsity is not None else None
+                input_specs[str(k)] = TensorSpec(
+                    shape=shape_seq, dtype=dtype_str, sparsity=sparsity_str
+                )
     return input_specs
 
 
-def _read_next_chunk(stream: IO[Any], chunk_size: int) -> str:
+def _read_next_chunk(
+    stream: typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO,
+    chunk_size: int,
+) -> str:
     """Read up to chunk_size from a text or binary stream as a UTF-8 string.
 
     Args:
-        stream (IO[Any]): Readable text or binary stream.
+        stream (typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO): Readable text or binary stream.
         chunk_size (int): Maximum number of characters/bytes to read.
 
     Returns:
@@ -215,7 +455,7 @@ def _read_next_chunk(stream: IO[Any], chunk_size: int) -> str:
 def _skip_ws_and_tokens(
     buf: str,
     pos: int,
-    stream: IO[Any],
+    stream: typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO,
     chunk_size: int,
     tokens: str,
 ) -> tuple[str, int]:
@@ -224,7 +464,7 @@ def _skip_ws_and_tokens(
     Args:
         buf (str): Current active buffer slice.
         pos (int): Current index within buf.
-        stream (IO[Any]): Source input stream.
+        stream (typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO): Source input stream.
         chunk_size (int): Chunk size for incremental reads and compaction.
         tokens (str): Characters to skip over.
 
@@ -255,20 +495,20 @@ def _decode_next_json_value(
     decoder: json.JSONDecoder,
     buf: str,
     pos: int,
-    stream: IO[Any],
+    stream: typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO,
     chunk_size: int,
-) -> tuple[Any, str, int]:
+) -> tuple[JsonValue, str, int]:
     """Decode a single JSON value starting at pos, incrementally reading chunks on boundary straddles.
 
     Args:
         decoder (json.JSONDecoder): Reusable JSONDecoder instance.
         buf (str): Current buffer slice.
         pos (int): Current position within buf.
-        stream (IO[Any]): Source input stream.
+        stream (typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO): Source input stream.
         chunk_size (int): Chunk size for incremental reads.
 
     Returns:
-        tuple[Any, str, int]: Decoded Python value and updated (buf, next_pos).
+        tuple[JsonValue, str, int]: Decoded JSON value and updated (buf, next_pos).
 
     Raises:
         json.JSONDecodeError: If the stream ends before a complete JSON value can be decoded.
@@ -296,11 +536,11 @@ def _stream_parse_nodes_section(
     decoder: json.JSONDecoder,
     buf: str,
     pos: int,
-    stream: IO[Any],
+    stream: typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO,
     chunk_size: int,
     graph_cls: type[LogicalGraph],
 ) -> tuple[NodeDict, str, int]:
-    """Incrementally parse the 'nodes' JSON object or array one LogicalNode at a time.
+    """Incrementally parse the 'nodes' JSON object one LogicalNode at a time.
 
     Ensures peak memory during node deserialization is O(max_node_size) rather than
     allocating all raw node dictionaries simultaneously.
@@ -309,7 +549,7 @@ def _stream_parse_nodes_section(
         decoder (json.JSONDecoder): Reusable JSONDecoder instance.
         buf (str): Current buffer slice.
         pos (int): Current index within buf.
-        stream (IO[Any]): Source input stream.
+        stream (typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO): Source input stream.
         chunk_size (int): Chunk size for incremental reads.
         graph_cls (type[LogicalGraph]): LogicalGraph class for recursive subgraph parsing.
 
@@ -317,49 +557,31 @@ def _stream_parse_nodes_section(
         tuple[NodeDict, str, int]: Populated NodeDict and updated (buf, pos).
 
     Raises:
-        json.JSONDecodeError: If the nodes section is not a JSON object or array.
+        json.JSONDecodeError: If the nodes section is not a JSON object.
     """
     from ml_switcheroo_ir.graph import NodeDict as _NodeDict
 
     nodes = _NodeDict()
     buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS)
-    if pos >= len(buf) or buf[pos] not in ("{", "["):
-        raise json.JSONDecodeError("Expected '{' or '[' for nodes section", buf, pos)
+    if pos >= len(buf) or buf[pos] != "{":
+        raise json.JSONDecodeError("Expected '{' for nodes section", buf, pos)
 
-    opener = buf[pos]
     pos += 1
-    if opener == "{":
-        while True:
-            buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COMMA)
-            if pos >= len(buf):
-                raise json.JSONDecodeError("Unterminated nodes object", buf, pos)
-            if buf[pos] == "}":
-                return nodes, buf, pos + 1
-            nid, buf, pos = _decode_next_json_value(
-                decoder, buf, pos, stream, chunk_size
-            )
-            buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COLON)
-            ndata, buf, pos = _decode_next_json_value(
-                decoder, buf, pos, stream, chunk_size
-            )
-            nodes[str(nid)] = _parse_node_dict(ndata, graph_cls)
-    else:
-        while True:
-            buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COMMA)
-            if pos >= len(buf):
-                raise json.JSONDecodeError("Unterminated nodes array", buf, pos)
-            if buf[pos] == "]":
-                return nodes, buf, pos + 1
-            ndata, buf, pos = _decode_next_json_value(
-                decoder, buf, pos, stream, chunk_size
-            )
-            node = _parse_node_dict(ndata, graph_cls)
-            nodes[node.id] = node
+    while True:
+        buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COMMA)
+        if pos >= len(buf):
+            raise json.JSONDecodeError("Unterminated nodes object", buf, pos)
+        if buf[pos] == "}":
+            return nodes, buf, pos + 1
+        nid, buf, pos = _decode_next_json_value(decoder, buf, pos, stream, chunk_size)
+        buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COLON)
+        ndata, buf, pos = _decode_next_json_value(decoder, buf, pos, stream, chunk_size)
+        nodes[str(nid)] = _parse_node_dict(ndata, graph_cls)  # type: ignore[arg-type]
 
 
 def _apply_edges_list(
     nodes: dict[str, LogicalNode],
-    edges_list: Sequence[LogicalEdge | Mapping[str, Any]],
+    edges_list: Sequence[LogicalEdge | Mapping[str, object]],
     clear_existing: bool = False,
     edge_value_names: dict[tuple[str, int], str] | None = None,
 ) -> None:
@@ -370,9 +592,9 @@ def _apply_edges_list(
 
     Args:
         nodes (dict[str, LogicalNode]): Graph nodes dictionary.
-        edges_list (Sequence[LogicalEdge | Mapping[str, Any]]): Edges to apply.
+        edges_list (Sequence[LogicalEdge | Mapping[str, object]]): Edges to apply.
         clear_existing (bool): Whether to clear existing target_node.inputs first.
-        edge_value_names (Optional[dict[tuple[str, int], str]]): Optional mapping of
+        edge_value_names (dict[tuple[str, int], str] | None): Optional mapping of
             (target_id, target_idx) to explicit edge value_name metadata.
     """
     from ml_switcheroo_ir.graph import LogicalEdge as _LogicalEdge
@@ -395,9 +617,12 @@ def _apply_edges_list(
         else:
             src = str(edge.get("source", ""))
             tgt = str(edge.get("target", ""))
-            src_idx = edge.get("source_idx", 0)
-            tgt_idx = int(edge.get("target_idx", 0) or 0)
-            val_name = edge.get("value_name")
+            raw_src_idx = edge.get("source_idx", 0)
+            src_idx = int(raw_src_idx) if isinstance(raw_src_idx, int) else None
+            raw_tgt_idx = edge.get("target_idx", 0)
+            tgt_idx = int(raw_tgt_idx) if isinstance(raw_tgt_idx, int) else 0
+            raw_val_name = edge.get("value_name")
+            val_name = str(raw_val_name) if raw_val_name is not None else None
 
         if tgt not in nodes:
             continue
@@ -427,24 +652,27 @@ def _apply_edges_list(
 def _build_graph_from_parsed_sections(
     graph_cls: type[LogicalGraph],
     nodes: NodeDict,
-    meta: Mapping[str, Any],
+    meta: Mapping[str, object],
 ) -> LogicalGraph:
     """Assemble a LogicalGraph from parsed nodes and top-level metadata sections.
 
     Args:
         graph_cls (type[LogicalGraph]): Target LogicalGraph class.
         nodes (NodeDict): Deserialized nodes dictionary.
-        meta (Mapping[str, Any]): Top-level graph metadata fields.
+        meta (Mapping[str, object]): Top-level graph metadata fields.
 
     Returns:
         LogicalGraph: Constructed LogicalGraph instance.
     """
     edge_value_names: dict[tuple[str, int], str] = {}
     edges_data = meta.get("edges")
-    if edges_data and isinstance(edges_data, list):
+    if isinstance(edges_data, list):
+        typed_edges: list[LogicalEdge | Mapping[str, object]] = [
+            e for e in edges_data if isinstance(e, Mapping)
+        ]
         _apply_edges_list(
             nodes,
-            edges_data,
+            typed_edges,
             clear_existing=False,
             edge_value_names=edge_value_names,
         )
@@ -452,27 +680,43 @@ def _build_graph_from_parsed_sections(
     pipe_topo_raw = meta.get("pipeline_topology")
     pipe_topo = (
         PipelineTopologyConfig.from_dict(pipe_topo_raw)
-        if pipe_topo_raw is not None
+        if isinstance(pipe_topo_raw, Mapping)
         else None
     )
     inputs_data = meta.get("inputs")
+    inputs_list: list[str] = (
+        [str(x) for x in inputs_data]
+        if isinstance(inputs_data, Sequence)
+        and not isinstance(inputs_data, (str, bytes))
+        else []
+    )
+    outputs_data = meta.get("outputs")
+    outputs_list: list[str] | None = (
+        [str(x) for x in outputs_data]
+        if isinstance(outputs_data, Sequence)
+        and not isinstance(outputs_data, (str, bytes))
+        else None
+    )
+    inits_raw = meta.get("initializers")
+    inits_dict: dict[str, InitializerValue] = (
+        dict(inits_raw) if isinstance(inits_raw, Mapping) else {}
+    )
     graph = graph_cls(
-        name=meta.get("name", "Model"),
+        name=str(meta.get("name", "Model")),
         nodes=nodes,
-        inputs=list(inputs_data) if inputs_data is not None else [],
+        inputs=inputs_list,
         input_specs=_parse_input_specs_dict(meta.get("input_specs")),
-        outputs=meta.get("outputs"),
-        initializers=meta.get("initializers", {}),
+        outputs=outputs_list,
+        initializers=inits_dict,
         mesh=_parse_mesh_dict(meta.get("mesh")),
         pipeline_topology=pipe_topo,
     )
-    if edge_value_names:
-        graph._edge_value_names.update(edge_value_names)
+    graph._edge_value_names.update(edge_value_names)
     return graph
 
 
 def _stream_parse_graph(
-    stream: IO[Any],
+    stream: typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO,
     graph_cls: type[LogicalGraph],
     chunk_size: int = 65536,
 ) -> LogicalGraph:
@@ -482,7 +726,7 @@ def _stream_parse_graph(
     and decoding each node in the 'nodes' section individually.
 
     Args:
-        stream (IO[Any]): Readable text or binary stream containing JSON.
+        stream (typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO): Readable text or binary stream containing JSON.
         graph_cls (type[LogicalGraph]): LogicalGraph class to instantiate.
         chunk_size (int): Read chunk size in bytes/characters (default: 65536).
 
@@ -503,7 +747,7 @@ def _stream_parse_graph(
     pos += 1
 
     nodes = _NodeDict()
-    meta: dict[str, Any] = {}
+    meta: dict[str, object] = {}
 
     while True:
         buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COMMA)
@@ -545,47 +789,64 @@ def _indent_json_fragment(fragment: str, base_indent: str) -> str:
     return lines[0] + _NL + _NL.join(base_indent + line for line in lines[1:])
 
 
-def _serialize_node_dict(
-    node: LogicalNode, format: str = "canonical"
-) -> dict[str, Any]:
+def _serialize_node_dict(node: LogicalNode) -> SerializedNodeDict:
     """Serialize a LogicalNode to a dictionary while preserving canonical nested subgraphs.
 
     Args:
         node (LogicalNode): Node to convert to a dictionary.
-        format (str): Serialization format ('canonical' or 'legacy').
 
     Returns:
-        dict[str, Any]: Dictionary representation of the node.
+        SerializedNodeDict: Dictionary representation of the node.
     """
     from ml_switcheroo_ir.graph import LogicalGraph as _LogicalGraph
 
-    node_dict = asdict(node)
-    if node.subgraphs:
-        sub_dict: dict[str, Any] = {}
-        for k, v in node.subgraphs.items():
-            if isinstance(v, _LogicalGraph):
-                sub_dict[k] = v.to_dict(format=format)
-            else:
-                sub_dict[k] = node_dict["subgraphs"][k]
-        node_dict["subgraphs"] = sub_dict
-    return node_dict
+    sub_dict: dict[str, object] = {}
+    for k, v in node.subgraphs.items():
+        if isinstance(v, _LogicalGraph):
+            sub_dict[k] = v.to_dict()
+        else:
+            sub_dict[k] = copy.deepcopy(v)
+
+    sharding_dict: dict[str, tuple[PartitionAxisElement, ...]] | None = (
+        {"axes": node.sharding.axes} if node.sharding is not None else None
+    )
+    output_specs_list: list[dict[str, object]] = [
+        {"dtype": spec.dtype, "shape": spec.shape, "sparsity": spec.sparsity}
+        for spec in node.output_specs
+    ]
+
+    return {
+        "attributes": copy.deepcopy(node.attributes),
+        "device": node.device,
+        "domain": node.domain,
+        "dtype": node.dtype,
+        "id": node.id,
+        "inputs": list(node.inputs),
+        "op_type": node.op_type,
+        "output_specs": output_specs_list,
+        "outputs": list(node.outputs),
+        "shape_metadata": node.shape_metadata,
+        "sharding": sharding_dict,
+        "source_ast_ref": node.source_ast_ref,
+        "stream": node.stream,
+        "subgraphs": sub_dict,
+        "version": node.version,
+    }
 
 
 def _stream_write_graph(
     graph: LogicalGraph,
-    fp: IO[Any] | TextIO,
-    format: str = "canonical",
+    fp: typing.IO[str] | typing.TextIO,
     indent: int = 2,
 ) -> None:
     """Incrementally stream-serialize a LogicalGraph to a writable stream in O(max_node_size) RAM.
 
-    Produces output byte-for-byte identical to ``json.dumps(graph.to_dict(format), sort_keys=True, indent=indent)``
+    Produces output byte-for-byte identical to ``json.dumps(graph.to_dict(), sort_keys=True, indent=indent)``
     while streaming ``edges`` and ``nodes`` item by item without materializing the full graph dictionary.
 
     Args:
         graph (LogicalGraph): Graph to serialize.
-        fp (IO[Any] | TextIO): Writable text stream.
-        format (str): Serialization format ('canonical' or 'legacy').
+        fp (typing.IO[str] | typing.TextIO): Writable text stream.
         indent (int): Indentation spaces (default: 2).
     """
     pad1 = " " * indent
@@ -608,10 +869,14 @@ def _stream_write_graph(
         if graph.pipeline_topology is not None
         else None
     )
-    input_specs_val = {k: asdict(v) for k, v in sorted(graph.input_specs.items())}
+    input_specs_val = {
+        k: {"dtype": v.dtype, "shape": v.shape, "sparsity": v.sparsity}
+        for k, v in sorted(graph.input_specs.items())
+    }
     inits_val = dict(sorted(graph.initializers.items()))
 
     keys_order = [
+        "edges",
         "initializers",
         "input_specs",
         "inputs",
@@ -621,10 +886,8 @@ def _stream_write_graph(
         "outputs",
         "pipeline_topology",
     ]
-    if format == "canonical":
-        keys_order.insert(0, "edges")
 
-    val_map: dict[str, Any] = {
+    val_map: dict[str, object] = {
         "initializers": inits_val,
         "input_specs": input_specs_val,
         "inputs": list(graph.inputs),
@@ -647,8 +910,15 @@ def _stream_write_graph(
                 fp.write("[" + _NL)
                 for e_idx, edge in enumerate(edges):
                     e_comma = "," if e_idx < len(edges) - 1 else ""
+                    edge_dict: SerializedEdgeDict = {
+                        "source": edge.source,
+                        "source_idx": edge.source_idx,
+                        "target": edge.target,
+                        "target_idx": edge.target_idx,
+                        "value_name": edge.value_name,
+                    }
                     edge_str = json.dumps(
-                        asdict(edge), sort_keys=True, indent=indent, default=str
+                        edge_dict, sort_keys=True, indent=indent, default=str
                     )
                     fp.write(
                         f"{pad2}{_indent_json_fragment(edge_str, pad2)}{e_comma}{_NL}"
@@ -659,7 +929,7 @@ def _stream_write_graph(
             fp.write("{" + _NL)
             for n_idx, nid in enumerate(sorted_nids):
                 n_comma = "," if n_idx < len(sorted_nids) - 1 else ""
-                node_dict = _serialize_node_dict(graph.nodes[nid], format=format)
+                node_dict = _serialize_node_dict(graph.nodes[nid])
                 node_str = json.dumps(
                     node_dict, sort_keys=True, indent=indent, default=str
                 )

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
 
 from ml_switcheroo_ir.schema.base import (
     REGISTRY_LOCK,
@@ -25,11 +25,11 @@ def _load_rdna_schemas(json_path: Path | str | None = None) -> None:
         json_path (Optional[Union[Path, str]]): Explicit path override for rdna_ops.json.
     """
 
-    def _record_rdna_metadata(op_data: Mapping[str, Any]) -> None:
+    def _record_rdna_metadata(op_data: Mapping[str, object]) -> None:
         """Record VOPD slot and target mappings from an RDNA schema entry.
 
         Args:
-            op_data (Mapping[str, Any]): Raw operator definition dictionary.
+            op_data (Mapping[str, object]): Raw operator definition dictionary.
         """
         name = str(op_data["name"])
         vopd_slot = op_data.get("vopd_slot")
@@ -61,7 +61,7 @@ def _load_rdna_schemas(json_path: Path | str | None = None) -> None:
             )
 
             for op_name, op_info in GHOST_VOPD_OPS.items():
-                slots = op_info.get("slots", [])
+                slots = op_info.slots
                 slot_str = (
                     "BOTH"
                     if set(slots) == {"X", "Y"}

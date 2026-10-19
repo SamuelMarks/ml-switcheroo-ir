@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 from unittest.mock import MagicMock, patch
 
 from ml_switcheroo_ir import LogicalGraph, LogicalMesh, LogicalNode, PartitionSpec
+from ml_switcheroo_ir.distributed import PartitionAxisElement
 from ml_switcheroo_ir.schema.onnx_registry import OpAttribute, OpSchema
 from ml_switcheroo_ir.validator import GroundingValidator, ValidationLevel, Validator
 
@@ -39,9 +39,9 @@ def test_validator_sharding_deeply_nested_and_none() -> None:
     mesh = LogicalMesh(shape={"data": 2, "model": 4})
     v = Validator()
 
-    nested_axes = cast(
-        "tuple[str | tuple[str, ...] | None, ...]",
-        ((("data", None), "model"), None),
+    nested_axes: tuple[PartitionAxisElement, ...] = (
+        (("data", None), "model"),
+        None,
     )
     spec_valid = PartitionSpec(axes=nested_axes)
     node_valid = LogicalNode(id="nv", op_type="Relu", sharding=spec_valid)
@@ -84,7 +84,7 @@ def test_validator_sharding_empty_list_axis() -> None:
     """Test sharding axis containing an empty list or other non-string runtime types."""
     mesh = LogicalMesh(shape={"data": 2})
     v = Validator()
-    malformed_axes = cast("tuple[str | tuple[str, ...] | None, ...]", ([], 123))
+    malformed_axes: tuple[PartitionAxisElement, ...] = ([], 123)
     spec = PartitionSpec(axes=malformed_axes)
     node = LogicalNode(id="n_empty", op_type="Relu", sharding=spec)
     assert not v.validate_sharding(node, mesh)
@@ -123,11 +123,12 @@ def test_grounding_validator_engine_exception_handling(tmp_path: Path) -> None:
         gv_fail = GroundingValidator()
         assert gv_fail._engine is None
 
-    with patch.dict(
-        "sys.modules", {"ml_ecosystem_snapshots.grounding.engine": None}
-    ), patch(
-        "ml_framework_snapshots.grounding.engine.GroundingEngine",
-        side_effect=RuntimeError("init failed"),
+    with (
+        patch.dict("sys.modules", {"ml_ecosystem_snapshots.grounding.engine": None}),
+        patch(
+            "ml_framework_snapshots.grounding.engine.GroundingEngine",
+            side_effect=RuntimeError("init failed"),
+        ),
     ):
         gv_fail_fallback = GroundingValidator()
         assert gv_fail_fallback._engine is None

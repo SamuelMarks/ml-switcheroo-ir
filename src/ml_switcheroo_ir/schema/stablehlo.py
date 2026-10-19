@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import json
 import logging
 from pathlib import Path
-from typing import Any, Mapping, Sequence
 
 from ml_switcheroo_ir.schema.base import (
     REGISTRY_LOCK,
@@ -22,12 +22,12 @@ STABLEHLO_REGISTRY: dict[str, OpSchema] = {}
 
 
 def parse_stablehlo_exhaustive_operations(
-    operations: Sequence[Mapping[str, Any]],
+    operations: Sequence[Mapping[str, object]],
 ) -> dict[str, OpSchema]:
     """Parse raw operations from stablehlo_exhaustive.json into OpSchema objects.
 
     Args:
-        operations (Sequence[Mapping[str, Any]]): Raw StableHLO operation dictionaries.
+        operations (Sequence[Mapping[str, object]]): Raw StableHLO operation dictionaries.
 
     Returns:
         dict[str, OpSchema]: Mapping of StableHLO operator names to OpSchema definitions.
@@ -38,7 +38,13 @@ def parse_stablehlo_exhaustive_operations(
         if not name:
             continue
         attrs: list[CustomAttributeSchema] = []
-        for a in op_data.get("attributes", []):
+        raw_attrs = op_data.get("attributes", [])
+        for a in (
+            raw_attrs
+            if isinstance(raw_attrs, Sequence)
+            and not isinstance(raw_attrs, (str, bytes))
+            else []
+        ):
             if not (isinstance(a, dict) and "name" in a):
                 continue
             attr_name = str(a.get("name", ""))
@@ -62,16 +68,20 @@ def parse_stablehlo_exhaustive_operations(
                     default=a.get("default", None),
                 )
             )
-        inputs = [
-            str(inp.get("name", ""))
-            for inp in op_data.get("operands", [])
-            if isinstance(inp, dict)
-        ]
-        outputs = [
-            str(out.get("name", ""))
-            for out in op_data.get("results", [])
-            if isinstance(out, dict)
-        ]
+        raw_operands = op_data.get("operands", [])
+        inputs = (
+            [str(inp.get("name", "")) for inp in raw_operands if isinstance(inp, dict)]
+            if isinstance(raw_operands, Sequence)
+            and not isinstance(raw_operands, (str, bytes))
+            else []
+        )
+        raw_results = op_data.get("results", [])
+        outputs = (
+            [str(out.get("name", "")) for out in raw_results if isinstance(out, dict)]
+            if isinstance(raw_results, Sequence)
+            and not isinstance(raw_results, (str, bytes))
+            else []
+        )
         schema = CustomOpSchema(
             name=name,
             domain="stablehlo",
@@ -87,7 +97,7 @@ def _load_stablehlo_schemas(json_path: Path | str | None = None) -> None:
     """Load StableHLO schemas from bundled stablehlo_ops.json or snapshot directory.
 
     Args:
-        json_path (Optional[Union[Path, str]]): Explicit path override for stablehlo_ops.json.
+        json_path (Path | str | None): Explicit path override for stablehlo_ops.json.
     """
     with REGISTRY_LOCK:
         loaded: dict[str, OpSchema] = {}

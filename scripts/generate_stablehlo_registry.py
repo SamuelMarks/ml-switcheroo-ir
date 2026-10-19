@@ -2,13 +2,43 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import os
-import sys
 from pathlib import Path
-from typing import Any
+import sys
 
+from pydantic import BaseModel, ConfigDict, Field
+
+from ml_switcheroo_ir.types import JsonValue
 from ml_switcheroo_ir.validator import DEFAULT_SNAPSHOT_DIR
+
+
+class StableHloAttrSpecModel(BaseModel):
+    """Pydantic model for a generated StableHLO operator attribute schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    type: str = "str"
+    required: bool = False
+    default: JsonValue = None
+
+
+class StableHloOpSpecModel(BaseModel):
+    """Pydantic model for a generated StableHLO operator schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    domain: str = "stablehlo"
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    attributes: list[StableHloAttrSpecModel] = Field(default_factory=list)
+
+
+StableHloAttrSpecModel.model_rebuild()
+StableHloOpSpecModel.model_rebuild()
 
 
 _OPTIONAL_STABLEHLO_ATTRS: frozenset[str] = frozenset(
@@ -63,11 +93,11 @@ _DICT_STABLEHLO_ATTRS: frozenset[str] = frozenset(
 )
 
 
-def _normalize_stablehlo_op_name(raw: dict[str, Any]) -> str:
+def _normalize_stablehlo_op_name(raw: Mapping[str, object]) -> str:
     """Resolve canonical snake_case StableHLO operator name from a raw snapshot entry.
 
     Args:
-        raw (dict[str, Any]): Raw operator snapshot dictionary.
+        raw (Mapping[str, object]): Raw operator snapshot dictionary.
 
     Returns:
         str: Canonical operator name.
@@ -86,19 +116,19 @@ def _normalize_stablehlo_op_name(raw: dict[str, Any]) -> str:
 
 
 def _infer_stablehlo_attr_spec(
-    op_name: str, a_name: str, a_info: Any
-) -> dict[str, Any]:
+    op_name: str, a_name: str, a_info: object
+) -> dict[str, JsonValue]:
     """Infer Python type, required flag, and default value for a StableHLO attribute.
 
     Args:
         op_name (str): Canonical StableHLO operator name.
         a_name (str): Attribute identifier.
-        a_info (Any): Raw attribute metadata from snapshot.
+        a_info (object): Raw attribute metadata from snapshot.
 
     Returns:
-        dict[str, Any]: Normalized attribute schema dictionary.
+        dict[str, JsonValue]: Normalized attribute schema dictionary.
     """
-    a_type = a_info.get("type", "") if isinstance(a_info, dict) else str(a_info)
+    a_type = str(a_info.get("type", "")) if isinstance(a_info, dict) else str(a_info)
     is_optional = (
         "OptionalAttr" in a_type
         or "DefaultValued" in a_type
@@ -111,7 +141,7 @@ def _infer_stablehlo_attr_spec(
     ):
         is_optional = False
 
-    default_val: Any = (
+    default_val: JsonValue = (
         1 if a_name in ("batch_group_count", "feature_group_count") else None
     )
     py_type = "str"
@@ -148,69 +178,84 @@ def _infer_stablehlo_attr_spec(
     ):
         py_type = "dict"
 
-    return {
-        "name": a_name,
-        "type": py_type,
-        "required": not is_optional,
-        "default": default_val,
-    }
+    model = StableHloAttrSpecModel(
+        name=a_name,
+        type=py_type,
+        required=not is_optional,
+        default=default_val,
+    )
+    return model.model_dump()
 
 
-def _extract_stablehlo_attributes(op_name: str, attrs_raw: Any) -> list[dict[str, Any]]:
+def _extract_stablehlo_attributes(
+    op_name: str, attrs_raw: object
+) -> list[dict[str, JsonValue]]:
     """Extract normalized attribute schema list from a StableHLO snapshot record.
 
     Args:
         op_name (str): Canonical operator name.
-        attrs_raw (Any): Raw attributes dict or list.
+        attrs_raw (object): Raw attributes dict or list.
 
     Returns:
-        list[dict[str, Any]]: List of attribute schema dictionaries.
+        list[dict[str, JsonValue]]: List of attribute schema dictionaries.
     """
-    attributes: list[dict[str, Any]] = []
+    attributes: list[dict[str, JsonValue]] = []
     if isinstance(attrs_raw, dict):
         for a_name, a_info in sorted(attrs_raw.items()):
             if a_name:
-                attributes.append(_infer_stablehlo_attr_spec(op_name, a_name, a_info))
+                attributes.append(
+                    _infer_stablehlo_attr_spec(op_name, str(a_name), a_info)
+                )
     elif isinstance(attrs_raw, list):
         for a in attrs_raw:
             if isinstance(a, dict):
                 a_name = str(a.get("name") or "").strip()
                 if a_name:
-                    attributes.append(
-                        {
-                            "name": a_name,
-                            "type": a.get("type", "str"),
-                            "required": a.get("required", False),
-                            "default": a.get("default", None),
-                        }
+                    raw_def = a.get("default", None)
+                    def_val: JsonValue = (
+                        raw_def
+                        if isinstance(raw_def, (str, int, float, bool, list, dict))
+                        or raw_def is None
+                        else str(raw_def)
                     )
+                    model = StableHloAttrSpecModel(
+                        name=a_name,
+                        type=str(a.get("type", "str")),
+                        required=bool(a.get("required", False)),
+                        default=def_val,
+                    )
+                    attributes.append(model.model_dump())
     return attributes
 
 
-def extract_stablehlo_schemas(snapshot_path: str | Path) -> list[dict[str, Any]]:
+def extract_stablehlo_schemas(
+    snapshot_path: str | Path,
+) -> list[dict[str, JsonValue]]:
     """Extract grounded StableHLO operator schemas from snapshot file.
 
     Args:
-        snapshot_path: Path to stablehlo JSON snapshot manifest.
+        snapshot_path (str | Path): Path to stablehlo JSON snapshot manifest.
 
     Returns:
-        List of grounded operator definition dictionaries.
+        list[dict[str, JsonValue]]: List of grounded operator definition dictionaries.
     """
     with open(snapshot_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    raw_ops: list[dict[str, Any]] = []
+    raw_ops: list[Mapping[str, object]] = []
     if isinstance(data, list):
-        raw_ops = data
+        raw_ops = [item for item in data if isinstance(item, Mapping)]
     elif isinstance(data, dict):
-        if "categories" in data and "util" in data["categories"]:
-            raw_ops = data["categories"]["util"]
+        if "categories" in data and isinstance(data["categories"], dict):
+            util_list = data["categories"].get("util")
+            if isinstance(util_list, list):
+                raw_ops = [item for item in util_list if isinstance(item, Mapping)]
         else:
             ops_val = data.get("operations")
             if isinstance(ops_val, list):
-                raw_ops = ops_val
+                raw_ops = [item for item in ops_val if isinstance(item, Mapping)]
 
-    ops: list[dict[str, Any]] = []
+    ops: list[dict[str, JsonValue]] = []
     seen: set[str] = set()
 
     for raw in raw_ops:
@@ -219,28 +264,40 @@ def extract_stablehlo_schemas(snapshot_path: str | Path) -> list[dict[str, Any]]
             continue
         seen.add(op_name)
 
-        inputs = [
-            str(opnd.get("name") or "").strip()
-            for opnd in (raw.get("operands") or [])
-            if isinstance(opnd, dict) and str(opnd.get("name") or "").strip()
-        ]
-        outputs = [
-            str(ret.get("name") or "").strip()
-            for ret in (raw.get("returns") or [])
-            if isinstance(ret, dict) and str(ret.get("name") or "").strip()
-        ] or ["result"]
-
-        ops.append(
-            {
-                "name": op_name,
-                "domain": "stablehlo",
-                "inputs": inputs,
-                "outputs": outputs,
-                "attributes": _extract_stablehlo_attributes(
-                    op_name, raw.get("attributes")
-                ),
-            }
+        raw_operands = raw.get("operands")
+        inputs = (
+            [
+                str(opnd.get("name") or "").strip()
+                for opnd in raw_operands
+                if isinstance(opnd, dict) and str(opnd.get("name") or "").strip()
+            ]
+            if isinstance(raw_operands, list)
+            else []
         )
+        raw_returns = raw.get("returns")
+        outputs = (
+            [
+                str(ret.get("name") or "").strip()
+                for ret in raw_returns
+                if isinstance(ret, dict) and str(ret.get("name") or "").strip()
+            ]
+            if isinstance(raw_returns, list)
+            else []
+        ) or ["result"]
+
+        op_model = StableHloOpSpecModel(
+            name=op_name,
+            domain="stablehlo",
+            inputs=inputs,
+            outputs=outputs,
+            attributes=[
+                StableHloAttrSpecModel.model_validate(attr)
+                for attr in _extract_stablehlo_attributes(
+                    op_name, raw.get("attributes")
+                )
+            ],
+        )
+        ops.append(op_model.model_dump())
 
     return ops
 
@@ -249,8 +306,8 @@ def main(snapshot_path: str | None = None, output_path: str | None = None) -> No
     """Generate StableHLO schemas from snapshot manifest.
 
     Args:
-        snapshot_path: Source snapshot file path.
-        output_path: Target stablehlo_ops.json path.
+        snapshot_path (str | None): Source snapshot file path.
+        output_path (str | None): Target stablehlo_ops.json path.
     """
     target_snap = (
         snapshot_path

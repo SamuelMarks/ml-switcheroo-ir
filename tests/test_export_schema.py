@@ -20,8 +20,10 @@ def test_get_json_schema_logical_graph() -> None:
     schema = get_json_schema("LogicalGraph")
     assert isinstance(schema, dict)
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert "LogicalGraph" in schema.get("title", "") or "properties" in schema
-    assert "nodes" in schema.get("properties", {})
+    assert "LogicalGraph" in str(schema.get("title", "")) or "properties" in schema
+    props = schema.get("properties", {})
+    assert isinstance(props, dict)
+    assert "nodes" in props
 
 
 def test_get_json_schema_logical_node() -> None:
@@ -29,8 +31,10 @@ def test_get_json_schema_logical_node() -> None:
     schema = get_json_schema("LogicalNode")
     assert isinstance(schema, dict)
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert "LogicalNode" in schema.get("title", "") or "properties" in schema
-    assert "id" in schema.get("properties", {})
+    assert "LogicalNode" in str(schema.get("title", "")) or "properties" in schema
+    props = schema.get("properties", {})
+    assert isinstance(props, dict)
+    assert "id" in props
 
 
 def test_get_json_schema_snapshot_envelope() -> None:
@@ -38,8 +42,10 @@ def test_get_json_schema_snapshot_envelope() -> None:
     schema = get_json_schema("SnapshotEnvelope")
     assert isinstance(schema, dict)
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert "SnapshotEnvelope" in schema.get("title", "") or "properties" in schema
-    assert "schema_version" in schema.get("properties", {})
+    assert "SnapshotEnvelope" in str(schema.get("title", "")) or "properties" in schema
+    props = schema.get("properties", {})
+    assert isinstance(props, dict)
+    assert "schema_version" in props
 
 
 def test_get_json_schema_extended_targets() -> None:
@@ -67,10 +73,9 @@ def test_get_json_schema_all() -> None:
     assert "NoTangent" in schemas
     assert "PipelineTopologyConfig" in schemas
     assert "WebRTCSignalingTopology" in schemas
-    assert (
-        schemas["LogicalGraph"]["$schema"]
-        == "https://json-schema.org/draft/2020-12/schema"
-    )
+    lg_schema = schemas["LogicalGraph"]
+    assert isinstance(lg_schema, dict)
+    assert lg_schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
 
 
 def test_get_json_schema_invalid_target() -> None:

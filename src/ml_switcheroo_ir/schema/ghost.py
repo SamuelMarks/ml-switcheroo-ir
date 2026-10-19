@@ -6,10 +6,13 @@ API structures between the ml-ecosystem-snapshots scraper and the ml-switcheroo 
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import Any, Literal
+import typing
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
+
+from ml_switcheroo_ir.types import JsonValue
 
 
 class ParameterKind(str, Enum):
@@ -94,6 +97,95 @@ class SemanticTier(str, Enum):
     DATALOADER = "dataloader"
 
 
+class _DictAccessModel(BaseModel):
+    """Base Pydantic model providing dictionary-style field lookup."""
+
+    def __getitem__(self, key: str) -> object:
+        """Return attribute value by field name.
+
+        Args:
+            key (str): Field name.
+
+        Returns:
+            object: Field value.
+        """
+        return getattr(self, key)
+
+
+class IsaControlCodesSpec(_DictAccessModel):
+    """Pydantic model for ISA instruction control codes and scheduling metadata."""
+
+    model_config = ConfigDict(extra="allow")
+
+    latency: int | None = None
+    stall_count: int | None = None
+    yield_flag: bool | None = None
+    write_barrier: int | None = None
+    read_barrier: int | None = None
+    wait_barrier_mask: int | str | None = None
+
+
+class IsaStructuredOperandSpec(_DictAccessModel):
+    """Pydantic model for structured ISA operand specifications."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str | None = None
+    role: str | None = None
+    reg: str | None = None
+    register_class: str | None = None
+
+
+class VopdProfileSpec(_DictAccessModel):
+    """Pydantic model for AMD RDNA3 VOPD dual-issue profile."""
+
+    model_config = ConfigDict(extra="allow")
+
+    slot: str | None = None
+    slots: list[str] | None = None
+    max_src_operands: int | None = None
+
+
+class RdnaPrimitiveSpec(_DictAccessModel):
+    """Pydantic model for AMD RDNA instruction primitive specifications."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mnemonic: str
+    operands: list[str]
+    register_classes: dict[str, RegisterClass]
+
+
+class VopdOperatorSpec(_DictAccessModel):
+    """Pydantic model for RDNA3 VOPD dual-issue operator specifications."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mnemonic: str
+    slots: list[str]
+
+
+class SassPrimitiveSpec(_DictAccessModel):
+    """Pydantic model for NVIDIA SASS instruction primitive specifications."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mnemonic: str
+    operands: list[str]
+    barrier_predicates: list[str] | None = None
+    memory_space: MemorySpace | None = None
+
+
+class WgslPrimitiveSpec(_DictAccessModel):
+    """Pydantic model for WebGPU WGSL primitive signature specifications."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inputs: list[str]
+    outputs: list[str]
+    qualifier: WGSLQualifier | None = None
+
+
 class GhostParam(BaseModel):
     """Serializable representation of a function parameter."""
 
@@ -129,11 +221,11 @@ class GhostResult(BaseModel):
 
 
 class ExtendedGhostParam(GhostParam):
-    """Extended GhostParam supporting operand directionality, IR roles, dtypes, rank, and factory defaults."""
+    """Extended GhostParam supporting operand directionality, IR roles, allowed_dtypes, rank_constraint, and factory defaults."""
 
     model_config = ConfigDict(extra="allow")
 
-    default: Any | None = Field(
+    default: JsonValue = Field(  # type: ignore[assignment]
         default=None,
         description="Default value representation.",
     )
@@ -145,10 +237,6 @@ class ExtendedGhostParam(GhostParam):
         default=None,
         description="IR parameter role (OPERAND, ATTRIBUTE, RESULT, etc.).",
     )
-    dtypes: list[str] | None = Field(
-        default=None,
-        description="Allowed tensor dtypes (e.g. ['float32', 'bfloat16', 'float16']).",
-    )
     allowed_dtypes: list[str] | None = Field(
         default=None,
         description="Canonical allowed tensor dtypes (e.g. ['float32', 'bfloat16']).",
@@ -156,10 +244,6 @@ class ExtendedGhostParam(GhostParam):
     allowed_values: list[str] | None = Field(
         default=None,
         description="Allowed enum or literal string values (e.g. ['none', 'mean', 'sum']).",
-    )
-    rank: int | str | None = Field(
-        default=None,
-        description="Allowed tensor rank (e.g. 0 for scalar, 1, 2, 'N-D').",
     )
     rank_constraint: str | None = Field(
         default=None,
@@ -178,36 +262,6 @@ class ExtendedGhostParam(GhostParam):
         description="Whether parameter is mandatory (no default value).",
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_constraints(cls, data: Any) -> Any:
-        """Normalize legacy dtypes and rank into canonical allowed_dtypes and rank_constraint.
-
-        Args:
-            data (Any): Input model data dictionary or object.
-
-        Returns:
-            Any: Normalized data with canonical constraint fields populated.
-        """
-        if isinstance(data, dict):
-            data = dict(data)
-            if "dtypes" in data and (
-                "allowed_dtypes" not in data or data["allowed_dtypes"] is None
-            ):
-                data["allowed_dtypes"] = data["dtypes"]
-            elif "allowed_dtypes" in data and (
-                "dtypes" not in data or data["dtypes"] is None
-            ):
-                data["dtypes"] = data["allowed_dtypes"]
-
-            if "rank" in data and (
-                "rank_constraint" not in data or data["rank_constraint"] is None
-            ):
-                r = data["rank"]
-                if r is not None:
-                    data["rank_constraint"] = f"=={r}" if isinstance(r, int) else str(r)
-        return data
-
 
 class GhostRef(BaseModel):
     """Serializable snapshot of a Framework API component."""
@@ -225,7 +279,7 @@ class GhostRef(BaseModel):
         default=False, description="True if signature accepts *args."
     )
     schema_version: str = Field(
-        default="1.2", description="Version of the schema format."
+        default="2.0.0", description="Version of the schema format."
     )
 
     is_public: bool | None = Field(default=None, description="Is public")
@@ -247,16 +301,18 @@ class GhostRef(BaseModel):
     environment_tags: list[str] | None = Field(
         default_factory=list, description="Environment tags"
     )
-    overloads: list[Any] | None = Field(default_factory=list, description="Overloads")
+    overloads: list[dict[str, JsonValue] | GhostRef] | None = Field(
+        default_factory=list, description="Overloads"
+    )
 
     def has_arg(self, arg_name: str) -> bool:
         """Check if a specific argument exists in the signature.
 
         Args:
-            arg_name: The argument name to find.
+            arg_name (str): The argument name to find.
 
         Returns:
-            True if found.
+            bool: True if found.
         """
         return any(p.name == arg_name for p in self.params)
 
@@ -273,13 +329,15 @@ class ExtendedGhostRef(GhostRef):
     returns: list[GhostResult] | None = Field(
         default=None, description="Multiple SSA returns or results."
     )
-    domain_metadata: dict[str, Any] | None = Field(
+    domain_metadata: dict[str, JsonValue] | None = Field(
         default=None,
         description="Structured domain metadata for ISAs and compilers.",
     )
-    signature_completeness: Literal["exact", "heuristic", "opaque"] | None = Field(
-        default="exact",
-        description="Completeness of signature resolution: exact, heuristic, or opaque.",
+    signature_completeness: typing.Literal["exact", "heuristic", "opaque"] | None = (
+        Field(
+            default="exact",
+            description="Completeness of signature resolution: exact, heuristic, or opaque.",
+        )
     )
     is_c_extension: bool | None = Field(
         default=False,
@@ -295,14 +353,14 @@ class GhostPythonRef(ExtendedGhostRef):
     """GhostRef specialized for high-level Python ML frameworks (PyTorch, JAX, TF, Keras)."""
 
     model_config = ConfigDict(extra="allow")
-    domain_type: Literal["python"] = "python"
+    domain_type: typing.Literal["python"] = "python"
 
 
 class GhostIsaRef(ExtendedGhostRef):
     """GhostRef specialized for GPU assembly ISAs (NVIDIA SASS, AMD RDNA/CDNA)."""
 
     model_config = ConfigDict(extra="allow")
-    domain_type: Literal["isa", "instruction"] = "isa"
+    domain_type: typing.Literal["isa", "instruction"] = "isa"
     predicate_guards: list[str] | None = Field(
         default=None,
         description="Allowed predicate guard registers (e.g. ['@P0', '@!P1', '@PT']).",
@@ -311,7 +369,7 @@ class GhostIsaRef(ExtendedGhostRef):
         default=None,
         description="Register classes for operands (e.g. {'op0': 'VGPR_32', 'op1': 'VReg_64'}).",
     )
-    control_codes: dict[str, Any] | None = Field(
+    control_codes: IsaControlCodesSpec | dict[str, JsonValue] | None = Field(
         default=None,
         description="Instruction control code and scheduling schema.",
     )
@@ -319,15 +377,17 @@ class GhostIsaRef(ExtendedGhostRef):
         default=None,
         description="Valid instruction modifiers (e.g. ['.SAT', '.FTZ', 'omod:2']).",
     )
-    structured_modifiers: dict[str, Any] | None = Field(
+    structured_modifiers: dict[str, JsonValue] | None = Field(
         default=None,
         description="Structured modifier bitfields (e.g. rounding, cache, saturation).",
     )
-    structured_operands: list[dict[str, Any]] | None = Field(
+    structured_operands: (
+        list[IsaStructuredOperandSpec | dict[str, JsonValue]] | None
+    ) = Field(
         default=None,
         description="Detailed operand records with roles, register classes, and immediate constraints.",
     )
-    vopd_profile: dict[str, Any] | None = Field(
+    vopd_profile: VopdProfileSpec | dict[str, JsonValue] | None = Field(
         default=None,
         description="VOPD dual-issue profile and pairing rules for RDNA3/GFX11.",
     )
@@ -369,7 +429,7 @@ class GhostMlirRef(ExtendedGhostRef):
     """GhostRef specialized for compiler IR dialects (Core MLIR and StableHLO)."""
 
     model_config = ConfigDict(extra="allow")
-    domain_type: Literal["mlir", "operation"] = "mlir"
+    domain_type: typing.Literal["mlir", "operation"] = "mlir"
     traits: list[str] | None = Field(
         default=None,
         description="Dialect verification traits (e.g. ['SameOperandsAndResultType', 'Commutative']).",
@@ -378,11 +438,11 @@ class GhostMlirRef(ExtendedGhostRef):
         default=None,
         description="Strictly decoupled SSA value arguments (operands).",
     )
-    attributes: dict[str, Any] | None = Field(
+    attributes: dict[str, JsonValue] | None = Field(
         default=None,
         description="Structured attribute specifications and schemas.",
     )
-    regions: dict[str, Any] | None = Field(
+    regions: dict[str, JsonValue] | None = Field(
         default=None,
         description="Region definitions with block arguments and yield types.",
     )
@@ -400,194 +460,198 @@ class GhostMlirRef(ExtendedGhostRef):
 GhostInstructionRef = GhostIsaRef
 GhostOperationRef = GhostMlirRef
 
-RDNA_INSTRUCTION_PRIMITIVES: dict[str, dict[str, Any]] = {
-    "V_FMA_F32": {
-        "mnemonic": "V_FMA_F32",
-        "operands": ["dst", "src0", "src1", "src2"],
-        "register_classes": {
+RDNA_INSTRUCTION_PRIMITIVES: dict[str, RdnaPrimitiveSpec] = {
+    "V_FMA_F32": RdnaPrimitiveSpec(
+        mnemonic="V_FMA_F32",
+        operands=["dst", "src0", "src1", "src2"],
+        register_classes={
             "dst": RegisterClass.VGPR,
             "src0": RegisterClass.VGPR,
             "src1": RegisterClass.VGPR,
             "src2": RegisterClass.VGPR,
         },
-    },
-    "V_ADD_F32": {
-        "mnemonic": "V_ADD_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
+    ),
+    "V_ADD_F32": RdnaPrimitiveSpec(
+        mnemonic="V_ADD_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
             "dst": RegisterClass.VGPR,
             "src0": RegisterClass.VGPR,
             "src1": RegisterClass.VGPR,
         },
-    },
-    "V_MUL_F32": {
-        "mnemonic": "V_MUL_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
+    ),
+    "V_MUL_F32": RdnaPrimitiveSpec(
+        mnemonic="V_MUL_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
             "dst": RegisterClass.VGPR,
             "src0": RegisterClass.VGPR,
             "src1": RegisterClass.VGPR,
         },
-    },
-    "V_DOT2_F32_F16": {
-        "mnemonic": "V_DOT2_F32_F16",
-        "operands": ["dst", "src0", "src1", "src2"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-            "src2": RegisterClass.VGPR,
-        },
-    },
-    "V_DOT4_I32_I8": {
-        "mnemonic": "V_DOT4_I32_I8",
-        "operands": ["dst", "src0", "src1", "src2"],
-        "register_classes": {
+    ),
+    "V_DOT2_F32_F16": RdnaPrimitiveSpec(
+        mnemonic="V_DOT2_F32_F16",
+        operands=["dst", "src0", "src1", "src2"],
+        register_classes={
             "dst": RegisterClass.VGPR,
             "src0": RegisterClass.VGPR,
             "src1": RegisterClass.VGPR,
             "src2": RegisterClass.VGPR,
         },
-    },
-    "V_FMAC_F32": {
-        "mnemonic": "V_FMAC_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_MOV_B32": {
-        "mnemonic": "V_MOV_B32",
-        "operands": ["dst", "src0"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-        },
-    },
-    "V_CNDMASK_B32": {
-        "mnemonic": "V_CNDMASK_B32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_SUB_F32": {
-        "mnemonic": "V_SUB_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_FMAC_F32": {
-        "mnemonic": "V_DUAL_FMAC_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_FMAAK_F32": {
-        "mnemonic": "V_DUAL_FMAAK_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_FMAMK_F32": {
-        "mnemonic": "V_DUAL_FMAMK_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_MUL_F32": {
-        "mnemonic": "V_DUAL_MUL_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_ADD_F32": {
-        "mnemonic": "V_DUAL_ADD_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_SUB_F32": {
-        "mnemonic": "V_DUAL_SUB_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_SUBREV_F32": {
-        "mnemonic": "V_DUAL_SUBREV_F32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_MOV_B32": {
-        "mnemonic": "V_DUAL_MOV_B32",
-        "operands": ["dst", "src0"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_CNDMASK_B32": {
-        "mnemonic": "V_DUAL_CNDMASK_B32",
-        "operands": ["dst", "src0", "src1"],
-        "register_classes": {
-            "dst": RegisterClass.VGPR,
-            "src0": RegisterClass.VGPR,
-            "src1": RegisterClass.VGPR,
-        },
-    },
-    "V_DUAL_DOT2ACC_F32_F16": {
-        "mnemonic": "V_DUAL_DOT2ACC_F32_F16",
-        "operands": ["dst", "src0", "src1", "src2"],
-        "register_classes": {
+    ),
+    "V_DOT4_I32_I8": RdnaPrimitiveSpec(
+        mnemonic="V_DOT4_I32_I8",
+        operands=["dst", "src0", "src1", "src2"],
+        register_classes={
             "dst": RegisterClass.VGPR,
             "src0": RegisterClass.VGPR,
             "src1": RegisterClass.VGPR,
             "src2": RegisterClass.VGPR,
         },
-    },
+    ),
+    "V_FMAC_F32": RdnaPrimitiveSpec(
+        mnemonic="V_FMAC_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_MOV_B32": RdnaPrimitiveSpec(
+        mnemonic="V_MOV_B32",
+        operands=["dst", "src0"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+        },
+    ),
+    "V_CNDMASK_B32": RdnaPrimitiveSpec(
+        mnemonic="V_CNDMASK_B32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_SUB_F32": RdnaPrimitiveSpec(
+        mnemonic="V_SUB_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_FMAC_F32": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_FMAC_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_FMAAK_F32": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_FMAAK_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_FMAMK_F32": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_FMAMK_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_MUL_F32": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_MUL_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_ADD_F32": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_ADD_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_SUB_F32": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_SUB_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_SUBREV_F32": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_SUBREV_F32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_MOV_B32": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_MOV_B32",
+        operands=["dst", "src0"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_CNDMASK_B32": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_CNDMASK_B32",
+        operands=["dst", "src0", "src1"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+        },
+    ),
+    "V_DUAL_DOT2ACC_F32_F16": RdnaPrimitiveSpec(
+        mnemonic="V_DUAL_DOT2ACC_F32_F16",
+        operands=["dst", "src0", "src1", "src2"],
+        register_classes={
+            "dst": RegisterClass.VGPR,
+            "src0": RegisterClass.VGPR,
+            "src1": RegisterClass.VGPR,
+            "src2": RegisterClass.VGPR,
+        },
+    ),
 }
 
 # RDNA3 / GFX11 VOPD Dual-Issue Instruction Opcode Matrix
-RDNA3_VOPD_OPERATORS: dict[str, dict[str, Any]] = {
-    "V_DUAL_FMAC_F32": {"mnemonic": "V_DUAL_FMAC_F32", "slots": ["X", "Y"]},
-    "V_DUAL_FMAAK_F32": {"mnemonic": "V_DUAL_FMAAK_F32", "slots": ["X", "Y"]},
-    "V_DUAL_FMAMK_F32": {"mnemonic": "V_DUAL_FMAMK_F32", "slots": ["X", "Y"]},
-    "V_DUAL_MUL_F32": {"mnemonic": "V_DUAL_MUL_F32", "slots": ["X", "Y"]},
-    "V_DUAL_ADD_F32": {"mnemonic": "V_DUAL_ADD_F32", "slots": ["X", "Y"]},
-    "V_DUAL_SUB_F32": {"mnemonic": "V_DUAL_SUB_F32", "slots": ["X", "Y"]},
-    "V_DUAL_SUBREV_F32": {"mnemonic": "V_DUAL_SUBREV_F32", "slots": ["X", "Y"]},
-    "V_DUAL_MOV_B32": {"mnemonic": "V_DUAL_MOV_B32", "slots": ["X", "Y"]},
-    "V_DUAL_CNDMASK_B32": {"mnemonic": "V_DUAL_CNDMASK_B32", "slots": ["X"]},
-    "V_DUAL_DOT2ACC_F32_F16": {"mnemonic": "V_DUAL_DOT2ACC_F32_F16", "slots": ["Y"]},
+RDNA3_VOPD_OPERATORS: dict[str, VopdOperatorSpec] = {
+    "V_DUAL_FMAC_F32": VopdOperatorSpec(mnemonic="V_DUAL_FMAC_F32", slots=["X", "Y"]),
+    "V_DUAL_FMAAK_F32": VopdOperatorSpec(mnemonic="V_DUAL_FMAAK_F32", slots=["X", "Y"]),
+    "V_DUAL_FMAMK_F32": VopdOperatorSpec(mnemonic="V_DUAL_FMAMK_F32", slots=["X", "Y"]),
+    "V_DUAL_MUL_F32": VopdOperatorSpec(mnemonic="V_DUAL_MUL_F32", slots=["X", "Y"]),
+    "V_DUAL_ADD_F32": VopdOperatorSpec(mnemonic="V_DUAL_ADD_F32", slots=["X", "Y"]),
+    "V_DUAL_SUB_F32": VopdOperatorSpec(mnemonic="V_DUAL_SUB_F32", slots=["X", "Y"]),
+    "V_DUAL_SUBREV_F32": VopdOperatorSpec(
+        mnemonic="V_DUAL_SUBREV_F32", slots=["X", "Y"]
+    ),
+    "V_DUAL_MOV_B32": VopdOperatorSpec(mnemonic="V_DUAL_MOV_B32", slots=["X", "Y"]),
+    "V_DUAL_CNDMASK_B32": VopdOperatorSpec(mnemonic="V_DUAL_CNDMASK_B32", slots=["X"]),
+    "V_DUAL_DOT2ACC_F32_F16": VopdOperatorSpec(
+        mnemonic="V_DUAL_DOT2ACC_F32_F16", slots=["Y"]
+    ),
 }
 
 # Standard RDNA equivalents that can be mapped to VOPD opcodes
@@ -611,72 +675,72 @@ SASS_PIPELINE_LATENCIES: dict[str, int] = {
     "STS": 16,
 }
 
-SASS_INSTRUCTION_PRIMITIVES: dict[str, dict[str, Any]] = {
-    "FFMA": {
-        "mnemonic": "FFMA",
-        "operands": ["dst", "src0", "src1", "src2"],
-        "barrier_predicates": ["@P0", "@!P0", "@PT"],
-    },
-    "FADD": {
-        "mnemonic": "FADD",
-        "operands": ["dst", "src0", "src1"],
-        "barrier_predicates": ["@P0", "@!P0", "@PT"],
-    },
-    "FMUL": {
-        "mnemonic": "FMUL",
-        "operands": ["dst", "src0", "src1"],
-        "barrier_predicates": ["@P0", "@!P0", "@PT"],
-    },
-    "HMMA": {
-        "mnemonic": "HMMA",
-        "operands": ["dst", "src0", "src1", "src2"],
-        "barrier_predicates": ["@P0", "@!P0", "@PT"],
-    },
-    "LDG": {
-        "mnemonic": "LDG",
-        "operands": ["dst", "src0"],
-        "memory_space": MemorySpace.GLOBAL,
-    },
-    "STS": {
-        "mnemonic": "STS",
-        "operands": ["dst", "src0"],
-        "memory_space": MemorySpace.SHARED,
-    },
+SASS_INSTRUCTION_PRIMITIVES: dict[str, SassPrimitiveSpec] = {
+    "FFMA": SassPrimitiveSpec(
+        mnemonic="FFMA",
+        operands=["dst", "src0", "src1", "src2"],
+        barrier_predicates=["@P0", "@!P0", "@PT"],
+    ),
+    "FADD": SassPrimitiveSpec(
+        mnemonic="FADD",
+        operands=["dst", "src0", "src1"],
+        barrier_predicates=["@P0", "@!P0", "@PT"],
+    ),
+    "FMUL": SassPrimitiveSpec(
+        mnemonic="FMUL",
+        operands=["dst", "src0", "src1"],
+        barrier_predicates=["@P0", "@!P0", "@PT"],
+    ),
+    "HMMA": SassPrimitiveSpec(
+        mnemonic="HMMA",
+        operands=["dst", "src0", "src1", "src2"],
+        barrier_predicates=["@P0", "@!P0", "@PT"],
+    ),
+    "LDG": SassPrimitiveSpec(
+        mnemonic="LDG",
+        operands=["dst", "src0"],
+        memory_space=MemorySpace.GLOBAL,
+    ),
+    "STS": SassPrimitiveSpec(
+        mnemonic="STS",
+        operands=["dst", "src0"],
+        memory_space=MemorySpace.SHARED,
+    ),
 }
 
-WGSL_PRIMITIVE_SIGNATURES: dict[str, dict[str, Any]] = {
-    "workgroupBarrier": {
-        "inputs": [],
-        "outputs": [],
-        "qualifier": WGSLQualifier.WORKGROUP,
-    },
-    "storageBarrier": {
-        "inputs": [],
-        "outputs": [],
-        "qualifier": WGSLQualifier.STORAGE_READ_WRITE,
-    },
-    "fma": {
-        "inputs": ["a", "b", "c"],
-        "outputs": ["result"],
-    },
-    "dot": {
-        "inputs": ["a", "b"],
-        "outputs": ["result"],
-    },
-    "textureSample": {
-        "inputs": ["texture", "sampler", "coords"],
-        "outputs": ["result"],
-    },
-    "storageStore": {
-        "inputs": ["buffer", "index", "value"],
-        "outputs": [],
-        "qualifier": WGSLQualifier.STORAGE_READ_WRITE,
-    },
-    "atomicAdd": {
-        "inputs": ["atomic_ptr", "value"],
-        "outputs": ["old_value"],
-        "qualifier": WGSLQualifier.STORAGE_READ_WRITE,
-    },
+WGSL_PRIMITIVE_SIGNATURES: dict[str, WgslPrimitiveSpec] = {
+    "workgroupBarrier": WgslPrimitiveSpec(
+        inputs=[],
+        outputs=[],
+        qualifier=WGSLQualifier.WORKGROUP,
+    ),
+    "storageBarrier": WgslPrimitiveSpec(
+        inputs=[],
+        outputs=[],
+        qualifier=WGSLQualifier.STORAGE_READ_WRITE,
+    ),
+    "fma": WgslPrimitiveSpec(
+        inputs=["a", "b", "c"],
+        outputs=["result"],
+    ),
+    "dot": WgslPrimitiveSpec(
+        inputs=["a", "b"],
+        outputs=["result"],
+    ),
+    "textureSample": WgslPrimitiveSpec(
+        inputs=["texture", "sampler", "coords"],
+        outputs=["result"],
+    ),
+    "storageStore": WgslPrimitiveSpec(
+        inputs=["buffer", "index", "value"],
+        outputs=[],
+        qualifier=WGSLQualifier.STORAGE_READ_WRITE,
+    ),
+    "atomicAdd": WgslPrimitiveSpec(
+        inputs=["atomic_ptr", "value"],
+        outputs=["old_value"],
+        qualifier=WGSLQualifier.STORAGE_READ_WRITE,
+    ),
 }
 
 WGSL_COMPUTE_BUILTINS: set[str] = {
@@ -731,16 +795,16 @@ class SnapshotEnvelope(BaseModel):
     generated_at: str | None = Field(
         default=None, description="ISO-8601 generation timestamp."
     )
-    environment: dict[str, Any] | None = Field(
+    environment: dict[str, JsonValue] | None = Field(
         default=None, description="Build host environment metadata."
     )
-    categories: dict[str, list[Any]] = Field(
-        default_factory=dict, description="Categorized symbol dictionaries."
+    categories: dict[str, list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef]] = (
+        Field(default_factory=dict, description="Categorized symbol dictionaries.")
     )
-    operations: list[Any] | None = Field(
+    operations: list[dict[str, JsonValue] | GhostMlirRef] | None = Field(
         default=None, description="Flat list of IR or dialect operations."
     )
-    instructions: list[Any] | None = Field(
+    instructions: list[dict[str, JsonValue] | GhostIsaRef] | None = Field(
         default=None, description="Flat list of hardware ISA instructions."
     )
 
@@ -766,7 +830,7 @@ class StandardMap(BaseModel):
 
     api: str | None = Field(default=None)
     args: dict[str, str | float | int | None] | None = Field(default=None)
-    inject_args: dict[str, Any] | None = Field(default=None)
+    inject_args: dict[str, JsonValue] | None = Field(default=None)
     requires_plugin: str | None = Field(default=None)
     transformation_type: str | None = Field(default=None)
     operator: str | None = Field(default=None)
@@ -774,59 +838,40 @@ class StandardMap(BaseModel):
     macro_template: str | None = Field(default=None)
 
 
-def _normalize_param_kinds(params: list[Any]) -> list[Any]:
+def _normalize_param_kinds(
+    params: Sequence[object],
+) -> list[dict[str, object] | GhostParam]:
     """Return a new list of parameter dictionaries with normalized ParameterKind strings.
 
     Args:
-        params (list[Any]): Raw parameter list from a GhostRef dictionary.
+        params (Sequence[object]): Raw parameter list from a GhostRef dictionary.
 
     Returns:
-        list[Any]: Parameter list with normalized kind strings.
+        list[dict[str, object] | GhostParam]: Parameter list with normalized kind strings.
     """
-    normalized: list[Any] = []
+    normalized: list[dict[str, object] | GhostParam] = []
     for param in params:
-        if (
-            isinstance(param, dict)
-            and "kind" in param
-            and isinstance(param["kind"], str)
-        ):
-            param_copy = dict(param)
-            param_copy["kind"] = param_copy["kind"].split(".")[-1]
+        if isinstance(param, Mapping):
+            param_copy: dict[str, object] = {str(k): v for k, v in param.items()}
+            kind_val = param_copy.get("kind")
+            if isinstance(kind_val, str):
+                param_copy["kind"] = kind_val.split(".")[-1]
             normalized.append(param_copy)
         else:
-            normalized.append(param)
+            normalized.append(param)  # type: ignore[arg-type]
     return normalized
 
 
-def migrate_ghost_ref(data: dict[str, Any]) -> GhostRef:
-    """Migrates a v1.x JSON dict to a v1.2 compatible GhostRef instance.
+def migrate_ghost_ref_v2(data: Mapping[str, object]) -> ExtendedGhostRef:
+    """Seamlessly hydrate Ghost Protocol v2 dictionaries into ExtendedGhostRef models.
 
     Args:
-        data (dict[str, Any]): The dictionary representation of a GhostRef, possibly from an older schema.
-
-    Returns:
-        GhostRef: A valid GhostRef object.
-    """
-    data_copy = dict(data)
-    if "schema_version" not in data_copy:
-        data_copy["schema_version"] = "1.2"
-
-    if "params" in data_copy and isinstance(data_copy["params"], list):
-        data_copy["params"] = _normalize_param_kinds(data_copy["params"])
-
-    return GhostRef.model_validate(data_copy)
-
-
-def migrate_ghost_ref_v2(data: dict[str, Any]) -> ExtendedGhostRef:
-    """Seamlessly upgrade v1.x or v2.x dictionaries to ExtendedGhostRef structure.
-
-    Args:
-        data (Dict[str, Any]): Dictionary representation of ghost reference.
+        data (Mapping[str, object]): Dictionary representation of ghost reference.
 
     Returns:
         ExtendedGhostRef: Validated ExtendedGhostRef instance.
     """
-    data_copy = dict(data)
+    data_copy: dict[str, object] = dict(data)
     if "schema_version" not in data_copy or data_copy["schema_version"] in (
         "1.0",
         "1.0.0",
@@ -838,18 +883,21 @@ def migrate_ghost_ref_v2(data: dict[str, Any]) -> ExtendedGhostRef:
         data_copy["kind"] = "function"
 
     if "name" not in data_copy:
-        if "mnemonic" in data_copy:
-            data_copy["name"] = data_copy["mnemonic"]
-        elif "api_path" in data_copy:
-            data_copy["name"] = data_copy["api_path"].split(".")[-1]
+        mnemonic = data_copy.get("mnemonic")
+        api_path_val = data_copy.get("api_path")
+        if isinstance(mnemonic, str):
+            data_copy["name"] = mnemonic
+        elif isinstance(api_path_val, str):
+            data_copy["name"] = api_path_val.split(".")[-1]
         else:
             data_copy["name"] = "unknown"
 
     if "api_path" not in data_copy:
         data_copy["api_path"] = data_copy.get("name", "unknown")
 
-    if "params" in data_copy and isinstance(data_copy["params"], list):
-        data_copy["params"] = _normalize_param_kinds(data_copy["params"])
+    raw_params = data_copy.get("params")
+    if isinstance(raw_params, Sequence) and not isinstance(raw_params, (str, bytes)):
+        data_copy["params"] = _normalize_param_kinds(raw_params)
 
     domain_type = data_copy.get("domain_type")
     if domain_type == "python":

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
 from pathlib import Path
 import shutil
 import subprocess
@@ -32,6 +31,7 @@ def _verify_ts_compilation(work_dir: Path) -> None:
     tsc_path = shutil.which("tsc")
     if tsc_path is None:
         pytest.fail("TypeScript compiler (tsc) is required for schema validation.")
+    assert tsc_path is not None
 
     ts_code = generate_typescript_definitions()
     ts_file = work_dir / "schema.d.ts"
@@ -137,18 +137,13 @@ def test_typescript_missing_tsc_and_structural_parity(
         for prop_name in props:
             assert prop_name in ts_defs
 
-    for dc_cls in (
+    for pyd_cls in (
         LogicalGraph,
         LogicalNode,
         LogicalEdge,
         LogicalMesh,
         PartitionSpec,
         TensorSpec,
-    ):
-        for f in fields(dc_cls):
-            assert f.name in ts_defs
-
-    for pyd_cls in (
         SnapshotEnvelope,
         PipelineTopologyConfig,
         WebRTCSignalingTopology,

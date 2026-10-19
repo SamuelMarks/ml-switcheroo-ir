@@ -369,7 +369,7 @@ def test_sym_piecewise() -> None:
 
     # Default fallback
     pw2 = SymPiecewise(
-        conditions=[
+        cases=[
             (False, SymConst(42)),
             ("x == 99", SymConst(999)),
         ],
@@ -523,13 +523,11 @@ def test_tensor_shape_and_spec_symbolic_integration() -> None:
     assert ts_m1.matmul_with((32, 64)) == TensorShape((16, 64))
     assert ts_m1.matmul_with(TensorShape((32, 64))) == TensorShape((16, 64))
 
-    # Test types.__getattr__ for ZeroTangent and NoTangent
-    import ml_switcheroo_ir.types as types_mod
+    # Test importing ZeroTangent and NoTangent from sentinels
+    import ml_switcheroo_ir.sentinels as sentinels_mod
 
-    assert types_mod.ZeroTangent is not None
-    assert types_mod.NoTangent is not None
-    with pytest.raises(AttributeError):
-        _ = types_mod.NonExistentType
+    assert sentinels_mod.ZeroTangent is not None
+    assert sentinels_mod.NoTangent is not None
 
 
 def test_polynomial_and_parser_edge_cases() -> None:
@@ -808,7 +806,7 @@ def test_sym_irreducible_and_piecewise_branches() -> None:
         "-", SymUnaryOp("abs", vx)
     )
     with pytest.raises(TypeError, match="Unsupported SymPiecewise condition type"):
-        SymPiecewise([(123, SymConst(5))], default=SymConst(0)).eval({})
+        SymPiecewise([(123, SymConst(5))], default=SymConst(0)).eval({})  # type: ignore[list-item]
     assert SymPiecewise([], default=SymConst(0)).free_vars() == set()
     assert SymUnaryOp("abs", vx).simplify() == SymUnaryOp("abs", vx)
     assert hash(SymInt("x + 1")) == hash(SymInt("1 + x"))

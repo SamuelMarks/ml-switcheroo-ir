@@ -34,7 +34,6 @@ from ml_switcheroo_ir.schema.ghost import (
     ParameterKind,
     SemanticTier,
     SnapshotEnvelope,
-    migrate_ghost_ref,
     migrate_ghost_ref_v2,
 )
 from ml_switcheroo_ir.schema.low_level_registries import (
@@ -99,7 +98,6 @@ __all__ = [
     "SemanticTier",
     "SnapshotEnvelope",
     "get_abstract_op",
-    "migrate_ghost_ref",
     "migrate_ghost_ref_v2",
     "override_registry",
 ]

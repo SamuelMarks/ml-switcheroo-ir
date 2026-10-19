@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import ClassVar
+from collections.abc import Iterable, Mapping
+import typing
 
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode, PartitionSpec
 from ml_switcheroo_ir.shapes import DimensionType
@@ -20,23 +19,23 @@ __all__ = [
     "NoTangent",
     "ZeroTangent",
     "_AutodiffSentinelBase",
+    "verify_sentinel_protocol",
 ]
 
 
-@dataclass
 class _AutodiffSentinelBase(LogicalNode):
-    """Shared base dataclass for autodiff sentinel nodes in the 'ml.switcheroo.ad' domain.
+    """Shared base Pydantic model for autodiff sentinel nodes in the 'ml.switcheroo.ad' domain.
 
     Attributes:
-        _SENTINEL_OP_TYPE (ClassVar[str]): Canonical operation type for the sentinel subclass.
+        _SENTINEL_OP_TYPE (typing.ClassVar[str]): Canonical operation type for the sentinel subclass.
     """
 
-    _SENTINEL_OP_TYPE: ClassVar[str] = "AutodiffSentinel"
+    _SENTINEL_OP_TYPE: typing.ClassVar[str] = "AutodiffSentinel"
 
     def _init_sentinel(
         self,
         id: str,
-        resolved_shape: ShapeMetadataType | Sequence[DimensionType] | object,
+        resolved_shape: ShapeMetadataType | Iterable[DimensionType],
         dtype: DType | None,
         version: int = 1,
         attributes: Mapping[str, AttributeValue] | None = None,
@@ -53,18 +52,18 @@ class _AutodiffSentinelBase(LogicalNode):
 
         Args:
             id (str): Unique node identifier.
-            resolved_shape (ShapeMetadataType | Sequence[DimensionType] | object): Resolved tensor shape metadata.
-            dtype (Optional[DType]): Tensor data type.
+            resolved_shape (ShapeMetadataType | Iterable[DimensionType]): Resolved tensor shape metadata.
+            dtype (DType | None): Tensor data type.
             version (int): Operator set version (default: 1).
-            attributes (Optional[Mapping[str, AttributeValue]]): Node configuration attributes.
-            inputs (Optional[list[str]]): Ordered list of upstream node IDs.
-            outputs (Optional[list[str]]): Ordered list of output SSA names.
-            source_ast_ref (Optional[str]): Source AST traceback reference.
-            sharding (Optional[PartitionSpec]): Distributed partition layout.
-            output_specs (Optional[list[TensorSpec]]): Output tensor specifications.
-            subgraphs (Optional[Mapping[str, LogicalGraph | AttributeValue]]): Nested subgraphs.
-            device (Optional[str]): Target device placement.
-            stream (Optional[str]): Asynchronous execution stream.
+            attributes (Mapping[str, AttributeValue] | None): Node configuration attributes.
+            inputs (list[str] | None): Ordered list of upstream node IDs.
+            outputs (list[str] | None): Ordered list of output SSA names.
+            source_ast_ref (str | None): Source AST traceback reference.
+            sharding (PartitionSpec | None): Distributed partition layout.
+            output_specs (list[TensorSpec] | None): Output tensor specifications.
+            subgraphs (Mapping[str, LogicalGraph | AttributeValue] | None): Nested subgraphs.
+            device (str | None): Target device placement.
+            stream (str | None): Asynchronous execution stream.
         """
         super().__init__(
             id=id,
@@ -85,22 +84,23 @@ class _AutodiffSentinelBase(LogicalNode):
         )
 
 
-@dataclass
 class ZeroTangent(_AutodiffSentinelBase):
     """Represents a mathematically zero tangent vector with explicit shape and dtype.
 
     Attributes:
         id (str): Unique node identifier.
-        shape_metadata (ShapeMetadataType): Shape of the zero tangent vector.
-        dtype (Optional[DType]): Data type of the zero tangent vector.
+        op_type (str): Sentinel operation type ('ZeroTangent').
+        domain (str): Operator domain ('ml.switcheroo.ad').
+        shape_metadata (tuple[DimensionType, ...] | None): Shape of the zero tangent vector.
+        dtype (DType | None): Data type of the zero tangent vector.
     """
 
-    _SENTINEL_OP_TYPE: ClassVar[str] = "ZeroTangent"
+    _SENTINEL_OP_TYPE: typing.ClassVar[str] = "ZeroTangent"
 
     def __init__(
         self,
         id: str,
-        shape: ShapeMetadataType | Sequence[DimensionType] | object = None,
+        shape: ShapeMetadataType | Iterable[DimensionType] = None,
         dtype: DType | None = DType.float32,
         op_type: str = "ZeroTangent",
         domain: str = "ml.switcheroo.ad",
@@ -108,7 +108,7 @@ class ZeroTangent(_AutodiffSentinelBase):
         attributes: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
         outputs: list[str] | None = None,
-        shape_metadata: ShapeMetadataType | Sequence[DimensionType] | object = None,
+        shape_metadata: ShapeMetadataType | Iterable[DimensionType] = None,
         source_ast_ref: str | None = None,
         sharding: PartitionSpec | None = None,
         output_specs: list[TensorSpec] | None = None,
@@ -120,21 +120,21 @@ class ZeroTangent(_AutodiffSentinelBase):
 
         Args:
             id (str): Unique node identifier.
-            shape (ShapeMetadataType | Sequence[DimensionType] | object): Vector shape.
-            dtype (Optional[DType]): Tensor data type.
+            shape (ShapeMetadataType | Iterable[DimensionType]): Vector shape.
+            dtype (DType | None): Tensor data type.
             op_type (str): Sentinel operation type (ignored, forced to 'ZeroTangent').
             domain (str): Operator domain (ignored, forced to 'ml.switcheroo.ad').
             version (int): Operator set version (default: 1).
-            attributes (Optional[Mapping[str, AttributeValue]]): Node configuration attributes.
-            inputs (Optional[list[str]]): Ordered list of upstream node IDs.
-            outputs (Optional[list[str]]): Ordered list of output SSA names.
-            shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object): Optional explicit shape_metadata override.
-            source_ast_ref (Optional[str]): Source AST traceback reference.
-            sharding (Optional[PartitionSpec]): Distributed partition layout.
-            output_specs (Optional[list[TensorSpec]]): Output tensor specifications.
-            subgraphs (Optional[Mapping[str, LogicalGraph | AttributeValue]]): Nested subgraphs.
-            device (Optional[str]): Target device placement.
-            stream (Optional[str]): Asynchronous execution stream.
+            attributes (Mapping[str, AttributeValue] | None): Node configuration attributes.
+            inputs (list[str] | None): Ordered list of upstream node IDs.
+            outputs (list[str] | None): Ordered list of output SSA names.
+            shape_metadata (ShapeMetadataType | Iterable[DimensionType]): Optional explicit shape_metadata override.
+            source_ast_ref (str | None): Source AST traceback reference.
+            sharding (PartitionSpec | None): Distributed partition layout.
+            output_specs (list[TensorSpec] | None): Output tensor specifications.
+            subgraphs (Mapping[str, LogicalGraph | AttributeValue] | None): Nested subgraphs.
+            device (str | None): Target device placement.
+            stream (str | None): Asynchronous execution stream.
         """
         del op_type, domain
         resolved_shape = shape_metadata if shape_metadata is not None else shape
@@ -155,15 +155,16 @@ class ZeroTangent(_AutodiffSentinelBase):
         )
 
 
-@dataclass
 class NoTangent(_AutodiffSentinelBase):
     """Represents a non-differentiable or structurally missing cotangent path.
 
     Attributes:
         id (str): Unique node identifier.
+        op_type (str): Sentinel operation type ('NoTangent').
+        domain (str): Operator domain ('ml.switcheroo.ad').
     """
 
-    _SENTINEL_OP_TYPE: ClassVar[str] = "NoTangent"
+    _SENTINEL_OP_TYPE: typing.ClassVar[str] = "NoTangent"
 
     def __init__(
         self,
@@ -174,7 +175,7 @@ class NoTangent(_AutodiffSentinelBase):
         attributes: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
         outputs: list[str] | None = None,
-        shape_metadata: ShapeMetadataType | Sequence[DimensionType] | object = None,
+        shape_metadata: ShapeMetadataType | Iterable[DimensionType] = None,
         source_ast_ref: str | None = None,
         sharding: PartitionSpec | None = None,
         dtype: DType | None = None,
@@ -190,17 +191,17 @@ class NoTangent(_AutodiffSentinelBase):
             op_type (str): Sentinel operation type (ignored, forced to 'NoTangent').
             domain (str): Operator domain (ignored, forced to 'ml.switcheroo.ad').
             version (int): Operator set version (default: 1).
-            attributes (Optional[Mapping[str, AttributeValue]]): Node configuration attributes.
-            inputs (Optional[list[str]]): Ordered list of upstream node IDs.
-            outputs (Optional[list[str]]): Ordered list of output SSA names.
-            shape_metadata (ShapeMetadataType | Sequence[DimensionType] | object): Tensor shape metadata.
-            source_ast_ref (Optional[str]): Source AST traceback reference.
-            sharding (Optional[PartitionSpec]): Distributed partition layout.
-            dtype (Optional[DType]): Tensor data type.
-            output_specs (Optional[list[TensorSpec]]): Output tensor specifications.
-            subgraphs (Optional[Mapping[str, LogicalGraph | AttributeValue]]): Nested subgraphs.
-            device (Optional[str]): Target device placement.
-            stream (Optional[str]): Asynchronous execution stream.
+            attributes (Mapping[str, AttributeValue] | None): Node configuration attributes.
+            inputs (list[str] | None): Ordered list of upstream node IDs.
+            outputs (list[str] | None): Ordered list of output SSA names.
+            shape_metadata (ShapeMetadataType | Iterable[DimensionType]): Tensor shape metadata.
+            source_ast_ref (str | None): Source AST traceback reference.
+            sharding (PartitionSpec | None): Distributed partition layout.
+            dtype (DType | None): Tensor data type.
+            output_specs (list[TensorSpec] | None): Output tensor specifications.
+            subgraphs (Mapping[str, LogicalGraph | AttributeValue] | None): Nested subgraphs.
+            device (str | None): Target device placement.
+            stream (str | None): Asynchronous execution stream.
         """
         del op_type, domain
         self._init_sentinel(
@@ -220,8 +221,10 @@ class NoTangent(_AutodiffSentinelBase):
         )
 
 
-def verify_sentinel_protocol(node: ZeroTangent | NoTangent) -> AutodiffSentinelProtocol:
-    """Verify at type-checking and runtime that sentinel nodes satisfy AutodiffSentinelProtocol.
+def verify_sentinel_protocol(
+    node: ZeroTangent | NoTangent,
+) -> AutodiffSentinelProtocol:
+    """Verify statically and at runtime that sentinel nodes satisfy AutodiffSentinelProtocol.
 
     Args:
         node (ZeroTangent | NoTangent): Sentinel instance to verify.

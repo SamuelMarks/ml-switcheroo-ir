@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-
 import pytest
 
 from ml_switcheroo_ir import (
@@ -23,7 +21,7 @@ def test_logical_edge_init() -> None:
     assert edge.source_idx == 0
     assert edge.target_idx == 0
     assert edge.value_name is None
-    assert asdict(edge) == {
+    assert edge.model_dump() == {
         "source": "conv1",
         "target": "relu1",
         "source_idx": 0,
@@ -166,9 +164,11 @@ def test_add_edge_multi_port_value_name_and_nodedict_mutations() -> None:
 
     cloned = graph.clone()
     assert any(e.value_name == "s1" for e in cloned.edges)
-    dumped = graph.to_dict(format="canonical")
+    dumped = graph.to_dict()
     assert dumped["nodes"]["if_node"]["subgraphs"]["attr_meta"] == "scalar_meta"
-    assert "edges" in dumped["nodes"]["if_node"]["subgraphs"]["then_branch"]
+    then_branch = dumped["nodes"]["if_node"]["subgraphs"]["then_branch"]
+    assert isinstance(then_branch, dict)
+    assert "edges" in then_branch
     restored = LogicalGraph.from_dict(dumped)
     assert any(e.value_name == "s1" for e in restored.edges)
 

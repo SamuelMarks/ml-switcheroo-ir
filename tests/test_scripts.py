@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import runpy
 import sys
-from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -218,15 +217,15 @@ def test_get_test_coverage_failure() -> None:
 def test_get_coverage_metrics_temp_file_handling() -> None:
     """Test get_coverage_metrics temporary file generation and cleanup."""
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> Any:
+    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> MagicMock:
         """Fake coverage json execution by dumping valid json.
 
         Args:
-            cmd: Command list.
-            **kwargs: Extra arguments.
+            cmd (list[str]): Command list.
+            **kwargs (object): Extra arguments.
 
         Returns:
-            Mock subprocess completed process.
+            MagicMock: Mock subprocess completed process.
         """
         del kwargs
         if "-o" in cmd:
@@ -266,8 +265,9 @@ def test_get_coverage_metrics_temp_file_handling() -> None:
         del p
         raise OSError("Permission denied")
 
-    with patch("subprocess.run", side_effect=fake_subprocess_run), patch(
-        "os.remove", side_effect=fail_remove
+    with (
+        patch("subprocess.run", side_effect=fake_subprocess_run),
+        patch("os.remove", side_effect=fail_remove),
     ):
         overall, _, _ = get_coverage_metrics(None)
         assert overall == 100.0
@@ -276,15 +276,15 @@ def test_get_coverage_metrics_temp_file_handling() -> None:
 def test_update_readme_without_coverage_path_or_sibling() -> None:
     """Test update_readme when coverage_json_path is None and sibling coverage.json does not exist."""
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> Any:
+    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> MagicMock:
         """Fake coverage json execution.
 
         Args:
-            cmd: Command list.
-            **kwargs: Extra arguments.
+            cmd (list[str]): Command list.
+            **kwargs (object): Extra arguments.
 
         Returns:
-            Mock subprocess completed process.
+            MagicMock: Mock subprocess completed process.
         """
         del kwargs
         if "-o" in cmd:
@@ -433,9 +433,10 @@ def test_update_readme_insertions_and_deduplications() -> None:
         case5_file = os.path.join(tmpdir, "case5.md")
         with open(case5_file, "w", encoding="utf-8") as f:
             f.write("# Title\n")
-        with patch(
-            "scripts.update_badges.count_shields", return_value=(2, 1, 0)
-        ), pytest.raises(ValueError, match="Enforcement failed after update"):
+        with (
+            patch("scripts.update_badges.count_shields", return_value=(2, 1, 0)),
+            pytest.raises(ValueError, match="Enforcement failed after update"),
+        ):
             update_readme(readme_path=case5_file, coverage_json_path=cov_file)
 
 
@@ -488,16 +489,18 @@ def test_update_badges_runpy_main() -> None:
 
             # Success case (exit_code == 0)
             sys.modules.pop("scripts.update_badges", None)
-            with patch("sys.argv", ["update_badges.py", readme_file]), patch(
-                "subprocess.run"
+            with (
+                patch("sys.argv", ["update_badges.py", readme_file]),
+                patch("subprocess.run"),
             ):
                 runpy.run_module("scripts.update_badges", run_name="__main__")
 
             # Failure case (exit_code != 0) invokes sys.exit
             sys.modules.pop("scripts.update_badges", None)
-            with patch(
-                "sys.argv", ["update_badges.py", "--enforce", "/nonexistent.md"]
-            ), patch("sys.exit") as mock_exit:
+            with (
+                patch("sys.argv", ["update_badges.py", "--enforce", "/nonexistent.md"]),
+                patch("sys.exit") as mock_exit,
+            ):
                 runpy.run_module("scripts.update_badges", run_name="__main__")
                 mock_exit.assert_called_once_with(1)
     finally:
@@ -588,24 +591,26 @@ def test_parse_onnx_docs() -> None:
         abs_op = ops["Abs"]
         assert abs_op["domain"] == "ai.onnx"
         assert abs_op["version"] == 13
-        assert "auto_pad" in abs_op["attributes"]
-        assert abs_op["attributes"]["auto_pad"]["default"] == "NOTSET"
-        assert abs_op["attributes"]["auto_pad"]["type"] == "str"
+        abs_attrs = abs_op["attributes"]
+        assert isinstance(abs_attrs, dict)
+        assert "auto_pad" in abs_attrs
+        assert abs_attrs["auto_pad"]["default"] == "NOTSET"
+        assert abs_attrs["auto_pad"]["type"] == "str"
 
-        assert abs_op["attributes"]["kernel_shape"]["required"] is True
-        assert abs_op["attributes"]["kernel_shape"]["type"] == "List[int]"
+        assert abs_attrs["kernel_shape"]["required"] is True
+        assert abs_attrs["kernel_shape"]["type"] == "List[int]"
 
-        assert abs_op["attributes"]["rates"]["default"] == [1.0, 2.0]
-        assert abs_op["attributes"]["rates"]["type"] == "List[float]"
+        assert abs_attrs["rates"]["default"] == [1.0, 2.0]
+        assert abs_attrs["rates"]["type"] == "List[float]"
 
-        assert abs_op["attributes"]["strides"]["type"] == "List[str]"
-        assert abs_op["attributes"]["epsilon"]["type"] == "float"
-        assert abs_op["attributes"]["count"]["type"] == "int"
-        assert abs_op["attributes"]["axes"]["default"] == []
-        assert abs_op["attributes"]["mode"]["default"] == "nearest"
-        assert abs_op["attributes"]["body"]["type"] == "Any"
-        assert abs_op["attributes"]["target_type"]["type"] == "str"
-        assert abs_op["attributes"]["untyped_attr"]["type"] == "Any"
+        assert abs_attrs["strides"]["type"] == "List[str]"
+        assert abs_attrs["epsilon"]["type"] == "float"
+        assert abs_attrs["count"]["type"] == "int"
+        assert abs_attrs["axes"]["default"] == []
+        assert abs_attrs["mode"]["default"] == "nearest"
+        assert abs_attrs["body"]["type"] == "Any"
+        assert abs_attrs["target_type"]["type"] == "str"
+        assert abs_attrs["untyped_attr"]["type"] == "Any"
 
         assert abs_op["inputs"] == ["X"]
         assert abs_op["outputs"] == ["Y"]
@@ -662,8 +667,9 @@ def test_generate_registry_main() -> None:
         assert os.path.exists(json_path)
 
         # Test default md path fallback when no args provided
-        with patch("sys.argv", ["generate_registry.py"]), patch(
-            "scripts.generate_registry.parse_onnx_docs", return_value={}
+        with (
+            patch("sys.argv", ["generate_registry.py"]),
+            patch("scripts.generate_registry.parse_onnx_docs", return_value={}),
         ):
             gen_main(json_path=json_path, registry_path=py_path)
         assert os.path.exists(json_path)
@@ -732,9 +738,9 @@ has been available since version 1.
             """
             self.name = "FakeOp"
             self.since_version = 1
-            self.attributes: dict[str, Any] = {}
-            self.inputs: list[Any] = []
-            self.outputs: list[Any] = []
+            self.attributes: dict[str, object] = {}
+            self.inputs: list[object] = []
+            self.outputs: list[object] = []
             self.domain = domain
 
     fake_onnx_defs = MagicMock()
@@ -929,34 +935,32 @@ def test_verify_grounding_find_snapshots_directory() -> None:
         ):
             assert find_snapshots_directory() is not None
 
-        # ML_FRAMEWORK_SNAPSHOTS_DIR env branch
-        with patch.dict(
-            os.environ,
-            {"ML_FRAMEWORK_SNAPSHOTS_DIR": tmpdir, "ML_ECOSYSTEM_SNAPSHOTS_DIR": ""},
-        ):
-            assert find_snapshots_directory() == Path(tmpdir).resolve()
-
         # Without override, should find existing DEFAULT_SNAPSHOT_DIR
-        with patch.dict(os.environ, {}, clear=True), patch(
-            "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir),
         ):
             assert find_snapshots_directory() == Path(tmpdir).resolve()
 
         # When DEFAULT_SNAPSHOT_DIR is non-existent, falls back to get_default_snapshots_dir()
-        with patch.dict(os.environ, {}, clear=True), patch(
-            "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"
-        ), patch(
-            "ml_switcheroo_ir.snapshots.get_default_snapshots_dir",
-            return_value=tmpdir,
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"),
+            patch(
+                "ml_switcheroo_ir.snapshots.get_default_snapshots_dir",
+                return_value=tmpdir,
+            ),
         ):
             assert find_snapshots_directory() == Path(tmpdir).resolve()
 
         # When both DEFAULT_SNAPSHOT_DIR and get_default_snapshots_dir() are non-existent
-        with patch.dict(os.environ, {}, clear=True), patch(
-            "scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"
-        ), patch(
-            "ml_switcheroo_ir.snapshots.get_default_snapshots_dir",
-            return_value="/nonexistent/fallback",
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", "/nonexistent/dir"),
+            patch(
+                "ml_switcheroo_ir.snapshots.get_default_snapshots_dir",
+                return_value="/nonexistent/fallback",
+            ),
         ):
             assert find_snapshots_directory() is None
 
@@ -1080,17 +1084,22 @@ def test_verify_grounding_main_paths() -> None:
         assert verify_grounding_main([]) == 0
 
     # When snapshots directory not found and schemas are invalid
-    with patch(
-        "scripts.verify_grounding.find_snapshots_directory", return_value=None
-    ), patch(
-        "scripts.verify_grounding.verify_custom_ops_grounding", return_value=["error"]
+    with (
+        patch("scripts.verify_grounding.find_snapshots_directory", return_value=None),
+        patch(
+            "scripts.verify_grounding.verify_custom_ops_grounding",
+            return_value=["error"],
+        ),
     ):
         assert verify_grounding_main([]) == 1
 
     # When snapshots directory is empty and no --snapshots-dir argument given
-    with TemporaryDirectory() as empty_tmpdir, patch(
-        "scripts.verify_grounding.find_snapshots_directory",
-        return_value=Path(empty_tmpdir),
+    with (
+        TemporaryDirectory() as empty_tmpdir,
+        patch(
+            "scripts.verify_grounding.find_snapshots_directory",
+            return_value=Path(empty_tmpdir),
+        ),
     ):
         assert verify_grounding_main([]) == 0
 
@@ -1098,44 +1107,57 @@ def test_verify_grounding_main_paths() -> None:
     with TemporaryDirectory() as populated_tmpdir:
         dummy_file = Path(populated_tmpdir) / "snapshot.json"
         dummy_file.write_text("{}", encoding="utf-8")
-        with patch(
-            "scripts.verify_grounding.find_snapshots_directory",
-            return_value=Path(populated_tmpdir),
-        ), patch(
-            "scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]
-        ), patch(
-            "scripts.verify_grounding.verify_mlir_grounding", return_value=[]
-        ), patch(
-            "scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]
-        ), patch(
-            "scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]
-        ), patch("scripts.verify_grounding.verify_onnx_grounding", return_value=[]):
+        with (
+            patch(
+                "scripts.verify_grounding.find_snapshots_directory",
+                return_value=Path(populated_tmpdir),
+            ),
+            patch(
+                "scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]
+            ),
+            patch("scripts.verify_grounding.verify_mlir_grounding", return_value=[]),
+            patch(
+                "scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]
+            ),
+            patch(
+                "scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]
+            ),
+            patch("scripts.verify_grounding.verify_onnx_grounding", return_value=[]),
+        ):
             assert verify_grounding_main([]) == 0
 
     # When snapshots directory found and all schemas valid
     with TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "snapshot.json").write_text("{}", encoding="utf-8")
-        with patch(
-            "scripts.verify_grounding.find_snapshots_directory",
-            return_value=Path(tmpdir),
-        ), patch(
-            "scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]
-        ), patch(
-            "scripts.verify_grounding.verify_mlir_grounding", return_value=[]
-        ), patch(
-            "scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]
-        ), patch(
-            "scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]
-        ), patch("scripts.verify_grounding.verify_onnx_grounding", return_value=[]):
+        with (
+            patch(
+                "scripts.verify_grounding.find_snapshots_directory",
+                return_value=Path(tmpdir),
+            ),
+            patch(
+                "scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]
+            ),
+            patch("scripts.verify_grounding.verify_mlir_grounding", return_value=[]),
+            patch(
+                "scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]
+            ),
+            patch(
+                "scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]
+            ),
+            patch("scripts.verify_grounding.verify_onnx_grounding", return_value=[]),
+        ):
             assert verify_grounding_main(["--snapshots-dir", tmpdir]) == 0
 
         # When snapshots directory found but errors detected
-        with patch(
-            "scripts.verify_grounding.find_snapshots_directory",
-            return_value=Path(tmpdir),
-        ), patch(
-            "scripts.verify_grounding.verify_stablehlo_grounding",
-            return_value=["stablehlo error"],
+        with (
+            patch(
+                "scripts.verify_grounding.find_snapshots_directory",
+                return_value=Path(tmpdir),
+            ),
+            patch(
+                "scripts.verify_grounding.verify_stablehlo_grounding",
+                return_value=["stablehlo error"],
+            ),
         ):
             assert verify_grounding_main(["--snapshots-dir", tmpdir]) == 1
 
@@ -1145,9 +1167,12 @@ def test_verify_grounding_runpy_main() -> None:
     orig_mod = sys.modules["scripts.verify_grounding"]
     sys.modules.pop("scripts.verify_grounding", None)
     try:
-        with TemporaryDirectory() as empty_tmpdir, patch.dict(
-            os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": empty_tmpdir}
-        ), patch("sys.argv", ["verify_grounding.py"]), patch("sys.exit") as mock_exit:
+        with (
+            TemporaryDirectory() as empty_tmpdir,
+            patch.dict(os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": empty_tmpdir}),
+            patch("sys.argv", ["verify_grounding.py"]),
+            patch("sys.exit") as mock_exit,
+        ):
             runpy.run_module("scripts.verify_grounding", run_name="__main__")
             mock_exit.assert_called_once_with(0)
     finally:
@@ -1161,42 +1186,26 @@ def test_find_snapshots_directory_env_and_override() -> None:
         assert find_snapshots_directory(tmpdir) == Path(tmpdir).resolve()
         assert find_snapshots_directory("/non/existent/path") is None
 
-        # Repo-root override with nested src/ml_framework_snapshots/snapshots
-        fw_root = Path(tmpdir) / "fw_repo"
-        nested_fw = fw_root / "src" / "ml_framework_snapshots" / "snapshots"
-        nested_fw.mkdir(parents=True)
-        assert find_snapshots_directory(str(fw_root)) == nested_fw.resolve()
-
         # Repo-root override with nested src/ml_ecosystem_snapshots/snapshots
         eco_root = Path(tmpdir) / "eco_repo"
         nested_eco = eco_root / "src" / "ml_ecosystem_snapshots" / "snapshots"
         nested_eco.mkdir(parents=True)
         assert find_snapshots_directory(str(eco_root)) == nested_eco.resolve()
 
-        # Sibling ml-framework-snapshots resolved via ml-ecosystem-snapshots
-        ws_root = Path(tmpdir) / "ws"
-        eco_sibling = (
-            ws_root
-            / "ml-ecosystem-snapshots"
-            / "src"
-            / "ml_framework_snapshots"
-            / "snapshots"
-        )
-        eco_sibling.mkdir(parents=True)
-        fw_alias = ws_root / "ml-framework-snapshots"
-        assert find_snapshots_directory(str(fw_alias)) == eco_sibling.resolve()
-
-        # Sibling ml-framework-snapshots when neither exists
-        empty_ws = Path(tmpdir) / "empty_ws" / "ml-framework-snapshots"
+        # Sibling directory when non-existent
+        empty_ws = Path(tmpdir) / "empty_ws" / "ml-ecosystem-snapshots"
         assert find_snapshots_directory(str(empty_ws)) is None
 
         # Environment variable valid and invalid
-        with patch.dict(os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": tmpdir}):
+        with patch.dict(os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": tmpdir}):
             assert find_snapshots_directory() == Path(tmpdir).resolve()
-
-        with patch.dict(
-            os.environ, {"ML_FRAMEWORK_SNAPSHOTS_DIR": "/invalid/nonexistent/dir"}
-        ), patch("scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir):
+        # Env var set to nonexistent dir
+        with (
+            patch.dict(
+                os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": "/invalid/nonexistent/dir"}
+            ),
+            patch("scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir),
+        ):
             # Should fall back to default_path or relative
             assert find_snapshots_directory() == Path(tmpdir).resolve()
 
@@ -1869,10 +1878,10 @@ def test_verify_grounding_main_ecosystem_and_strict() -> None:
             == 0
         )
 
-    # Zero-mock end-to-end verification against ../ml-framework-snapshots
+    # Zero-mock end-to-end verification against ../ml-ecosystem-snapshots
     assert (
         verify_grounding_main(
-            ["--strict", "--snapshots-dir", "../ml-framework-snapshots"]
+            ["--strict", "--snapshots-dir", "../ml-ecosystem-snapshots"]
         )
         == 0
     )
@@ -1920,42 +1929,12 @@ def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
         (pop_eco / "onnx.json").write_text("{}", encoding="utf-8")
         assert resolve_snapshots_path(eco_repo) == pop_eco.resolve()
 
-        ws_pop = tmp_path / "ws_pop"
-        pop_sibling = (
-            ws_pop
-            / "ml-ecosystem-snapshots"
-            / "src"
-            / "ml_ecosystem_snapshots"
-            / "snapshots"
-        )
-        pop_sibling.mkdir(parents=True, exist_ok=True)
-        (pop_sibling / "onnx.json").write_text("{}", encoding="utf-8")
-        assert (
-            resolve_snapshots_path(ws_pop / "ml-framework-snapshots")
-            == pop_sibling.resolve()
-        )
+        eco_empty = tmp_path / "eco_repo_empty"
+        empty_eco = eco_empty / "src" / "ml_ecosystem_snapshots" / "snapshots"
+        empty_eco.mkdir(parents=True, exist_ok=True)
+        assert resolve_snapshots_path(eco_empty) == empty_eco.resolve()
 
-        ws_empty_fw = tmp_path / "ws_empty_fw"
-        empty_fw_sibling = (
-            ws_empty_fw
-            / "ml-ecosystem-snapshots"
-            / "src"
-            / "ml_framework_snapshots"
-            / "snapshots"
-        )
-        empty_fw_sibling.mkdir(parents=True, exist_ok=True)
-        fake_snapshots_file = (
-            ws_empty_fw
-            / "ml-switcheroo-ir"
-            / "src"
-            / "ml_switcheroo_ir"
-            / "snapshots.py"
-        )
-        with patch("ml_switcheroo_ir.snapshots.__file__", str(fake_snapshots_file)):
-            assert (
-                resolve_snapshots_path(ws_empty_fw / "ml-framework-snapshots")
-                == Path(DEFAULT_SNAPSHOT_DIR).resolve()
-            )
+        assert resolve_snapshots_path(tmp_path / "nonexistent_dir") is None
 
     from ml_switcheroo_ir.schema.onnx_registry import OpSchema
     from scripts.verify_grounding import (

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
 
 from ml_switcheroo_ir.schema.base import (
     REGISTRY_LOCK,
@@ -24,14 +24,15 @@ def _load_sass_schemas(json_path: Path | str | None = None) -> None:
         json_path (Optional[Union[Path, str]]): Explicit path override for sass_ops.json.
     """
 
-    def _record_sass_latency(op_data: Mapping[str, Any]) -> None:
+    def _record_sass_latency(op_data: Mapping[str, object]) -> None:
         """Record execution latency from a SASS schema entry.
 
         Args:
-            op_data (Mapping[str, Any]): Raw operator definition dictionary.
+            op_data (Mapping[str, object]): Raw operator definition dictionary.
         """
-        SASS_PIPELINE_LATENCIES[str(op_data["name"])] = int(
-            op_data.get("execution_latency", 4)
+        raw_lat = op_data.get("execution_latency", 4)
+        SASS_PIPELINE_LATENCIES[str(op_data["name"])] = (
+            int(raw_lat) if isinstance(raw_lat, (int, str)) else 4
         )
 
     with REGISTRY_LOCK:

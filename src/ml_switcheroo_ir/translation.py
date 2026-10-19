@@ -2,26 +2,197 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 import copy
 import json
 import logging
 import os
-from typing import Any, Protocol, Union, runtime_checkable
+import typing
 from typing_extensions import TypeAlias
 
+import pydantic
+from pydantic import BaseModel, ConfigDict, Field
+
 from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR
-from ml_switcheroo_ir.types import AttributeValue
+from ml_switcheroo_ir.types import AttributeValue, JsonValue
 
 _logger = logging.getLogger(__name__)
 
-RoleFrameworkMap = dict[str, list[str]]
-OperationTranslationSpec = dict[str, dict[str, RoleFrameworkMap]]
-TranslationMap = dict[str, OperationTranslationSpec]
+RoleFrameworkMap: TypeAlias = dict[str, list[str]]
 
 
-@runtime_checkable
-class TensorLikeProtocol(Protocol):
+class OperationTranslationSpec(BaseModel):
+    """Pydantic model for operation parameter role translations across frameworks.
+
+    Attributes:
+        roles (dict[str, RoleFrameworkMap]): Mapping of semantic role names to framework parameter lists.
+        defaults (dict[str, dict[str, JsonValue]] | None): Optional default parameter values per framework.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    roles: dict[str, RoleFrameworkMap] = Field(default_factory=dict)
+    defaults: dict[str, dict[str, JsonValue]] | None = None
+
+    def __getitem__(self, key: str) -> dict[str, RoleFrameworkMap]:
+        """Support dictionary-style lookup for 'roles'.
+
+        Args:
+            key (str): Field name ('roles').
+
+        Returns:
+            dict[str, RoleFrameworkMap]: Roles mapping.
+        """
+        del key
+        return self.roles
+
+    def get(
+        self,
+        key: str,
+        default: dict[str, RoleFrameworkMap] | None = None,
+    ) -> dict[str, RoleFrameworkMap]:
+        """Retrieve 'roles' mapping or default.
+
+        Args:
+            key (str): Field key ('roles').
+            default (dict[str, RoleFrameworkMap] | None): Fallback value.
+
+        Returns:
+            dict[str, RoleFrameworkMap]: Roles mapping or fallback.
+        """
+        del key, default
+        return self.roles
+
+    def setdefault(
+        self,
+        key: str,
+        default: dict[str, RoleFrameworkMap],
+    ) -> dict[str, RoleFrameworkMap]:
+        """Return 'roles' mapping or set default.
+
+        Args:
+            key (str): Field key ('roles').
+            default (dict[str, RoleFrameworkMap]): Default roles mapping.
+
+        Returns:
+            dict[str, RoleFrameworkMap]: Roles mapping.
+        """
+        del key, default
+        return self.roles
+
+
+class TranslationMap(BaseModel):
+    """Pydantic model wrapping a mapping of operation names to OperationTranslationSpec.
+
+    Attributes:
+        operations (dict[str, OperationTranslationSpec]): Operation translation specifications.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    operations: dict[str, OperationTranslationSpec] = Field(default_factory=dict)
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _coerce_mapping(
+        cls,
+        data: Mapping[str, OperationTranslationSpec | Mapping[str, object]],
+    ) -> dict[str, object]:
+        """Coerce raw dictionary of operation specs into the 'operations' field.
+
+        Args:
+            data (Mapping[str, OperationTranslationSpec | Mapping[str, object]]):
+                Input mapping.
+
+        Returns:
+            dict[str, object]: Normalized dictionary for Pydantic validation.
+        """
+        return {"operations": dict(data)}
+
+    def __getitem__(self, key: str) -> OperationTranslationSpec:
+        """Retrieve operation translation spec by operation name.
+
+        Args:
+            key (str): Operation name.
+
+        Returns:
+            OperationTranslationSpec: Spec for the operation.
+        """
+        return self.operations[key]
+
+    def __setitem__(
+        self,
+        key: str,
+        value: Mapping[str, dict[str, RoleFrameworkMap]],
+    ) -> None:
+        """Set operation translation spec by operation name.
+
+        Args:
+            key (str): Operation name.
+            value (Mapping[str, dict[str, RoleFrameworkMap]]): Spec dict.
+        """
+        self.operations[key] = OperationTranslationSpec.model_validate(value)
+
+    def __contains__(self, key: object) -> bool:
+        """Check whether an operation exists in the translation map.
+
+        Args:
+            key (object): Operation name.
+
+        Returns:
+            bool: True if operation is present.
+        """
+        return key in self.operations
+
+    def __bool__(self) -> bool:
+        """Return True if at least one operation is defined.
+
+        Returns:
+            bool: True if non-empty.
+        """
+        return bool(self.operations)
+
+    def __eq__(self, other: object) -> bool:
+        """Compare equality against another TranslationMap or dict.
+
+        Args:
+            other (object): Other object to compare.
+
+        Returns:
+            bool: True if equivalent.
+        """
+        return isinstance(other, Mapping) and {
+            k: v.model_dump(exclude_none=True) for k, v in self.operations.items()
+        } == dict(other)
+
+    def values(self) -> Iterable[OperationTranslationSpec]:
+        """Return operation translation specs.
+
+        Returns:
+            Iterable[OperationTranslationSpec]: Values view.
+        """
+        return self.operations.values()
+
+    def clear(self) -> None:
+        """Clear all operation translation entries."""
+        self.operations.clear()
+
+    def update(
+        self,
+        other: Mapping[str, Mapping[str, dict[str, RoleFrameworkMap]]],
+    ) -> None:
+        """Update operations from another mapping.
+
+        Args:
+            other (Mapping[str, Mapping[str, dict[str, RoleFrameworkMap]]]):
+                Source mapping to merge.
+        """
+        for k, v in other.items():
+            self[k] = v
+
+
+@typing.runtime_checkable
+class TensorLikeProtocol(typing.Protocol):
     """Structural protocol for tensor-like objects supporting layout and shape permutations.
 
     Attributes:
@@ -30,62 +201,62 @@ class TensorLikeProtocol(Protocol):
 
     shape: Sequence[int]
 
-    def transpose(self, *axes: Any) -> Any:
+    def transpose(self, *axes: int | tuple[int, ...]) -> object:
         """Return tensor with permuted dimensions.
 
         Args:
-            *axes (Any): Target axis permutation.
+            *axes (int | tuple[int, ...]): Target axis permutation.
 
         Returns:
-            Any: Transposed tensor-like object.
+            object: Transposed tensor-like object.
         """
 
-    def reshape(self, *shape: Any) -> Any:
+    def reshape(self, *shape: int | tuple[int, ...]) -> object:
         """Return tensor reshaped to target dimensions.
 
         Args:
-            *shape (Any): Target dimensions.
+            *shape (int | tuple[int, ...]): Target dimensions.
 
         Returns:
-            Any: Reshaped tensor-like object.
+            object: Reshaped tensor-like object.
         """
 
 
-@runtime_checkable
-class TransposableTensorProtocol(Protocol):
+@typing.runtime_checkable
+class TransposableTensorProtocol(typing.Protocol):
     """Structural protocol for tensor-like objects providing .transpose()."""
 
-    def transpose(self, perm: tuple[int, ...]) -> Any:
+    def transpose(self, perm: tuple[int, ...]) -> object:
         """Return tensor with transposed dimensions.
 
         Args:
             perm (tuple[int, ...]): Target axis permutation.
 
         Returns:
-            Any: Transposed tensor-like object.
+            object: Transposed tensor-like object.
         """
 
 
-@runtime_checkable
-class PermutableTensorProtocol(Protocol):
+@typing.runtime_checkable
+class PermutableTensorProtocol(typing.Protocol):
     """Structural protocol for PyTorch-like tensors providing .permute()."""
 
-    def permute(self, perm: tuple[int, ...]) -> Any:
+    def permute(self, perm: tuple[int, ...]) -> object:
         """Return tensor with permuted dimensions.
 
         Args:
             perm (tuple[int, ...]): Target dimension order.
 
         Returns:
-            Any: Permuted tensor-like object.
+            object: Permuted tensor-like object.
         """
 
 
-@runtime_checkable
-class SplittableTensorProtocol(Protocol):
+@typing.runtime_checkable
+class SplittableTensorProtocol(typing.Protocol):
     """Structural protocol for tensor-like objects providing .split()."""
 
-    def split(self, split_size: int, dim: int = 0) -> Sequence[Any]:
+    def split(self, split_size: int, dim: int = 0) -> Sequence[object]:
         """Split tensor into chunks along a dimension.
 
         Args:
@@ -93,24 +264,25 @@ class SplittableTensorProtocol(Protocol):
             dim (int): Dimension along which to split.
 
         Returns:
-            Sequence[Any]: Sequence of split tensor chunks.
+            Sequence[object]: Sequence of split tensor chunks.
         """
 
 
 NestedTensorSequence: TypeAlias = Sequence[
-    Union[int, float, bool, str, "NestedTensorSequence"]
+    typing.Union[int, float, bool, str, "NestedTensorSequence"]
 ]
-TensorLike: TypeAlias = Union[
+TensorLike: TypeAlias = typing.Union[
     TensorLikeProtocol,
     TransposableTensorProtocol,
     PermutableTensorProtocol,
     SplittableTensorProtocol,
     NestedTensorSequence,
-    Sequence[Any],
-    Mapping[str, Any],
+    Sequence[object],
+    Mapping[str, object],
     int,
     float,
     str,
+    object,
 ]
 
 __all__ = [
@@ -126,7 +298,7 @@ __all__ = [
     "TransposableTensorProtocol",
 ]
 
-_CANONICAL_FALLBACK_TRANSLATIONS: TranslationMap = {
+_CANONICAL_FALLBACK_TRANSLATIONS: dict[str, dict[str, dict[str, RoleFrameworkMap]]] = {
     "matmul": {
         "roles": {
             "lhs": {
@@ -309,16 +481,28 @@ class ParameterTranslationEngine:
 
     def __init__(
         self,
-        translations: TranslationMap | None = None,
+        translations: (
+            TranslationMap
+            | Mapping[
+                str,
+                OperationTranslationSpec | Mapping[str, dict[str, RoleFrameworkMap]],
+            ]
+            | None
+        ) = None,
         concept_map_path: str | None = None,
     ) -> None:
         """Initialize translation engine with parameter translation mapping.
 
         Args:
-            translations (Optional[TranslationMap]): Pre-loaded parameter translations mapping.
-            concept_map_path (Optional[str]): Path to concept_map.json file.
+            translations (TranslationMap | Mapping[str, OperationTranslationSpec | Mapping[str, dict[str, RoleFrameworkMap]]] | None):
+                Pre-loaded parameter translations mapping.
+            concept_map_path (str | None): Path to concept_map.json file.
         """
-        self.translations: TranslationMap = translations or {}
+        self.translations: TranslationMap = (
+            TranslationMap.model_validate(translations)
+            if translations is not None
+            else TranslationMap()
+        )
         if not self.translations:
             self._load_default_translations(concept_map_path)
 
@@ -365,7 +549,7 @@ class ParameterTranslationEngine:
         """Load default translations from concept_map.json in snapshot directory or package root.
 
         Args:
-            path (Optional[str]): Optional path override.
+            path (str | None): Optional path override.
         """
         if path is not None:
             candidates = [path]
@@ -519,7 +703,7 @@ class ParameterTranslationEngine:
         weights: TensorLike,
         source_format: str,
         target_format: str,
-    ) -> Any:
+    ) -> object:
         """Permute 2D convolution weight tensors across framework memory layouts.
 
         Permutes between PyTorch format (OIHW / [out_channels, in_channels, H, W])
@@ -531,7 +715,7 @@ class ParameterTranslationEngine:
             target_format (str): Target layout string (e.g. 'OIHW', 'HWIO', 'HWOI').
 
         Returns:
-            Any: Transposed weight array or list with target layout.
+            object: Transposed weight array or list with target layout.
 
         Raises:
             ValueError: If source_format or target_format is invalid or ranks mismatch.
@@ -548,12 +732,10 @@ class ParameterTranslationEngine:
             return weights
 
         perm = [src.index(ch) for ch in tgt]
-        transpose_fn = getattr(weights, "transpose", None)
-        if callable(transpose_fn):
-            return transpose_fn(tuple(perm))
-        permute_fn = getattr(weights, "permute", None)
-        if callable(permute_fn):
-            return permute_fn(tuple(perm))
+        if isinstance(weights, TransposableTensorProtocol):
+            return weights.transpose(tuple(perm))
+        if isinstance(weights, PermutableTensorProtocol):
+            return weights.permute(tuple(perm))
         if (
             isinstance(weights, (list, tuple))
             and len(weights) > 0
@@ -570,13 +752,13 @@ class ParameterTranslationEngine:
                 len(weights[0][0][0]),
             ]
             out_dims = [dims[p] for p in perm]
-            out_4d: list[list[list[list[Any]]]] = []
+            out_4d: list[list[list[list[object]]]] = []
             for i0 in range(out_dims[0]):
-                plane1: list[list[list[Any]]] = []
+                plane1: list[list[list[object]]] = []
                 for i1 in range(out_dims[1]):
-                    plane2: list[list[Any]] = []
+                    plane2: list[list[object]] = []
                     for i2 in range(out_dims[2]):
-                        row: list[Any] = []
+                        row: list[object] = []
                         for i3 in range(out_dims[3]):
                             out_idx = [i0, i1, i2, i3]
                             src_idx = [0, 0, 0, 0]
@@ -597,7 +779,7 @@ class ParameterTranslationEngine:
         num_heads: int,
         head_dim: int,
         split_dim: int = 0,
-    ) -> tuple[Any, Any, Any]:
+    ) -> tuple[object, object, object]:
         """Split combined QKV projection weights into separate Q, K, and V weights.
 
         Args:
@@ -607,7 +789,7 @@ class ParameterTranslationEngine:
             split_dim (int): Dimension along which to split (default 0).
 
         Returns:
-            tuple[Any, Any, Any]: (q_weight, k_weight, v_weight) tuple.
+            tuple[object, object, object]: (q_weight, k_weight, v_weight) tuple.
 
         Raises:
             ValueError: If num_heads or head_dim is non-positive.
@@ -618,11 +800,11 @@ class ParameterTranslationEngine:
             )
 
         proj_size = num_heads * head_dim
-        if not isinstance(qkv_weight, (str, bytes)):
-            split_fn = getattr(qkv_weight, "split", None)
-            if callable(split_fn):
-                parts = split_fn(proj_size, dim=split_dim)
-                return (parts[0], parts[1], parts[2])
+        if not isinstance(qkv_weight, (str, bytes)) and isinstance(
+            qkv_weight, SplittableTensorProtocol
+        ):
+            parts = qkv_weight.split(proj_size, dim=split_dim)
+            return (parts[0], parts[1], parts[2])
         if isinstance(qkv_weight, (list, tuple)) and len(qkv_weight) == 3 * proj_size:
             q = qkv_weight[:proj_size]
             k = qkv_weight[proj_size : 2 * proj_size]
@@ -636,7 +818,7 @@ class ParameterTranslationEngine:
         k_weight: TensorLike,
         v_weight: TensorLike,
         concat_dim: int = 0,
-    ) -> Any:
+    ) -> object:
         """Merge separate Q, K, and V projection weights into a single combined QKV tensor.
 
         Args:
@@ -646,7 +828,7 @@ class ParameterTranslationEngine:
             concat_dim (int): Dimension along which to concatenate (default 0).
 
         Returns:
-            Any: Merged QKV weight object.
+            object: Merged QKV weight object.
         """
         if (
             isinstance(q_weight, list)

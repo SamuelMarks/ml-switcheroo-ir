@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 import hypothesis.strategies as st
 from hypothesis import given, settings
 
 from ml_switcheroo_ir import (
+    AttributeValue,
     LogicalGraph,
     LogicalMesh,
     LogicalNode,
@@ -29,7 +29,7 @@ def arbitrary_dag(draw: st.DrawFn) -> LogicalGraph:
     """Hypothesis strategy generating arbitrary valid directed acyclic graphs.
 
     Args:
-        draw: Hypothesis draw function.
+        draw (st.DrawFn): Hypothesis draw function.
 
     Returns:
         LogicalGraph: Valid DAG with grounded nodes and acyclic connections.
@@ -62,7 +62,7 @@ def arbitrary_dag(draw: st.DrawFn) -> LogicalGraph:
                 st.text(alphabet="abcdef", max_size=5),
             )
         )
-        attributes: dict[str, Any] = {"param": attr_val}
+        attributes: dict[str, AttributeValue] = {"param": attr_val}
 
         has_sharding = draw(st.booleans())
         sharding = PartitionSpec(axes=("data", None)) if has_sharding else None
@@ -106,7 +106,7 @@ def test_fuzz_json_roundtrip(graph: LogicalGraph) -> None:
     Args:
         graph (LogicalGraph): Randomly generated DAG.
     """
-    json_str = graph.to_json(format="canonical")
+    json_str = graph.to_json()
     deserialized = LogicalGraph.from_json(json_str)
 
     assert deserialized.name == graph.name
@@ -138,9 +138,12 @@ def test_fuzz_pythonic_cst_eval(graph: LogicalGraph) -> None:
     from ml_switcheroo_ir.export import export_to_python
 
     py_code = export_to_python(graph, function_name="build_fuzzed_graph")
-    scope: dict[str, Any] = {}
+    scope: dict[str, object] = {}
     exec(py_code, scope)  # noqa: S102
-    reconstructed_graph = scope["build_fuzzed_graph"]()
+    builder_fn = scope["build_fuzzed_graph"]
+    assert callable(builder_fn)
+    reconstructed_graph = builder_fn()
+    assert isinstance(reconstructed_graph, LogicalGraph)
 
     assert reconstructed_graph.name == graph.name
     assert reconstructed_graph.outputs == graph.outputs

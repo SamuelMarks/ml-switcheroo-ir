@@ -3,11 +3,59 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping, Sequence
 import json
 import os
 import re
 import sys
-from typing import Any
+import typing
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ml_switcheroo_ir.types import JsonValue
+
+
+class OnnxAttrSpecModel(BaseModel):
+    """Pydantic model for a parsed ONNX operator attribute specification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = "Any"
+    required: bool = False
+    default: JsonValue = None
+
+
+class OnnxOpSpecModel(BaseModel):
+    """Pydantic model for a parsed ONNX operator schema specification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str = "ai.onnx"
+    version: int = 1
+    attributes: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+
+
+OnnxAttrSpecModel.model_rebuild()
+OnnxOpSpecModel.model_rebuild()
+
+
+class OnnxParamProtocol(typing.Protocol):
+    """Protocol for an upstream onnx.defs formal parameter."""
+
+    name: str
+
+
+class OnnxSchemaProtocol(typing.Protocol):
+    """Protocol for an upstream onnx.defs OpSchema."""
+
+    name: str
+    since_version: int
+    domain: str
+    attributes: Mapping[str, object]
+    inputs: Sequence[OnnxParamProtocol]
+    outputs: Sequence[OnnxParamProtocol]
 
 
 def extract_section(block: str, section_name: str) -> str:
@@ -26,24 +74,24 @@ def extract_section(block: str, section_name: str) -> str:
 
 
 def cross_validate_with_onnx_defs(
-    ops: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
+    ops: dict[str, dict[str, object]],
+) -> dict[str, dict[str, object]]:
     """Cross-validate parsed operator schemas against official onnx.defs if available.
 
     Eliminates hallucinated attributes, corrects inputs on zero-input operators, and
     harmonizes domains.
 
     Args:
-        ops (dict[str, dict[str, Any]]): Parsed operator dictionary.
+        ops (dict[str, dict[str, object]]): Parsed operator dictionary.
 
     Returns:
-        dict[str, dict[str, Any]]: Cleaned, grounded operator dictionary.
+        dict[str, dict[str, object]]: Cleaned, grounded operator dictionary.
     """
     try:
         import onnx.defs
 
-        onnx_schemas = onnx.defs.get_all_schemas()
-        schema_map: dict[str, Any] = {}
+        onnx_schemas: Sequence[OnnxSchemaProtocol] = onnx.defs.get_all_schemas()
+        schema_map: dict[str, OnnxSchemaProtocol] = {}
         for s in onnx_schemas:
             if (
                 s.name not in schema_map
@@ -56,13 +104,14 @@ def cross_validate_with_onnx_defs(
             if bare_name in schema_map:
                 s = schema_map[bare_name]
                 canonical_attrs = set(s.attributes.keys())
-                # Filter out hallucinated attributes not present in official defs
+                raw_attrs = op_data.get("attributes")
                 op_data["attributes"] = {
                     k: v
-                    for k, v in op_data["attributes"].items()
+                    for k, v in (
+                        raw_attrs.items() if isinstance(raw_attrs, dict) else ()
+                    )
                     if k in canonical_attrs
                 }
-                # Fix inputs and outputs to match canonical defs
                 op_data["inputs"] = [inp.name for inp in s.inputs]
                 op_data["outputs"] = [out.name for out in s.outputs]
                 if s.domain:
@@ -75,15 +124,15 @@ def cross_validate_with_onnx_defs(
 
 def parse_onnx_docs(
     md_file: str, cross_validate: bool = False
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, dict[str, object]]:
     """Parse ONNX Operators.md markdown documentation to extract op schemas.
 
     Args:
-        md_file: Path to the Operators.md file.
-        cross_validate: Whether to cross-validate against canonical onnx.defs.
+        md_file (str): Path to the Operators.md file.
+        cross_validate (bool): Whether to cross-validate against canonical onnx.defs.
 
     Returns:
-        Dictionary mapping operator names to operator schema definitions.
+        dict[str, dict[str, object]]: Dictionary mapping operator names to operator schema definitions.
     """
     with open(md_file, "r", encoding="utf-8") as f:
         content = f.read()
@@ -97,7 +146,7 @@ def parse_onnx_docs(
         flags=re.MULTILINE,
     )
 
-    ops: dict[str, dict[str, Any]] = {}
+    ops: dict[str, dict[str, object]] = {}
 
     for block in op_blocks[1:]:  # skip first block which is preamble
         name_match = re.search(r'^<a\s+name="[^"]+">\*\*(.*?)\*\*</a>', block)
@@ -116,7 +165,7 @@ def parse_onnx_docs(
 
         # Attributes
         attr_section = extract_section(block, "Attributes")
-        attributes: dict[str, dict[str, Any]] = {}
+        attributes: dict[str, dict[str, JsonValue]] = {}
         if attr_section:
             dts = re.findall(r"<dt>(.*?)</dt>", attr_section, flags=re.DOTALL)
             for dt in dts:
@@ -128,9 +177,7 @@ def parse_onnx_docs(
 
                 required = "(required)" in rest
 
-                default_val: str | int | float | list[Any] | dict[str, Any] | None = (
-                    None
-                )
+                default_val: JsonValue = None
                 default_match = re.search(r"\(default is (.*?)\)", rest)
                 if default_match:
                     default_str = default_match.group(1).strip()
@@ -166,11 +213,12 @@ def parse_onnx_docs(
                 else:
                     py_type = "Any"
 
-                attributes[attr_name] = {
-                    "type": py_type,
-                    "required": required,
-                    "default": default_val,
-                }
+                attr_model = OnnxAttrSpecModel(
+                    type=py_type,
+                    required=required,
+                    default=default_val,
+                )
+                attributes[attr_name] = attr_model.model_dump()
 
         # Inputs
         input_section = extract_section(block, "Inputs")
@@ -196,13 +244,14 @@ def parse_onnx_docs(
         if op_name.startswith("ai.onnx."):
             domain = op_name.rsplit(".", 1)[0]
 
-        ops[op_name] = {
-            "domain": domain,
-            "version": version,
-            "attributes": attributes,
-            "inputs": inputs,
-            "outputs": outputs,
-        }
+        op_model = OnnxOpSpecModel(
+            domain=domain,
+            version=version,
+            attributes=attributes,
+            inputs=inputs,
+            outputs=outputs,
+        )
+        ops[op_name] = op_model.model_dump()
 
     if cross_validate:
         return cross_validate_with_onnx_defs(ops)
@@ -216,7 +265,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import threading
-from typing import Any
 
 from ml_switcheroo_ir.schema.base import OpAttribute, OpSchema
 

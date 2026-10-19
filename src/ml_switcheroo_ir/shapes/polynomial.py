@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import typing
+from typing_extensions import TypeAlias
 
-if TYPE_CHECKING:
+if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.shapes.ast import SymNode
 
-MonomialType = tuple[tuple[str, int], ...]
-Monomial = MonomialType
+MonomialType: TypeAlias = tuple[tuple[str, int], ...]
 
 __all__ = [
-    "Monomial",
     "MonomialType",
     "Polynomial",
     "_poly_to_symnode",

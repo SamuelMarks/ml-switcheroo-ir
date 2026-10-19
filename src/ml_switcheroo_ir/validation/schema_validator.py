@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable, Mapping, Sequence
+import typing
 
-if TYPE_CHECKING:
+if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.validation.grounding import GroundingValidator
 
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalMesh, LogicalNode
@@ -37,6 +37,7 @@ from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
 from ml_switcheroo_ir.schema.rdna_registry import RDNA_REGISTRY
 from ml_switcheroo_ir.schema.sass_registry import SASS_REGISTRY
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
+from ml_switcheroo_ir.types import AttributeValue
 from ml_switcheroo_ir.validation.core import (
     CORE_MLIR_DIALECTS,
     ValidationError,
@@ -58,7 +59,6 @@ from ml_switcheroo_ir.validation.hardware import (
 from ml_switcheroo_ir.validation.quantization import validate_quantization_node
 
 __all__ = [
-    "MultiDialectValidator",
     "Validator",
 ]
 
@@ -151,7 +151,7 @@ _ISA_ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
     "ptx": {"vector_widths", "min_sm", "address_space"},
 }
 
-_ATTRIBUTE_TYPE_CHECKERS: dict[str, Callable[[Any], bool]] = {
+_ATTRIBUTE_TYPE_CHECKERS: dict[str, Callable[[AttributeValue], bool]] = {
     "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
     "float": lambda v: isinstance(v, (float, int)) and not isinstance(v, bool),
     "str": lambda v: isinstance(v, str),
@@ -185,24 +185,20 @@ class Validator:
     ) -> None:
         """Initialize the validator with configurable registries and severity thresholds.
 
-        Note:
-            Passing ``level=ValidationLevel.ERROR`` maps to ``ValidationLevel.LENIENT``
-            so that only fatal ``ERROR`` diagnostics are retained while warnings are filtered out.
-
         Args:
-            registry (Optional[Dict[str, OpSchema]]): The operator registry to use.
+            registry (dict[str, OpSchema] | None): The operator registry to use.
                 Defaults to the built-in ONNX_REGISTRY.
-            custom_registry (Optional[Dict[str, OpSchema]]): The custom operator registry.
+            custom_registry (dict[str, OpSchema] | None): The custom operator registry.
                 Defaults to the built-in CUSTOM_OPS_REGISTRY.
-            stablehlo_registry (Optional[Dict[str, OpSchema]]): The StableHLO operator registry.
+            stablehlo_registry (dict[str, OpSchema] | None): The StableHLO operator registry.
                 Defaults to the built-in STABLEHLO_REGISTRY.
-            mlir_registry (Optional[Dict[str, OpSchema]]): The Core MLIR operator registry.
+            mlir_registry (dict[str, OpSchema] | None): The Core MLIR operator registry.
                 Defaults to the built-in MLIR_REGISTRY.
-            state_registry (Optional[Dict[str, OpSchema]]): The State mutation operator registry.
+            state_registry (dict[str, OpSchema] | None): The State mutation operator registry.
                 Defaults to the built-in STATE_OPS_REGISTRY.
             level (ValidationLevel): The validation severity threshold (default: ValidationLevel.WARNING).
             strict (bool): Convenience flag; if True, sets level to ValidationLevel.STRICT.
-            grounding_validator (Optional[GroundingValidator]): Optional grounding validator for snapshot verification.
+            grounding_validator (GroundingValidator | None): Optional grounding validator for snapshot verification.
         """
         self.registry = ONNX_REGISTRY if registry is None else registry
         self.custom_registry = (
@@ -220,8 +216,6 @@ class Validator:
 
         if strict:
             self.level = ValidationLevel.STRICT
-        elif level == ValidationLevel.ERROR:
-            self.level = ValidationLevel.LENIENT
         else:
             self.level = level
 
@@ -394,7 +388,7 @@ class Validator:
 
         secondary = self._get_domain_registry(node.domain)
         if secondary is not None:
-            extra_primitives: dict[str, Any] = {}
+            extra_primitives: Mapping[str, object] = {}
             if node.domain in ("amd_rdna", "rdna"):
                 extra_primitives = RDNA_INSTRUCTION_PRIMITIVES
             elif node.domain in ("nvidia_sass", "sass"):
@@ -872,6 +866,3 @@ class Validator:
                     )
 
         return errors
-
-
-MultiDialectValidator = Validator

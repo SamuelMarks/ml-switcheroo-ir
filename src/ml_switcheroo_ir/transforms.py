@@ -7,8 +7,9 @@ Common Subexpression Elimination (CSE), and Shape Propagation / Constant Folding
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Mapping, Sequence
+import typing
+from typing_extensions import TypeAlias
 
 from ml_switcheroo_ir.graph import (
     LogicalEdge,
@@ -33,6 +34,21 @@ from ml_switcheroo_ir.shapes import (
     normalize_axis,
 )
 from ml_switcheroo_ir.types import AttributeValue, DType, TensorSpec
+
+HashableAttrKey: TypeAlias = typing.Union[
+    str, int, float, bool, None, tuple["HashableAttrKey", ...]
+]
+NodeCseSignatureKey: TypeAlias = tuple[
+    str,
+    str,
+    tuple[str, ...],
+    tuple[tuple[str, HashableAttrKey], ...],
+    typing.Optional[tuple[DimensionType, ...]],
+    typing.Optional[str],
+    typing.Optional[str],
+    typing.Optional[str],
+    HashableAttrKey,
+]
 
 SIDE_EFFECT_OPS: set[str] = {
     "Print",
@@ -250,19 +266,23 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
     )
 
 
-def _serialize_attr_for_key(val: Any) -> Any:
+def _serialize_attr_for_key(
+    val: AttributeValue | LogicalGraph | Mapping[str, object],
+) -> HashableAttrKey:
     """Normalize attribute values for deterministic equivalence hashing.
 
     Args:
-        val (Any): Attribute value to normalize.
+        val (AttributeValue | LogicalGraph | Mapping[str, object]): Attribute value to normalize.
 
     Returns:
-        Any: Hashable normalized representation.
+        HashableAttrKey: Hashable normalized representation.
     """
     if isinstance(val, LogicalGraph):
         return _serialize_attr_for_key(val.to_dict())
-    if isinstance(val, dict):
-        return tuple(sorted((k, _serialize_attr_for_key(v)) for k, v in val.items()))
+    if isinstance(val, Mapping):
+        return tuple(
+            sorted((str(k), _serialize_attr_for_key(v)) for k, v in val.items())  # type: ignore[arg-type]
+        )
     if isinstance(val, (list, tuple)):
         return tuple(_serialize_attr_for_key(v) for v in val)
     return repr(val)
@@ -279,7 +299,7 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
     """
     sorted_nodes = topological_sort(graph)
     alias_map: dict[str, str] = {}
-    sig_map: dict[tuple[Any, ...], str] = {}
+    sig_map: dict[NodeCseSignatureKey, str] = {}
     surviving_nodes: dict[str, LogicalNode] = {}
 
     for node in sorted_nodes:
@@ -506,7 +526,7 @@ def _propagate_squeeze_op(
                     axes = axes_node.attributes["value"]
 
             if axes is not None:
-                raw_list: Sequence[Any] = (
+                raw_list: Sequence[AttributeValue] = (
                     [axes]
                     if isinstance(axes, int)
                     else (axes if isinstance(axes, (list, tuple)) else [])
@@ -547,7 +567,7 @@ def _propagate_unsqueeze_op(
                     axes = axes_node.attributes["value"]
 
             if axes is not None:
-                raw_list: Sequence[Any] = (
+                raw_list: Sequence[AttributeValue] = (
                     [axes]
                     if isinstance(axes, int)
                     else (axes if isinstance(axes, (list, tuple)) else [])

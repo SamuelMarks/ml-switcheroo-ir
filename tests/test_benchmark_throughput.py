@@ -222,14 +222,14 @@ def test_streaming_and_compressed_file_io(tmp_path: Path) -> None:
     assert "n1" in loaded_from_stream.nodes
     assert loaded_from_stream.nodes["n1"].sharding is not None
 
-    # Test legacy format streaming
-    buf_legacy = io.StringIO()
-    graph.to_stream(buf_legacy, format="legacy")
-    assert "edges" not in buf_legacy.getvalue()
+    # Test streaming with custom indent
+    buf_custom = io.StringIO()
+    graph.to_stream(buf_custom, indent=4)
+    assert '"edges":' in buf_custom.getvalue()
 
     # 2. Test raw JSON file I/O
     raw_json_file = tmp_path / "model.json"
-    graph.to_file(raw_json_file, format="legacy")
+    graph.to_file(raw_json_file)
     loaded_from_file = LogicalGraph.from_file(raw_json_file)
     assert loaded_from_file.name == "TestStreaming"
     assert len(loaded_from_file.nodes) == 2

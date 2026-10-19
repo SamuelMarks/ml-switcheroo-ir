@@ -2,28 +2,49 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import TypedDict, cast
+from collections.abc import Mapping, Sequence
+import typing
+from typing_extensions import TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
+PartitionAxisAtom: TypeAlias = typing.Union[str, int, None]
+PartitionAxisInner: TypeAlias = typing.Union[
+    PartitionAxisAtom,
+    tuple[PartitionAxisAtom, ...],
+    list[PartitionAxisAtom],
+]
+PartitionAxisElement: TypeAlias = typing.Union[
+    PartitionAxisInner,
+    tuple[PartitionAxisInner, ...],
+    list[PartitionAxisInner],
+]
 
-@dataclass
-class LogicalAxis:
+
+class LogicalAxis(BaseModel):
     """Represents a named dimension for tensor sizes and sharding (e.g., 'batch', 'embed', 'heads').
 
     Attributes:
         name (str): Name of the logical axis.
-        size (Optional[int]): Optional fixed size of the axis.
+        size (int | None): Optional fixed size of the axis.
     """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str
     size: int | None = None
 
+    def __init__(self, name: str, size: int | None = None) -> None:
+        """Initialize LogicalAxis.
 
-@dataclass
-class PartitionSpec:
+        Args:
+            name (str): Name of the logical axis.
+            size (int | None): Optional fixed size of the axis.
+        """
+        super().__init__(name=name, size=size)
+
+
+class PartitionSpec(BaseModel):
     """Describes how a tensor's dimensions are mapped to a logical mesh.
 
     Each element in `axes` corresponds to a tensor dimension. An element can be:
@@ -32,26 +53,53 @@ class PartitionSpec:
     - None for a replicated/unsharded dimension.
 
     Attributes:
-        axes (Tuple[Optional[Union[str, Tuple[str, ...]]], ...]): Tuple mapping tensor dimensions to mesh axes.
+        axes (tuple[PartitionAxisElement, ...]): Tuple mapping tensor dimensions to mesh axes.
     """
 
-    axes: tuple[str | tuple[str, ...] | None, ...]
+    model_config = ConfigDict(extra="forbid")
+
+    axes: tuple[PartitionAxisElement, ...] = ()
+
+    def __init__(
+        self,
+        axes: Sequence[PartitionAxisElement] = (),
+    ) -> None:
+        """Initialize PartitionSpec normalizing axes into a tuple.
+
+        Args:
+            axes (Sequence[PartitionAxisElement]): Sequence mapping tensor dimensions to mesh axes.
+        """
+        super().__init__(axes=tuple(axes))
 
 
-@dataclass
-class LogicalMesh:
+class LogicalMesh(BaseModel):
     """Represents a multi-dimensional grid of devices for distributed execution.
 
     Attributes:
-        shape (Dict[str, int]): Mapping of mesh axis names to their sizes (e.g., {'data': 4, 'model': 2}).
-        webrtc_topology (Optional[WebRTCSignalingTopology]): WebRTC cluster mesh signaling configuration.
+        shape (dict[str, int]): Mapping of mesh axis names to their sizes (e.g., {'data': 4, 'model': 2}).
+        webrtc_topology (WebRTCSignalingTopology | None): WebRTC cluster mesh signaling configuration.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     shape: dict[str, int]
     webrtc_topology: WebRTCSignalingTopology | None = None
 
+    def __init__(
+        self,
+        shape: Mapping[str, int],
+        webrtc_topology: WebRTCSignalingTopology | None = None,
+    ) -> None:
+        """Initialize LogicalMesh.
 
-class MicrobatchSplittingDict(TypedDict):
+        Args:
+            shape (Mapping[str, int]): Mapping of mesh axis names to their sizes.
+            webrtc_topology (WebRTCSignalingTopology | None): Optional WebRTC cluster mesh signaling configuration.
+        """
+        super().__init__(shape=dict(shape), webrtc_topology=webrtc_topology)
+
+
+class MicrobatchSplittingDict(typing.TypedDict):
     """TypedDict representation of MicrobatchSplittingConfig.
 
     Attributes:
@@ -63,7 +111,7 @@ class MicrobatchSplittingDict(TypedDict):
     num_microbatches: int
 
 
-class MeshMappingDict(TypedDict):
+class MeshMappingDict(typing.TypedDict):
     """TypedDict representation of MeshMappingConfig.
 
     Attributes:
@@ -73,7 +121,7 @@ class MeshMappingDict(TypedDict):
     devices_per_stage: int
 
 
-class StageCommunicationDict(TypedDict):
+class StageCommunicationDict(typing.TypedDict):
     """TypedDict representation of StageCommunicationConfig.
 
     Attributes:
@@ -83,7 +131,7 @@ class StageCommunicationDict(TypedDict):
     protocol: str
 
 
-class DependencyDict(TypedDict):
+class DependencyDict(typing.TypedDict):
     """TypedDict representation of DependencyConfig.
 
     Attributes:
@@ -97,7 +145,7 @@ class DependencyDict(TypedDict):
     offset_mb: int
 
 
-class SchedulePhaseDict(TypedDict):
+class SchedulePhaseDict(typing.TypedDict):
     """TypedDict representation of SchedulePhaseConfig.
 
     Attributes:
@@ -111,7 +159,7 @@ class SchedulePhaseDict(TypedDict):
     count_expression: str
 
 
-class PipelineScheduleDict(TypedDict):
+class PipelineScheduleDict(typing.TypedDict):
     """TypedDict representation of PipelineScheduleConfig.
 
     Attributes:
@@ -121,7 +169,7 @@ class PipelineScheduleDict(TypedDict):
     phases: list[SchedulePhaseDict]
 
 
-class PipelineTopologyDict(TypedDict):
+class PipelineTopologyDict(typing.TypedDict):
     """TypedDict representation of PipelineTopologyConfig.
 
     Attributes:
@@ -139,7 +187,7 @@ class PipelineTopologyDict(TypedDict):
     schedule: PipelineScheduleDict | None
 
 
-class WebRTCPeerDict(TypedDict):
+class WebRTCPeerDict(typing.TypedDict):
     """TypedDict representation of WebRTCPeerConfig.
 
     Attributes:
@@ -155,7 +203,7 @@ class WebRTCPeerDict(TypedDict):
     ice_transport_policy: str
 
 
-class WebRTCSignalingTopologyDict(TypedDict):
+class WebRTCSignalingTopologyDict(typing.TypedDict):
     """TypedDict representation of WebRTCSignalingTopology.
 
     Attributes:
@@ -185,7 +233,7 @@ class MicrobatchSplittingConfig(BaseModel):
         num_microbatches (int): Total number of microbatches.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     strategy: str = "uniform"
     num_microbatches: int = 1
@@ -198,7 +246,7 @@ class MeshMappingConfig(BaseModel):
         devices_per_stage (int): Number of devices assigned to each pipeline stage.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     devices_per_stage: int = 1
 
@@ -210,7 +258,7 @@ class StageCommunicationConfig(BaseModel):
         protocol (str): Transport protocol ('p2p', 'webrtc', 'nccl', 'gloo').
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     protocol: str = "p2p"
 
@@ -224,7 +272,7 @@ class DependencyConfig(BaseModel):
         offset_mb (int): Microbatch offset index.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     source_stage: str
     target_stage: str
@@ -240,7 +288,7 @@ class SchedulePhaseConfig(BaseModel):
         count_expression (str): Expression resolving the execution iteration count.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     type: str = "1F1B"
     operations: list[str] = Field(default_factory=list)
@@ -254,7 +302,7 @@ class PipelineScheduleConfig(BaseModel):
         phases (list[SchedulePhaseConfig]): Ordered schedule phases.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     phases: list[SchedulePhaseConfig] = Field(default_factory=list)
 
@@ -264,13 +312,13 @@ class PipelineTopologyConfig(BaseModel):
 
     Attributes:
         microbatch_splitting (MicrobatchSplittingConfig): Microbatch splitting configuration.
-        mesh_mapping (MeshMappingConfig): Stage device mapping configuration.
+        mesh_mapping (MeshMappingDict): Stage device mapping configuration.
         stage_communication (StageCommunicationConfig): Communication protocol.
         dependencies (list[DependencyConfig]): Inter-stage synchronization dependencies.
         schedule (PipelineScheduleConfig | None): Optional pipeline schedule configuration.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     microbatch_splitting: MicrobatchSplittingConfig
     mesh_mapping: MeshMappingConfig
@@ -284,7 +332,41 @@ class PipelineTopologyConfig(BaseModel):
         Returns:
             PipelineTopologyDict: Strongly typed dictionary representation.
         """
-        return cast("PipelineTopologyDict", self.model_dump())
+        schedule_dict: PipelineScheduleDict | None = (
+            {
+                "phases": [
+                    {
+                        "type": phase.type,
+                        "operations": list(phase.operations),
+                        "count_expression": phase.count_expression,
+                    }
+                    for phase in self.schedule.phases
+                ]
+            }
+            if self.schedule is not None
+            else None
+        )
+        return {
+            "microbatch_splitting": {
+                "strategy": self.microbatch_splitting.strategy,
+                "num_microbatches": self.microbatch_splitting.num_microbatches,
+            },
+            "mesh_mapping": {
+                "devices_per_stage": self.mesh_mapping.devices_per_stage,
+            },
+            "stage_communication": {
+                "protocol": self.stage_communication.protocol,
+            },
+            "dependencies": [
+                {
+                    "source_stage": dep.source_stage,
+                    "target_stage": dep.target_stage,
+                    "offset_mb": dep.offset_mb,
+                }
+                for dep in self.dependencies
+            ],
+            "schedule": schedule_dict,
+        }
 
     @classmethod
     def from_dict(
@@ -311,7 +393,7 @@ class WebRTCPeerConfig(BaseModel):
         ice_transport_policy (str): ICE transport policy ('all', 'relay').
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     peer_id: str
     device_capability: str = "webgpu"
@@ -332,7 +414,7 @@ class WebRTCSignalingTopology(BaseModel):
         peers (list[WebRTCPeerConfig]): List of participating peer specifications.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     signaling_url: str = "ws://localhost:8080"
     ice_servers: list[str] = Field(
@@ -350,7 +432,23 @@ class WebRTCSignalingTopology(BaseModel):
         Returns:
             WebRTCSignalingTopologyDict: Strongly typed dictionary representation.
         """
-        return cast("WebRTCSignalingTopologyDict", self.model_dump())
+        return {
+            "signaling_url": self.signaling_url,
+            "ice_servers": list(self.ice_servers),
+            "high_watermark_bytes": self.high_watermark_bytes,
+            "low_watermark_bytes": self.low_watermark_bytes,
+            "chunk_size_bytes": self.chunk_size_bytes,
+            "connectivity_matrix": [list(row) for row in self.connectivity_matrix],
+            "peers": [
+                {
+                    "peer_id": peer.peer_id,
+                    "device_capability": peer.device_capability,
+                    "network_transport": peer.network_transport,
+                    "ice_transport_policy": peer.ice_transport_policy,
+                }
+                for peer in self.peers
+            ],
+        }
 
     @classmethod
     def from_dict(
@@ -365,3 +463,6 @@ class WebRTCSignalingTopology(BaseModel):
             WebRTCSignalingTopology: Parsed signaling topology instance.
         """
         return cls.model_validate(data)
+
+
+LogicalMesh.model_rebuild()

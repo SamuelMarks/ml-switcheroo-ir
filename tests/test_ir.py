@@ -4,7 +4,6 @@ import json
 import pathlib
 import runpy
 from tempfile import NamedTemporaryFile
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -111,7 +110,7 @@ def test_dataclasses_coverage() -> None:
 def test_not_implemented_errors() -> None:
     """Test that abstract methods raise NotImplementedError."""
 
-    class PartialBackend(CompilerBackend):
+    class PartialBackend(CompilerBackend[object]):
         """A partial implementation of CompilerBackend for testing."""
 
         def compile(self, graph: LogicalGraph) -> object:
@@ -153,10 +152,10 @@ def test_cli_parse_json() -> None:
     json_data = json.dumps(
         {
             "name": "TestModel",
-            "nodes": [
-                {"id": "n1", "kind": "Input", "metadata": {"shape": "2"}},
-                {"id": "n2", "kind": "Output", "inputs": ["n1"]},
-            ],
+            "nodes": {
+                "n1": {"id": "n1", "op_type": "Input", "attributes": {"shape": "2"}},
+                "n2": {"id": "n2", "op_type": "Output", "inputs": ["n1"]},
+            },
         }
     )
 
@@ -169,23 +168,22 @@ def test_cli_parse_json() -> None:
     graph_empty = _parse_graph_from_json("{}")
     assert graph_empty.name == "Model"
     assert len(graph_empty.nodes) == 0
-    assert len(graph_empty.nodes) == 0
 
 
 def test_cli_main(capsys: pytest.CaptureFixture[str]) -> None:
     """Test CLI main entrypoint.
 
     Args:
-        capsys: Pytest fixture to capture stdout and stderr.
+        capsys (pytest.CaptureFixture[str]): Pytest fixture to capture stdout and stderr.
 
     """
     json_data = json.dumps(
         {
             "name": "TestModel",
-            "nodes": [
-                {"id": "n1", "kind": "Input"},
-                {"id": "n2", "kind": "Output", "inputs": ["n1"]},
-            ],
+            "nodes": {
+                "n1": {"id": "n1", "op_type": "Input"},
+                "n2": {"id": "n2", "op_type": "Output", "inputs": ["n1"]},
+            },
         }
     )
 
@@ -207,11 +205,11 @@ def test_cli_main_sys_argv(
     """Test CLI main using sys.argv.
 
     Args:
-        monkeypatch: Pytest fixture to mock attributes.
-        capsys: Pytest fixture to capture stdout and stderr.
+        monkeypatch (pytest.MonkeyPatch): Pytest fixture to mock attributes.
+        capsys (pytest.CaptureFixture[str]): Pytest fixture to capture stdout and stderr.
 
     """
-    json_data = json.dumps({"nodes": [], "edges": []})
+    json_data = json.dumps({"nodes": {}, "edges": []})
     with NamedTemporaryFile(mode="w", delete=False) as f:
         f.write(json_data)
         f_name = f.name
@@ -449,7 +447,7 @@ def test_cli_main_validate_valid(
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
-    f.write_text('{"nodes": []}')
+    f.write_text('{"nodes": {}}')
     with pytest.raises(SystemExit) as e:
         cli_main(["validate", str(f)])
     assert e.value.code == 0
@@ -468,7 +466,7 @@ def test_cli_main_validate_invalid(
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
-    f.write_text('{"nodes": [{"id": "1", "kind": "InvalidOp"}]}')
+    f.write_text('{"nodes": {"1": {"id": "1", "op_type": "InvalidOp"}}}')
     with pytest.raises(SystemExit) as e:
         cli_main(["validate", str(f)])
     assert e.value.code == 1
@@ -487,7 +485,7 @@ def test_cli_main_validate_custom_ops(
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
-    f.write_text('{"nodes": [{"id": "1", "kind": "MyOp", "domain": "custom"}]}')
+    f.write_text('{"nodes": {"1": {"id": "1", "op_type": "MyOp", "domain": "custom"}}}')
     c = tmp_path / "custom.json"
     c.write_text('{"MyOp": {"name": "MyOp", "domain": "custom", "attributes": {}}}')
     with pytest.raises(SystemExit) as e:
@@ -671,7 +669,7 @@ def test_cli_main_validate_warnings_only(
     # Actually, missing required attribute is ERROR.
     # Unknown attribute is WARNING.
     f.write_text(
-        '{"nodes": [{"id": "1", "kind": "Add", "metadata": {"unknown_attr": "val"}}]}'
+        '{"nodes": {"1": {"id": "1", "op_type": "Add", "attributes": {"unknown_attr": "val"}}}}'
     )
     import pytest
 
@@ -756,10 +754,11 @@ def test_from_dict_subgraph_edge_branches() -> None:
             "n": {
                 "id": "n",
                 "op_type": "Op",
-                "subgraphs": {"ignored": 123},
-                "attributes": {
-                    "body_subgraph": direct_sub,
-                    "jvp_graph": "invalid_subgraph_type",
+                "subgraphs": {
+                    "ignored": 123,
+                    "body": direct_sub,
+                    "dict_meta": {"key": "val"},
+                    "list_meta": [1, 2],
                 },
             }
         },
@@ -779,14 +778,15 @@ def test_from_dict_and_from_json_comprehensive() -> None:
     )
     spec_obj = TensorSpec(shape=(1, 4), dtype=DType.float32)
 
-    raw_dict: dict[str, Any] = {
+    raw_dict: dict[str, object] = {
         "name": "FullTestGraph",
         "nodes": {
             "n1": {
                 "id": "n1",
                 "op_type": "Conv",
                 "dtype": "float32",
-                "output_specs": [{"shape": (1, 16), "dtype": "float32"}],
+                "sharding": PartitionSpec(axes=("data", None)),
+                "output_specs": [{"shape": (1, 16), "dtype": "float32"}, spec_obj],
                 "subgraphs": {
                     "sub_direct": sub_graph,
                     "sub_dict": {
@@ -810,8 +810,9 @@ def test_from_dict_and_from_json_comprehensive() -> None:
     g = LogicalGraph.from_dict(raw_dict)
     assert g.name == "FullTestGraph"
     assert g.nodes["n1"].dtype == DType.float32
-    assert len(g.nodes["n1"].output_specs) == 1
+    assert len(g.nodes["n1"].output_specs) == 2
     assert g.nodes["n1"].output_specs[0].shape == (1, 16)
+    assert g.nodes["n1"].output_specs[1] == spec_obj
     assert isinstance(g.nodes["n1"].subgraphs["sub_direct"], LogicalGraph)
     assert isinstance(g.nodes["n1"].subgraphs["sub_dict"], LogicalGraph)
     assert g.input_specs["in_x"] == spec_obj

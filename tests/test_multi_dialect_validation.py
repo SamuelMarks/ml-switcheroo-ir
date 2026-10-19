@@ -257,11 +257,10 @@ def test_grounding_validator_file_audit(tmp_path: Path) -> None:
 
 
 def test_multi_dialect_validator_mlir_registry_integration() -> None:
-    """Test MultiDialectValidator with MLIR_REGISTRY schemas and domains."""
+    """Test Validator with MLIR_REGISTRY schemas and domains."""
     from ml_switcheroo_ir.schema import MLIR_REGISTRY
-    from ml_switcheroo_ir.validator import MultiDialectValidator
 
-    v = MultiDialectValidator(mlir_registry=MLIR_REGISTRY)
+    v = Validator(mlir_registry=MLIR_REGISTRY)
 
     # Valid arith.constant
     c_node = LogicalNode(

@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any, Union
+import typing
+from typing_extensions import TypeAlias
+
+import pydantic
+import pydantic_core
 
 from ml_switcheroo_ir.shapes.polynomial import Polynomial, _poly_to_symnode
 
@@ -110,15 +114,19 @@ class SymNode:
         return self.eval(bindings)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any:
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: object,
+        handler: pydantic.GetCoreSchemaHandler | None = None,
+    ) -> pydantic_core.CoreSchema | None:
         """Generate Pydantic core schema for SymNode serializing as string or integer.
 
         Args:
-            source_type (Any): Source type.
-            handler (Any): Schema generation handler.
+            source_type (object): Source type.
+            handler (pydantic.GetCoreSchemaHandler | None): Schema generation handler.
 
         Returns:
-            Any: Pydantic core schema representation.
+            pydantic_core.CoreSchema | None: Pydantic core schema representation.
         """
         try:
             from pydantic_core import core_schema
@@ -990,25 +998,22 @@ class SymPiecewise(SymNode):
     """Piecewise conditional symbolic node.
 
     Attributes:
-        cases (list[tuple[object, SymNode]]): Sequence of (condition, expr) pairs.
+        cases (list[tuple[SymCondition, SymNode]]): Sequence of (condition, expr) pairs.
         default (SymNode): Default fallback expression node.
     """
 
     def __init__(
         self,
-        cases: list[tuple[object, SymNode]] | None = None,
+        cases: list[tuple[SymCondition, SymNode]] | None = None,
         default: SymNode | None = None,
-        conditions: list[tuple[object, SymNode]] | None = None,
     ) -> None:
         """Initialize SymPiecewise.
 
         Args:
-            cases (list[tuple[object, SymNode]] | None): List of (condition, expr_node).
+            cases (list[tuple[SymCondition, SymNode]] | None): List of (condition, expr_node).
             default (SymNode | None): Fallback node when no conditions are met.
-            conditions (list[tuple[object, SymNode]] | None): Alias for cases.
         """
-        raw_cases = cases if cases is not None else (conditions or [])
-        self.cases: list[tuple[object, SymNode]] = list(raw_cases)
+        self.cases: list[tuple[SymCondition, SymNode]] = list(cases or [])
         self.default: SymNode = default if default is not None else SymConst(0)
 
     def simplify(self) -> SymNode:
@@ -1017,7 +1022,7 @@ class SymPiecewise(SymNode):
         Returns:
             SymNode: Simplified expression node.
         """
-        simplified_cases: list[tuple[object, SymNode]] = []
+        simplified_cases: list[tuple[SymCondition, SymNode]] = []
         for cond, expr in self.cases:
             if isinstance(cond, SymNode):
                 cond = cond.simplify()
@@ -1184,15 +1189,19 @@ class SymInt:
         return self.node.evaluate(bindings)
 
     @classmethod
-    def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any:
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: object,
+        handler: pydantic.GetCoreSchemaHandler | None = None,
+    ) -> pydantic_core.CoreSchema | None:
         """Generate Pydantic core schema for SymInt serializing as string or integer.
 
         Args:
-            source_type (Any): Source type.
-            handler (Any): Schema generation handler.
+            source_type (object): Source type.
+            handler (pydantic.GetCoreSchemaHandler | None): Schema generation handler.
 
         Returns:
-            Any: Pydantic core schema representation.
+            pydantic_core.CoreSchema | None: Pydantic core schema representation.
         """
         try:
             from pydantic_core import core_schema
@@ -1422,6 +1431,8 @@ class SymInt:
         raise TypeError(f"Cannot convert dynamic SymInt '{self.expr}' to concrete int.")
 
 
-DimensionType = Union[int, str, SymNode, SymInt]
-ShapeType = Sequence[DimensionType]
-SymCondition = Union[Callable[[dict[str, int]], bool], SymNode, bool, str]
+DimensionType: TypeAlias = typing.Union[int, str, SymNode, SymInt]
+ShapeType: TypeAlias = Sequence[DimensionType]
+SymCondition: TypeAlias = typing.Union[
+    Callable[[dict[str, int]], bool], SymNode, bool, str
+]
