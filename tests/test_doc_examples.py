@@ -249,7 +249,7 @@ def test_usage_constructing_graphs_and_nodes() -> None:
 
     assert graph["norm"].op_type == "RMSNorm"
     assert len(graph) == 2
-    node_ids = [node.id for node in graph]
+    node_ids = [node.id for node in graph.nodes_list]
     assert node_ids == ["x", "norm"]
 
     validator = Validator()
@@ -553,8 +553,8 @@ def test_usage_collective_communication_estimation() -> None:
 
     coll_graph = LogicalGraph(nodes={"all_reduce1": ar_node}, mesh=mesh)
     summary = estimate_graph_communication_volume(coll_graph)
-    assert summary["total_volume_bytes"] == 6 * 1024 * 1024
-    assert summary["by_axis"]["data"] == 6 * 1024 * 1024
+    assert summary.total_volume_bytes == 6 * 1024 * 1024
+    assert summary.by_axis["data"] == 6 * 1024 * 1024
 
 
 def test_usage_native_graph_optimizations() -> None:

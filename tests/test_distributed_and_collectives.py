@@ -299,16 +299,16 @@ def test_analytical_communication_cost_estimation() -> None:
         mesh=mesh,
     )
     summary = estimate_graph_communication_volume(graph)
-    assert summary["total_volume_bytes"] == expected_ar + expected_ag
-    assert summary["by_axis"]["data"] == expected_ar
-    assert summary["by_axis"]["model"] == expected_ag
-    assert "collective.all_reduce" in summary["by_op"]
+    assert summary.total_volume_bytes == expected_ar + expected_ag
+    assert summary.by_axis["data"] == expected_ar
+    assert summary.by_axis["model"] == expected_ag
+    assert "collective.all_reduce" in summary.by_op
 
     # Also test Validator instance methods
     v = Validator(level=ValidationLevel.STRICT)
     assert v.estimate_communication_volume(ar_node, mesh) == expected_ar
     assert (
-        v.estimate_graph_communication_volume(graph)["total_volume_bytes"]
+        v.estimate_graph_communication_volume(graph).total_volume_bytes
         == expected_ar + expected_ag
     )
 

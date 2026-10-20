@@ -6,7 +6,6 @@ API structures between the ml-ecosystem-snapshots scraper and the ml-switcheroo 
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from enum import Enum
 import typing
 
@@ -97,22 +96,7 @@ class SemanticTier(str, Enum):
     DATALOADER = "dataloader"
 
 
-class _DictAccessModel(BaseModel):
-    """Base Pydantic model providing dictionary-style field lookup."""
-
-    def __getitem__(self, key: str) -> object:
-        """Return attribute value by field name.
-
-        Args:
-            key (str): Field name.
-
-        Returns:
-            object: Field value.
-        """
-        return getattr(self, key)
-
-
-class IsaControlCodesSpec(_DictAccessModel):
+class IsaControlCodesSpec(BaseModel):
     """Pydantic model for ISA instruction control codes and scheduling metadata."""
 
     model_config = ConfigDict(extra="allow")
@@ -125,7 +109,7 @@ class IsaControlCodesSpec(_DictAccessModel):
     wait_barrier_mask: int | str | None = None
 
 
-class IsaStructuredOperandSpec(_DictAccessModel):
+class IsaStructuredOperandSpec(BaseModel):
     """Pydantic model for structured ISA operand specifications."""
 
     model_config = ConfigDict(extra="allow")
@@ -136,7 +120,7 @@ class IsaStructuredOperandSpec(_DictAccessModel):
     register_class: str | None = None
 
 
-class VopdProfileSpec(_DictAccessModel):
+class VopdProfileSpec(BaseModel):
     """Pydantic model for AMD RDNA3 VOPD dual-issue profile."""
 
     model_config = ConfigDict(extra="allow")
@@ -146,7 +130,7 @@ class VopdProfileSpec(_DictAccessModel):
     max_src_operands: int | None = None
 
 
-class RdnaPrimitiveSpec(_DictAccessModel):
+class RdnaPrimitiveSpec(BaseModel):
     """Pydantic model for AMD RDNA instruction primitive specifications."""
 
     model_config = ConfigDict(extra="forbid")
@@ -156,7 +140,7 @@ class RdnaPrimitiveSpec(_DictAccessModel):
     register_classes: dict[str, RegisterClass]
 
 
-class VopdOperatorSpec(_DictAccessModel):
+class VopdOperatorSpec(BaseModel):
     """Pydantic model for RDNA3 VOPD dual-issue operator specifications."""
 
     model_config = ConfigDict(extra="forbid")
@@ -165,7 +149,7 @@ class VopdOperatorSpec(_DictAccessModel):
     slots: list[str]
 
 
-class SassPrimitiveSpec(_DictAccessModel):
+class SassPrimitiveSpec(BaseModel):
     """Pydantic model for NVIDIA SASS instruction primitive specifications."""
 
     model_config = ConfigDict(extra="forbid")
@@ -176,7 +160,7 @@ class SassPrimitiveSpec(_DictAccessModel):
     memory_space: MemorySpace | None = None
 
 
-class WgslPrimitiveSpec(_DictAccessModel):
+class WgslPrimitiveSpec(BaseModel):
     """Pydantic model for WebGPU WGSL primitive signature specifications."""
 
     model_config = ConfigDict(extra="forbid")
@@ -195,7 +179,7 @@ class GhostParam(BaseModel):
     kind: ParameterKind = Field(
         description="Kind of parameter (e.g. POSITIONAL_OR_KEYWORD)."
     )
-    default: str | None = Field(default=None, description="Default value as string.")
+    default: JsonValue = Field(default=None, description="Default value as string.")
     annotation: str | None = Field(
         default=None, description="Type annotation as string."
     )
@@ -225,7 +209,7 @@ class ExtendedGhostParam(GhostParam):
 
     model_config = ConfigDict(extra="allow")
 
-    default: JsonValue = Field(  # type: ignore[assignment]
+    default: JsonValue = Field(
         default=None,
         description="Default value representation.",
     )
@@ -369,7 +353,7 @@ class GhostIsaRef(ExtendedGhostRef):
         default=None,
         description="Register classes for operands (e.g. {'op0': 'VGPR_32', 'op1': 'VReg_64'}).",
     )
-    control_codes: IsaControlCodesSpec | dict[str, JsonValue] | None = Field(
+    control_codes: IsaControlCodesSpec | None = Field(
         default=None,
         description="Instruction control code and scheduling schema.",
     )
@@ -381,13 +365,11 @@ class GhostIsaRef(ExtendedGhostRef):
         default=None,
         description="Structured modifier bitfields (e.g. rounding, cache, saturation).",
     )
-    structured_operands: (
-        list[IsaStructuredOperandSpec | dict[str, JsonValue]] | None
-    ) = Field(
+    structured_operands: list[IsaStructuredOperandSpec] | None = Field(
         default=None,
         description="Detailed operand records with roles, register classes, and immediate constraints.",
     )
-    vopd_profile: VopdProfileSpec | dict[str, JsonValue] | None = Field(
+    vopd_profile: VopdProfileSpec | None = Field(
         default=None,
         description="VOPD dual-issue profile and pairing rules for RDNA3/GFX11.",
     )
@@ -836,75 +818,3 @@ class StandardMap(BaseModel):
     operator: str | None = Field(default=None)
     pack_to_tuple: str | None = Field(default=None)
     macro_template: str | None = Field(default=None)
-
-
-def _normalize_param_kinds(
-    params: Sequence[object],
-) -> list[dict[str, object] | GhostParam]:
-    """Return a new list of parameter dictionaries with normalized ParameterKind strings.
-
-    Args:
-        params (Sequence[object]): Raw parameter list from a GhostRef dictionary.
-
-    Returns:
-        list[dict[str, object] | GhostParam]: Parameter list with normalized kind strings.
-    """
-    normalized: list[dict[str, object] | GhostParam] = []
-    for param in params:
-        if isinstance(param, Mapping):
-            param_copy: dict[str, object] = {str(k): v for k, v in param.items()}
-            kind_val = param_copy.get("kind")
-            if isinstance(kind_val, str):
-                param_copy["kind"] = kind_val.split(".")[-1]
-            normalized.append(param_copy)
-        else:
-            normalized.append(param)  # type: ignore[arg-type]
-    return normalized
-
-
-def migrate_ghost_ref_v2(data: Mapping[str, object]) -> ExtendedGhostRef:
-    """Seamlessly hydrate Ghost Protocol v2 dictionaries into ExtendedGhostRef models.
-
-    Args:
-        data (Mapping[str, object]): Dictionary representation of ghost reference.
-
-    Returns:
-        ExtendedGhostRef: Validated ExtendedGhostRef instance.
-    """
-    data_copy: dict[str, object] = dict(data)
-    if "schema_version" not in data_copy or data_copy["schema_version"] in (
-        "1.0",
-        "1.0.0",
-        "1.2",
-    ):
-        data_copy["schema_version"] = "2.0.0"
-
-    if "kind" not in data_copy:
-        data_copy["kind"] = "function"
-
-    if "name" not in data_copy:
-        mnemonic = data_copy.get("mnemonic")
-        api_path_val = data_copy.get("api_path")
-        if isinstance(mnemonic, str):
-            data_copy["name"] = mnemonic
-        elif isinstance(api_path_val, str):
-            data_copy["name"] = api_path_val.split(".")[-1]
-        else:
-            data_copy["name"] = "unknown"
-
-    if "api_path" not in data_copy:
-        data_copy["api_path"] = data_copy.get("name", "unknown")
-
-    raw_params = data_copy.get("params")
-    if isinstance(raw_params, Sequence) and not isinstance(raw_params, (str, bytes)):
-        data_copy["params"] = _normalize_param_kinds(raw_params)
-
-    domain_type = data_copy.get("domain_type")
-    if domain_type == "python":
-        return GhostPythonRef.model_validate(data_copy)
-    if domain_type == "isa" or domain_type == "instruction" or "mnemonic" in data_copy:
-        return GhostIsaRef.model_validate(data_copy)
-    if domain_type == "mlir" or domain_type == "operation":
-        return GhostMlirRef.model_validate(data_copy)
-
-    return ExtendedGhostRef.model_validate(data_copy)

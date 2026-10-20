@@ -131,7 +131,9 @@ def test_validator_lenient_mode_filters_warnings() -> None:
 
 def test_validator_grounding_integration() -> None:
     """Test Validator with integrated GroundingValidator."""
-    manifest: dict[str, object] = {
+    from ml_switcheroo_ir.validation.grounding import SnapshotManifestNode
+
+    manifest: dict[str, SnapshotManifestNode] = {
         "classes": {},
         "functions": {"ai.onnx.Add": {}},
         "methods": {},

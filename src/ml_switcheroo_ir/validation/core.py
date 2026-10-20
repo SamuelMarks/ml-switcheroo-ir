@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
+
+import pydantic
 
 __all__ = [
     "CORE_MLIR_DIALECTS",
@@ -138,7 +139,18 @@ class ValidationLevel(Enum):
     ERROR = "ERROR"
 
 
-@dataclass
+class _ValidationErrorPayload(pydantic.BaseModel):
+    """Pydantic schema validating ValidationError fields."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    node_id: str
+    attribute: str
+    message: str
+    level: ValidationLevel = ValidationLevel.ERROR
+    suggested_fix: str | None = None
+
+
 class ValidationError(Exception):
     """Represents an error found during graph or node validation.
 
@@ -147,14 +159,45 @@ class ValidationError(Exception):
         attribute (str): The name of the attribute involved, or a general descriptor.
         message (str): The detailed error message.
         level (ValidationLevel): The severity of the error.
-        suggested_fix (Optional[str]): Suggested correction or candidate symbol.
+        suggested_fix (str | None): Suggested correction or candidate symbol.
     """
 
     node_id: str
     attribute: str
     message: str
-    level: ValidationLevel = ValidationLevel.ERROR
-    suggested_fix: str | None = None
+    level: ValidationLevel
+    suggested_fix: str | None
+
+    def __init__(
+        self,
+        node_id: str,
+        attribute: str,
+        message: str,
+        level: ValidationLevel = ValidationLevel.ERROR,
+        suggested_fix: str | None = None,
+    ) -> None:
+        """Initialize ValidationError with Pydantic field validation.
+
+        Args:
+            node_id (str): The ID of the node where the error occurred.
+            attribute (str): The name of the attribute involved.
+            message (str): The detailed error message.
+            level (ValidationLevel): The severity of the error.
+            suggested_fix (str | None): Suggested correction or candidate symbol.
+        """
+        payload = _ValidationErrorPayload(
+            node_id=node_id,
+            attribute=attribute,
+            message=message,
+            level=level,
+            suggested_fix=suggested_fix,
+        )
+        super().__init__(payload.message)
+        self.node_id = payload.node_id
+        self.attribute = payload.attribute
+        self.message = payload.message
+        self.level = payload.level
+        self.suggested_fix = payload.suggested_fix
 
     def __str__(self) -> str:
         """Return formatted string description of the validation error.

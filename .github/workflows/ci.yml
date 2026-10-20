@@ -110,7 +110,7 @@ jobs:
         pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=100
 
     - name: Verify Grounding
-      run: python scripts/verify_grounding.py --strict --snapshots-dir ../ml-framework-snapshots
+      run: python scripts/verify_grounding.py --strict --snapshots-dir ../ml-ecosystem-snapshots
 
     - name: Update Badges
       if: matrix.python-version == '3.12'

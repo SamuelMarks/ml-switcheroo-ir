@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 import copy
 import json
 import string
 import typing
+import typing_extensions
+
+import pydantic
 
 from ml_switcheroo_ir.distributed import (
     LogicalMesh,
@@ -28,10 +31,26 @@ from ml_switcheroo_ir.types import (
 if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.graph import LogicalEdge, LogicalGraph, LogicalNode, NodeDict
 
+    RawGraphValue: typing_extensions.TypeAlias = (
+        AttributeValue
+        | InitializerValue
+        | JsonValue
+        | LogicalGraph
+        | LogicalMesh
+        | PartitionSpec
+        | PipelineTopologyConfig
+        | Collection["RawGraphValue"]
+        | Sequence["RawGraphValue"]
+        | Mapping[str, "RawGraphValue"]
+    )
+else:
+    RawGraphValue: typing_extensions.TypeAlias = JsonValue
+
 __all__ = [
-    "SerializedEdgeDict",
-    "SerializedGraphDict",
-    "SerializedNodeDict",
+    "RawGraphValue",
+    "SerializedEdgeModel",
+    "SerializedGraphModel",
+    "SerializedNodeModel",
     "ZstdCompressorProtocol",
     "ZstdDecompressorProtocol",
     "ZstdModuleProtocol",
@@ -54,8 +73,10 @@ __all__ = [
 ]
 
 
-class SerializedEdgeDict(typing.TypedDict):
-    """Serialized dictionary representation of a LogicalEdge."""
+class SerializedEdgeModel(pydantic.BaseModel):
+    """Pydantic model for a serialized LogicalEdge."""
+
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     source: str
     source_idx: int | None
@@ -64,8 +85,10 @@ class SerializedEdgeDict(typing.TypedDict):
     value_name: str | None
 
 
-class SerializedNodeDict(typing.TypedDict):
-    """Serialized dictionary representation of a LogicalNode."""
+class SerializedNodeModel(pydantic.BaseModel):
+    """Pydantic model for a serialized LogicalNode."""
+
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     attributes: dict[str, AttributeValue]
     device: str | None
@@ -74,28 +97,34 @@ class SerializedNodeDict(typing.TypedDict):
     id: str
     inputs: list[str]
     op_type: str
-    output_specs: list[dict[str, object]]
+    output_specs: list[TensorSpec]
     outputs: list[str]
     shape_metadata: tuple[DimensionType, ...] | None
-    sharding: dict[str, tuple[PartitionAxisElement, ...]] | None
+    sharding: PartitionSpec | None
     source_ast_ref: str | None
     stream: str | None
-    subgraphs: dict[str, object]
+    subgraphs: dict[str, SerializedGraphModel | AttributeValue]
     version: int
 
 
-class SerializedGraphDict(typing.TypedDict):
-    """Serialized dictionary representation of a LogicalGraph."""
+class SerializedGraphModel(pydantic.BaseModel):
+    """Pydantic model for a serialized LogicalGraph."""
 
-    edges: list[SerializedEdgeDict]
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    edges: list[SerializedEdgeModel]
     initializers: dict[str, InitializerValue]
-    input_specs: dict[str, dict[str, object]]
+    input_specs: dict[str, TensorSpec]
     inputs: list[str]
-    mesh: dict[str, object] | None
+    mesh: LogicalMesh | None
     name: str
-    nodes: dict[str, SerializedNodeDict]
+    nodes: dict[str, SerializedNodeModel]
     outputs: list[str]
-    pipeline_topology: dict[str, object] | None
+    pipeline_topology: PipelineTopologyConfig | None
+
+
+SerializedNodeModel.model_rebuild()
+SerializedGraphModel.model_rebuild()
 
 
 class ZstdCompressorProtocol(typing.Protocol):
@@ -164,40 +193,121 @@ def _load_zstandard() -> ZstdModuleProtocol | None:
 zstandard: ZstdModuleProtocol | None = _load_zstandard()
 
 
-def _normalize_partition_axis_atom(raw: object) -> PartitionAxisAtom:
+def _normalize_partition_axis_atom(
+    raw: RawGraphValue | PartitionAxisElement,
+) -> PartitionAxisAtom:
     """Normalize a single leaf partition axis element.
 
     Args:
-        raw (object): Raw leaf element.
+        raw (RawGraphValue | PartitionAxisElement): Raw leaf element.
 
     Returns:
         PartitionAxisAtom: Normalized atom.
     """
-    return raw if raw is None or isinstance(raw, (str, int)) else str(raw)
+    return (
+        raw
+        if raw is None or (isinstance(raw, (str, int)) and not isinstance(raw, bool))
+        else str(raw)
+    )
 
 
-def _normalize_partition_axis(raw: object) -> PartitionAxisElement:
+def _normalize_partition_axis(
+    raw: RawGraphValue | PartitionAxisElement,
+) -> PartitionAxisElement:
     """Recursively normalize raw JSON sharding axis into PartitionAxisElement.
 
     Args:
-        raw (object): Raw axis element from JSON.
+        raw (RawGraphValue | PartitionAxisElement): Raw axis element from JSON.
 
     Returns:
         PartitionAxisElement: Normalized axis element.
     """
     if isinstance(raw, (list, tuple)):
-        return tuple(_normalize_partition_axis(item) for item in raw)  # type: ignore[misc]
+        return tuple(
+            tuple(_normalize_partition_axis_atom(sub) for sub in item)
+            if isinstance(item, (list, tuple))
+            else _normalize_partition_axis_atom(item)
+            for item in raw
+        )
     return _normalize_partition_axis_atom(raw)
 
 
+def _coerce_attribute_value(val: RawGraphValue) -> AttributeValue:
+    """Recursively narrow a RawGraphValue into an AttributeValue.
+
+    Args:
+        val (RawGraphValue): Raw graph value.
+
+    Returns:
+        AttributeValue: Narrowed AttributeValue.
+    """
+    from ml_switcheroo_ir.shapes import SymInt, SymNode
+    from ml_switcheroo_ir.types import TensorShape
+
+    if val is None or isinstance(
+        val,
+        (
+            int,
+            float,
+            str,
+            bool,
+            bytes,
+            SymNode,
+            SymInt,
+            DType,
+            TensorShape,
+            TensorSpec,
+        ),
+    ):
+        return val
+    if isinstance(val, Mapping):
+        return {str(k): _coerce_attribute_value(v) for k, v in val.items()}
+    return (
+        str(val)
+        if isinstance(val, (LogicalMesh, PartitionSpec, PipelineTopologyConfig))
+        else [_coerce_attribute_value(item) for item in val]
+    )
+
+
+def _coerce_initializer_value(val: RawGraphValue) -> InitializerValue:
+    """Recursively narrow a RawGraphValue into an InitializerValue.
+
+    Args:
+        val (RawGraphValue): Raw graph value.
+
+    Returns:
+        InitializerValue: Narrowed InitializerValue.
+    """
+    if isinstance(val, (int, float, bool, str, bytes)):
+        return val
+    if isinstance(val, Mapping):
+        return {str(k): _coerce_initializer_value(v) for k, v in val.items()}
+    return (
+        str(val)
+        if isinstance(
+            val,
+            (
+                LogicalMesh,
+                PartitionSpec,
+                PipelineTopologyConfig,
+                DType,
+                TensorSpec,
+            ),
+        )
+        or not isinstance(val, (list, tuple, set, frozenset))
+        else [_coerce_initializer_value(item) for item in val]
+    )
+
+
 def _parse_node_dict(
-    ndata: Mapping[str, object],
+    ndata: Mapping[str, RawGraphValue],
     graph_cls: type[LogicalGraph],
 ) -> LogicalNode:
     """Deserialize a single LogicalNode from a raw dictionary representation.
 
     Args:
-        ndata (Mapping[str, object]): Raw dictionary describing a node.
+        ndata (Mapping[str, RawGraphValue]):
+            Raw dictionary describing a node.
         graph_cls (type[LogicalGraph]): LogicalGraph class used for recursive subgraphs.
 
     Returns:
@@ -214,7 +324,9 @@ def _parse_node_dict(
 
     raw_attrs = ndata.get("attributes")
     attributes_val: dict[str, AttributeValue] = (
-        dict(raw_attrs) if isinstance(raw_attrs, Mapping) else {}
+        {str(k): _coerce_attribute_value(v) for k, v in raw_attrs.items()}
+        if isinstance(raw_attrs, Mapping)
+        else {}
     )
 
     raw_inputs = ndata.get("inputs")
@@ -351,13 +463,13 @@ def _parse_node_dict(
 
 
 def _parse_subgraphs_from_node_dict(
-    ndata: Mapping[str, object],
+    ndata: Mapping[str, RawGraphValue],
     graph_cls: type[LogicalGraph],
 ) -> dict[str, LogicalGraph | AttributeValue]:
     """Extract and deserialize nested subgraphs from a node dictionary.
 
     Args:
-        ndata (Mapping[str, object]): Node dictionary.
+        ndata (Mapping[str, RawGraphValue]): Node dictionary.
         graph_cls (type[LogicalGraph]): LogicalGraph class for recursive deserialization.
 
     Returns:
@@ -367,18 +479,22 @@ def _parse_subgraphs_from_node_dict(
     subgraphs_data = ndata.get("subgraphs")
     if isinstance(subgraphs_data, Mapping):
         for sub_k, sub_v in subgraphs_data.items():
-            if isinstance(sub_v, Mapping) and ("nodes" in sub_v or "name" in sub_v):
+            if isinstance(sub_v, graph_cls):
+                resolved_subgraphs[str(sub_k)] = sub_v
+            elif isinstance(sub_v, Mapping) and ("nodes" in sub_v or "name" in sub_v):
                 resolved_subgraphs[str(sub_k)] = graph_cls.from_dict(sub_v)
             else:
-                resolved_subgraphs[str(sub_k)] = sub_v
+                resolved_subgraphs[str(sub_k)] = _coerce_attribute_value(sub_v)
     return resolved_subgraphs
 
 
-def _parse_mesh_dict(mesh_data: object) -> LogicalMesh | None:
+def _parse_mesh_dict(
+    mesh_data: RawGraphValue,
+) -> LogicalMesh | None:
     """Deserialize an optional LogicalMesh dictionary.
 
     Args:
-        mesh_data (object): Raw mesh dictionary or None.
+        mesh_data (RawGraphValue): Raw mesh dictionary or None.
 
     Returns:
         LogicalMesh | None: Deserialized LogicalMesh or None.
@@ -387,7 +503,7 @@ def _parse_mesh_dict(mesh_data: object) -> LogicalMesh | None:
         return None
     raw_webrtc = mesh_data.get("webrtc_topology")
     webrtc_topo = (
-        WebRTCSignalingTopology.from_dict(raw_webrtc)
+        WebRTCSignalingTopology.model_validate(raw_webrtc)
         if isinstance(raw_webrtc, Mapping)
         else None
     )
@@ -401,12 +517,13 @@ def _parse_mesh_dict(mesh_data: object) -> LogicalMesh | None:
 
 
 def _parse_input_specs_dict(
-    input_specs_raw: object,
+    input_specs_raw: RawGraphValue,
 ) -> dict[str, TensorSpec]:
     """Deserialize an optional input_specs dictionary into TensorSpec instances.
 
     Args:
-        input_specs_raw (object): Raw input specs dictionary.
+        input_specs_raw (RawGraphValue):
+            Raw input specs dictionary.
 
     Returns:
         dict[str, TensorSpec]: Parsed input specifications.
@@ -576,12 +693,13 @@ def _stream_parse_nodes_section(
         nid, buf, pos = _decode_next_json_value(decoder, buf, pos, stream, chunk_size)
         buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COLON)
         ndata, buf, pos = _decode_next_json_value(decoder, buf, pos, stream, chunk_size)
-        nodes[str(nid)] = _parse_node_dict(ndata, graph_cls)  # type: ignore[arg-type]
+        assert isinstance(ndata, Mapping)
+        nodes[str(nid)] = _parse_node_dict(ndata, graph_cls)
 
 
 def _apply_edges_list(
     nodes: dict[str, LogicalNode],
-    edges_list: Sequence[LogicalEdge | Mapping[str, object]],
+    edges_list: Sequence[LogicalEdge | Mapping[str, RawGraphValue]],
     clear_existing: bool = False,
     edge_value_names: dict[tuple[str, int], str] | None = None,
 ) -> None:
@@ -592,7 +710,7 @@ def _apply_edges_list(
 
     Args:
         nodes (dict[str, LogicalNode]): Graph nodes dictionary.
-        edges_list (Sequence[LogicalEdge | Mapping[str, object]]): Edges to apply.
+        edges_list (Sequence[LogicalEdge | Mapping[str, RawGraphValue]]): Edges to apply.
         clear_existing (bool): Whether to clear existing target_node.inputs first.
         edge_value_names (dict[tuple[str, int], str] | None): Optional mapping of
             (target_id, target_idx) to explicit edge value_name metadata.
@@ -652,14 +770,15 @@ def _apply_edges_list(
 def _build_graph_from_parsed_sections(
     graph_cls: type[LogicalGraph],
     nodes: NodeDict,
-    meta: Mapping[str, object],
+    meta: Mapping[str, RawGraphValue],
 ) -> LogicalGraph:
     """Assemble a LogicalGraph from parsed nodes and top-level metadata sections.
 
     Args:
         graph_cls (type[LogicalGraph]): Target LogicalGraph class.
         nodes (NodeDict): Deserialized nodes dictionary.
-        meta (Mapping[str, object]): Top-level graph metadata fields.
+        meta (Mapping[str, RawGraphValue]):
+            Top-level graph metadata fields.
 
     Returns:
         LogicalGraph: Constructed LogicalGraph instance.
@@ -667,7 +786,7 @@ def _build_graph_from_parsed_sections(
     edge_value_names: dict[tuple[str, int], str] = {}
     edges_data = meta.get("edges")
     if isinstance(edges_data, list):
-        typed_edges: list[LogicalEdge | Mapping[str, object]] = [
+        typed_edges: list[LogicalEdge | Mapping[str, RawGraphValue]] = [
             e for e in edges_data if isinstance(e, Mapping)
         ]
         _apply_edges_list(
@@ -679,7 +798,7 @@ def _build_graph_from_parsed_sections(
 
     pipe_topo_raw = meta.get("pipeline_topology")
     pipe_topo = (
-        PipelineTopologyConfig.from_dict(pipe_topo_raw)
+        PipelineTopologyConfig.model_validate(pipe_topo_raw)
         if isinstance(pipe_topo_raw, Mapping)
         else None
     )
@@ -699,7 +818,9 @@ def _build_graph_from_parsed_sections(
     )
     inits_raw = meta.get("initializers")
     inits_dict: dict[str, InitializerValue] = (
-        dict(inits_raw) if isinstance(inits_raw, Mapping) else {}
+        {str(k): _coerce_initializer_value(v) for k, v in inits_raw.items()}
+        if isinstance(inits_raw, Mapping)
+        else {}
     )
     graph = graph_cls(
         name=str(meta.get("name", "Model")),
@@ -747,7 +868,7 @@ def _stream_parse_graph(
     pos += 1
 
     nodes = _NodeDict()
-    meta: dict[str, object] = {}
+    meta: dict[str, JsonValue] = {}
 
     while True:
         buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COMMA)
@@ -789,18 +910,18 @@ def _indent_json_fragment(fragment: str, base_indent: str) -> str:
     return lines[0] + _NL + _NL.join(base_indent + line for line in lines[1:])
 
 
-def _serialize_node_dict(node: LogicalNode) -> SerializedNodeDict:
+def _serialize_node_dict(node: LogicalNode) -> dict[str, AttributeValue]:
     """Serialize a LogicalNode to a dictionary while preserving canonical nested subgraphs.
 
     Args:
         node (LogicalNode): Node to convert to a dictionary.
 
     Returns:
-        SerializedNodeDict: Dictionary representation of the node.
+        dict[str, AttributeValue]: Dictionary representation of the node.
     """
     from ml_switcheroo_ir.graph import LogicalGraph as _LogicalGraph
 
-    sub_dict: dict[str, object] = {}
+    sub_dict: dict[str, AttributeValue] = {}
     for k, v in node.subgraphs.items():
         if isinstance(v, _LogicalGraph):
             sub_dict[k] = v.to_dict()
@@ -810,7 +931,7 @@ def _serialize_node_dict(node: LogicalNode) -> SerializedNodeDict:
     sharding_dict: dict[str, tuple[PartitionAxisElement, ...]] | None = (
         {"axes": node.sharding.axes} if node.sharding is not None else None
     )
-    output_specs_list: list[dict[str, object]] = [
+    output_specs_list: list[dict[str, AttributeValue]] = [
         {"dtype": spec.dtype, "shape": spec.shape, "sparsity": spec.sparsity}
         for spec in node.output_specs
     ]
@@ -852,7 +973,7 @@ def _stream_write_graph(
     pad1 = " " * indent
     pad2 = " " * (indent * 2)
 
-    mesh_val = (
+    mesh_val: dict[str, JsonValue] | None = (
         {
             "shape": dict(graph.mesh.shape),
             "webrtc_topology": (
@@ -869,7 +990,7 @@ def _stream_write_graph(
         if graph.pipeline_topology is not None
         else None
     )
-    input_specs_val = {
+    input_specs_val: dict[str, dict[str, AttributeValue]] = {
         k: {"dtype": v.dtype, "shape": v.shape, "sparsity": v.sparsity}
         for k, v in sorted(graph.input_specs.items())
     }
@@ -887,7 +1008,7 @@ def _stream_write_graph(
         "pipeline_topology",
     ]
 
-    val_map: dict[str, object] = {
+    val_map: dict[str, AttributeValue | dict[str, InitializerValue]] = {
         "initializers": inits_val,
         "input_specs": input_specs_val,
         "inputs": list(graph.inputs),
@@ -910,7 +1031,7 @@ def _stream_write_graph(
                 fp.write("[" + _NL)
                 for e_idx, edge in enumerate(edges):
                     e_comma = "," if e_idx < len(edges) - 1 else ""
-                    edge_dict: SerializedEdgeDict = {
+                    edge_dict: dict[str, str | int | None] = {
                         "source": edge.source,
                         "source_idx": edge.source_idx,
                         "target": edge.target,

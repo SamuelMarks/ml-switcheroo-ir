@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 import pydantic
+import pydantic_core
 
 from ml_switcheroo_ir.shapes import (
     DimensionType,
@@ -32,13 +33,12 @@ __all__ = [
     "is_dynamic_dimension",
 ]
 
-JsonScalar: TypeAlias = typing.Union[str, int, float, bool, None]
+JsonScalar: typing_extensions.TypeAlias = typing.Union[str, int, float, bool, None]
+
+JsonValue: typing_extensions.TypeAlias = pydantic.JsonValue
 
 if typing.TYPE_CHECKING:
-    JsonValue: TypeAlias = (
-        str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
-    )
-    InitializerValue: TypeAlias = (
+    InitializerValue: typing_extensions.TypeAlias = (
         int
         | float
         | bool
@@ -48,29 +48,24 @@ if typing.TYPE_CHECKING:
         | dict[str, "InitializerValue"]
     )
 else:
-    JsonValue: TypeAlias = typing.Union[
-        JsonScalar,
-        list[object],
-        dict[str, object],
-    ]
-    InitializerValue: TypeAlias = typing.Union[
+    InitializerValue: typing_extensions.TypeAlias = typing.Union[
         int,
         float,
         bool,
         str,
         bytes,
-        list[object],
-        dict[str, object],
+        list[typing.Union[JsonValue, bytes]],
+        dict[str, typing.Union[JsonValue, bytes]],
     ]
 
 
 def is_dynamic_dimension(
-    dim: DimensionType | object,
+    dim: DimensionType | JsonValue,
 ) -> typing.TypeGuard[str | SymNode | SymInt]:
     """Check whether a single dimension value is symbolic or dynamic.
 
     Args:
-        dim (DimensionType | object): Dimension entry to inspect.
+        dim (DimensionType | JsonValue): Dimension entry to inspect.
 
     Returns:
         typing.TypeGuard[str | SymNode | SymInt]: True if the dimension is dynamic, symbolic, negative, or non-integer.
@@ -294,13 +289,11 @@ def _validate_dimension_tuple(
         TypeError: If any dimension is a boolean or not a valid DimensionType.
     """
     if isinstance(dims, TensorShape):
-        raw_dims: tuple[object, ...] = dims.dims
-    elif isinstance(dims, tuple):
-        raw_dims = dims
-    elif not isinstance(dims, (str, bytes, Mapping)) and isinstance(dims, Iterable):
-        raw_dims = tuple(dims)
-    else:
+        raw_dims: Sequence[DimensionType] = dims.dims
+    elif isinstance(dims, (int, str, SymNode, SymInt)):
         raw_dims = (dims,)
+    else:
+        raw_dims = tuple(dims) if isinstance(dims, Iterable) else (dims,)
 
     validated: list[DimensionType] = []
     for d in raw_dims:
@@ -466,14 +459,6 @@ class TensorShape(pydantic.BaseModel):
         """
         return len(self.dims)
 
-    def __iter__(self) -> Iterator[DimensionType]:  # type: ignore[override]
-        """Iterate over dimension sizes.
-
-        Returns:
-            Iterator[DimensionType]: Iterator over dimensions.
-        """
-        return iter(self.dims)
-
     @typing.overload
     def __getitem__(self, idx: int) -> DimensionType:
         """Retrieve a single dimension by integer index.
@@ -535,7 +520,7 @@ class TensorShape(pydantic.BaseModel):
         return hash(self.dims)
 
 
-ShapeMetadataType: TypeAlias = typing.Union[
+ShapeMetadataType: typing_extensions.TypeAlias = typing.Union[
     tuple[DimensionType, ...],
     Sequence[DimensionType],
     TensorShape,
@@ -634,7 +619,7 @@ class _AttributeValuePydanticAnnotation:
         cls,
         source_type: object,
         handler: pydantic.GetCoreSchemaHandler,
-    ) -> object:
+    ) -> pydantic_core.CoreSchema:
         """Return core_schema.any_schema() for runtime AttributeValue preservation.
 
         Args:
@@ -642,16 +627,14 @@ class _AttributeValuePydanticAnnotation:
             handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
 
         Returns:
-            object: Pydantic CoreSchema instance.
+            pydantic_core.CoreSchema: Pydantic CoreSchema instance.
         """
-        from pydantic_core import core_schema
-
         del source_type, handler
-        return core_schema.any_schema()
+        return pydantic_core.core_schema.any_schema()
 
 
 if typing.TYPE_CHECKING:
-    AttributeValue: TypeAlias = (
+    AttributeValue: typing_extensions.TypeAlias = (
         int
         | float
         | str
@@ -667,6 +650,6 @@ if typing.TYPE_CHECKING:
         | Mapping[str, "AttributeValue"]
     )
 else:
-    AttributeValue: TypeAlias = typing.Annotated[
-        object, _AttributeValuePydanticAnnotation
+    AttributeValue: typing_extensions.TypeAlias = typing.Annotated[
+        JsonValue, _AttributeValuePydanticAnnotation
     ]

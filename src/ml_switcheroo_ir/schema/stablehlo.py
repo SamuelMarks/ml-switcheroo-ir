@@ -15,6 +15,7 @@ from ml_switcheroo_ir.schema.base import (
     load_op_schema_catalog,
 )
 from ml_switcheroo_ir.snapshots import find_schema_file
+from ml_switcheroo_ir.types import JsonValue
 
 _logger = logging.getLogger(__name__)
 
@@ -22,12 +23,12 @@ STABLEHLO_REGISTRY: dict[str, OpSchema] = {}
 
 
 def parse_stablehlo_exhaustive_operations(
-    operations: Sequence[Mapping[str, object]],
+    operations: Sequence[Mapping[str, JsonValue]],
 ) -> dict[str, OpSchema]:
     """Parse raw operations from stablehlo_exhaustive.json into OpSchema objects.
 
     Args:
-        operations (Sequence[Mapping[str, object]]): Raw StableHLO operation dictionaries.
+        operations (Sequence[Mapping[str, JsonValue]]): Raw StableHLO operation dictionaries.
 
     Returns:
         dict[str, OpSchema]: Mapping of StableHLO operator names to OpSchema definitions.

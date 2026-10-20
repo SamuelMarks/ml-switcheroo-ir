@@ -15,11 +15,12 @@ from ml_switcheroo_ir.schema.ghost import (
     GhostPythonRef,
     GhostResult,
     IRParameterRole,
+    IsaControlCodesSpec,
+    IsaStructuredOperandSpec,
     OperandDirection,
     ParameterKind,
     RegisterClass,
     SnapshotEnvelope,
-    migrate_ghost_ref_v2,
 )
 from ml_switcheroo_ir.validator import ValidationLevel, Validator
 
@@ -96,10 +97,9 @@ def test_ghost_isa_ref() -> None:
         name="FFMA",
         api_path="nvidia_sass.ffma",
         kind="instruction",
-        domain_type="isa",
         predicate_guards=["@P0", "@!PT"],
         register_classes={"op0": "R0", "op1": "R1"},
-        control_codes={"latency": 4},
+        control_codes=IsaControlCodesSpec(latency=4),
         instruction_modifiers=[".SAT", ".FTZ"],
         operand_signatures=[["vgpr", "vgpr", "sgpr"]],
         allowed_modifiers=[".SAT", ".FTZ"],
@@ -113,7 +113,7 @@ def test_ghost_isa_ref() -> None:
     assert ref.predicate_guards == ["@P0", "@!PT"]
     assert ref.register_classes == {"op0": "R0", "op1": "R1"}
     assert ref.control_codes is not None
-    assert ref.control_codes["latency"] == 4
+    assert ref.control_codes.latency == 4
     assert ref.instruction_modifiers == [".SAT", ".FTZ"]
     assert ref.operand_signatures == [["vgpr", "vgpr", "sgpr"]]
     assert ref.allowed_modifiers == [".SAT", ".FTZ"]
@@ -168,41 +168,8 @@ def test_snapshot_envelope() -> None:
     assert env.supported_microarchitectures == ["sm_90", "gfx942"]
 
 
-def test_migrate_ghost_ref_v2_backward_compatibility() -> None:
-    """Test migrating v1.x and v2.x dicts with migrate_ghost_ref_v2."""
-    v1_dict = {
-        "name": "Linear",
-        "api_path": "torch.nn.Linear",
-        "kind": "class",
-        "schema_version": "1.0",
-        "params": [
-            {
-                "name": "in_features",
-                "kind": "inspect._ParameterKind.POSITIONAL_OR_KEYWORD",
-            },
-            {"name": "bias", "kind": "KEYWORD_ONLY"},
-        ],
-    }
-    migrated_v1 = migrate_ghost_ref_v2(v1_dict)
-    assert migrated_v1.schema_version == "2.0.0"
-
-    # Test no schema_version provided defaults to 2.0.0
-    no_version_dict = {
-        "name": "Linear0",
-        "api_path": "torch.nn.Linear0",
-        "kind": "class",
-    }
-    assert migrate_ghost_ref_v2(no_version_dict).schema_version == "2.0.0"
-
-    # Test dict without params key
-    no_params_dict = {
-        "name": "LinearDict",
-        "api_path": "torch.nn.LinearDict",
-        "kind": "class",
-    }
-    assert migrate_ghost_ref_v2(no_params_dict).schema_version == "2.0.0"
-
-    # Test params containing GhostParam instance directly
+def test_ghost_ref_v2_model_validation() -> None:
+    """Test validating Ghost Protocol v2 dicts with ExtendedGhostRef, GhostIsaRef, and GhostMlirRef."""
     gp = GhostParam(name="y", kind=ParameterKind.KEYWORD_ONLY)
     param_int_dict = {
         "name": "LinearParam",
@@ -213,16 +180,15 @@ def test_migrate_ghost_ref_v2_backward_compatibility() -> None:
             gp,
         ],
     }
-    assert len(migrate_ghost_ref_v2(param_int_dict).params) == 2
+    assert len(ExtendedGhostRef.model_validate(param_int_dict).params) == 2
 
-    # Test existing 2.0.0 schema version preserved
     v2_dict = {
         "name": "Linear2",
         "api_path": "torch.nn.Linear2",
         "kind": "class",
         "schema_version": "2.0.0",
     }
-    assert migrate_ghost_ref_v2(v2_dict).schema_version == "2.0.0"
+    assert ExtendedGhostRef.model_validate(v2_dict).schema_version == "2.0.0"
 
     isa_dict = {
         "name": "V_ADD_F32",
@@ -231,9 +197,9 @@ def test_migrate_ghost_ref_v2_backward_compatibility() -> None:
         "domain_type": "isa",
         "predicate_guards": ["@vcc"],
     }
-    migrated_isa = migrate_ghost_ref_v2(isa_dict)
-    assert isinstance(migrated_isa, GhostIsaRef)
-    assert migrated_isa.predicate_guards == ["@vcc"]
+    validated_isa = GhostIsaRef.model_validate(isa_dict)
+    assert isinstance(validated_isa, GhostIsaRef)
+    assert validated_isa.predicate_guards == ["@vcc"]
 
     isa_instr_dict = {
         "name": "V_ADD_F32_INSTR",
@@ -241,7 +207,7 @@ def test_migrate_ghost_ref_v2_backward_compatibility() -> None:
         "kind": "instruction",
         "domain_type": "instruction",
     }
-    assert isinstance(migrate_ghost_ref_v2(isa_instr_dict), GhostIsaRef)
+    assert isinstance(GhostIsaRef.model_validate(isa_instr_dict), GhostIsaRef)
 
     mlir_dict = {
         "name": "matmul",
@@ -250,9 +216,9 @@ def test_migrate_ghost_ref_v2_backward_compatibility() -> None:
         "domain_type": "mlir",
         "traits": ["ContractionOpInterface"],
     }
-    migrated_mlir = migrate_ghost_ref_v2(mlir_dict)
-    assert isinstance(migrated_mlir, GhostMlirRef)
-    assert migrated_mlir.traits == ["ContractionOpInterface"]
+    validated_mlir = GhostMlirRef.model_validate(mlir_dict)
+    assert isinstance(validated_mlir, GhostMlirRef)
+    assert validated_mlir.traits == ["ContractionOpInterface"]
 
     mlir_op_dict = {
         "name": "matmul_op",
@@ -260,7 +226,7 @@ def test_migrate_ghost_ref_v2_backward_compatibility() -> None:
         "kind": "operation",
         "domain_type": "operation",
     }
-    assert isinstance(migrate_ghost_ref_v2(mlir_op_dict), GhostMlirRef)
+    assert isinstance(GhostMlirRef.model_validate(mlir_op_dict), GhostMlirRef)
 
 
 def test_ghost_python_ref_and_aliases() -> None:
@@ -302,55 +268,16 @@ def test_extended_ghost_param_and_isa_advanced_fields() -> None:
         api_path="nvidia_sass.hmma",
         kind="instruction",
         structured_modifiers={"rounding": "rn"},
-        structured_operands=[{"role": "dst", "reg": "R0"}],
+        structured_operands=[IsaStructuredOperandSpec(role="dst", reg="R0")],
         condition_codes=["CC.EQ"],
         supported_architectures=["sm_80", "sm_90"],
     )
     assert isa.structured_modifiers == {"rounding": "rn"}
     assert isa.structured_operands is not None
-    assert isa.structured_operands[0]["role"] == "dst"
-    assert isa.structured_operands[0]["reg"] == "R0"
+    assert isa.structured_operands[0].role == "dst"
+    assert isa.structured_operands[0].reg == "R0"
     assert isa.condition_codes == ["CC.EQ"]
     assert isa.supported_architectures == ["sm_80", "sm_90"]
-
-
-def test_migrate_ghost_ref_v2_polymorphic_branches() -> None:
-    """Test polymorphic hydration and inference branches in migrate_ghost_ref_v2."""
-    # 1. Python domain
-    py_dict = {
-        "name": "relu",
-        "api_path": "torch.nn.functional.relu",
-        "domain_type": "python",
-    }
-    migrated_py = migrate_ghost_ref_v2(py_dict)
-    assert isinstance(migrated_py, GhostPythonRef)
-    assert migrated_py.kind == "function"  # Inferred kind
-
-    # 2. Raw ISA mnemonic without name or api_path
-    raw_isa = {
-        "mnemonic": "FFMA_RAW",
-        "modifiers": [".SAT"],
-    }
-    migrated_raw_isa = migrate_ghost_ref_v2(raw_isa)
-    assert isinstance(migrated_raw_isa, GhostIsaRef)
-    assert migrated_raw_isa.name == "FFMA_RAW"
-    assert migrated_raw_isa.api_path == "FFMA_RAW"
-
-    # 3. Dict without name, but with api_path
-    api_only_dict = {
-        "api_path": "arith.addf",
-        "domain_type": "mlir",
-    }
-    migrated_api = migrate_ghost_ref_v2(api_only_dict)
-    assert isinstance(migrated_api, GhostMlirRef)
-    assert migrated_api.name == "addf"
-
-    # 4. Dict with neither name nor api_path
-    empty_names_dict = {
-        "kind": "custom",
-    }
-    migrated_empty = migrate_ghost_ref_v2(empty_names_dict)
-    assert migrated_empty.name is None or migrated_empty.api_path == "unknown"
 
 
 def test_rdna_instruction_grounding_and_bank_conflicts() -> None:
@@ -364,7 +291,7 @@ def test_rdna_instruction_grounding_and_bank_conflicts() -> None:
     ):
         assert op_name in RDNA_INSTRUCTION_PRIMITIVES
         prim = RDNA_INSTRUCTION_PRIMITIVES[op_name]
-        assert prim["mnemonic"] == op_name
+        assert prim.mnemonic == op_name
         assert prim.register_classes["dst"] == RegisterClass.VGPR
 
     v_strict = Validator(level=ValidationLevel.STRICT)
@@ -644,36 +571,35 @@ def test_ghost_v2_c_extension_and_accepted_kwargs() -> None:
     assert reloaded_json.is_c_extension is True
     assert reloaded_json.accepted_kwargs == ["inplace", "generator"]
 
-    # Test migration from v1.x dictionary with fields present
-    v1_data = {
+    # Test validation from v2.0.0 dictionary with fields present
+    v2_data = {
         "name": "add",
         "api_path": "torch.add",
         "kind": "function",
-        "schema_version": "1.0",
+        "schema_version": "2.0.0",
         "is_c_extension": True,
         "accepted_kwargs": ["alpha", "out"],
     }
-    migrated_v2_ref = migrate_ghost_ref_v2(v1_data)
-    assert migrated_v2_ref.is_c_extension is True
-    assert migrated_v2_ref.accepted_kwargs == ["alpha", "out"]
-    assert migrated_v2_ref.schema_version == "2.0.0"
+    validated_v2_ref = ExtendedGhostRef.model_validate(v2_data)
+    assert validated_v2_ref.is_c_extension is True
+    assert validated_v2_ref.accepted_kwargs == ["alpha", "out"]
+    assert validated_v2_ref.schema_version == "2.0.0"
 
-    # Test migration from v1.x dictionary without fields defaults appropriately
-    v1_no_c_data = {
+    # Test validation from dictionary without fields defaults appropriately
+    no_c_data = {
         "name": "cos",
         "api_path": "torch.cos",
         "kind": "function",
-        "schema_version": "1.0",
     }
-    migrated_default = migrate_ghost_ref_v2(v1_no_c_data)
-    assert migrated_default.is_c_extension is False
-    assert migrated_default.accepted_kwargs is None
+    validated_default = ExtendedGhostRef.model_validate(no_c_data)
+    assert validated_default.is_c_extension is False
+    assert validated_default.accepted_kwargs is None
 
-    # Test bidirectional serialization roundtrip across v1.x and v2.x
-    v2_dump = migrated_v2_ref.model_dump()
+    # Test bidirectional serialization roundtrip
+    v2_dump = validated_v2_ref.model_dump()
     assert v2_dump["is_c_extension"] is True
     assert v2_dump["accepted_kwargs"] == ["alpha", "out"]
-    roundtrip_v2 = migrate_ghost_ref_v2(v2_dump)
+    roundtrip_v2 = ExtendedGhostRef.model_validate(v2_dump)
     assert roundtrip_v2.is_c_extension is True
     assert roundtrip_v2.accepted_kwargs == ["alpha", "out"]
 

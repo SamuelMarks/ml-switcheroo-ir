@@ -24,6 +24,9 @@ from ml_switcheroo_ir.schema.ghost import (
     RDNA_INSTRUCTION_PRIMITIVES,
     SASS_INSTRUCTION_PRIMITIVES,
     WGSL_PRIMITIVE_SIGNATURES,
+    RdnaPrimitiveSpec,
+    SassPrimitiveSpec,
+    WgslPrimitiveSpec,
 )
 from ml_switcheroo_ir.schema.low_level_registries import (
     METAL_REGISTRY,
@@ -388,7 +391,11 @@ class Validator:
 
         secondary = self._get_domain_registry(node.domain)
         if secondary is not None:
-            extra_primitives: Mapping[str, object] = {}
+            extra_primitives: (
+                Mapping[str, RdnaPrimitiveSpec]
+                | Mapping[str, SassPrimitiveSpec]
+                | Mapping[str, WgslPrimitiveSpec]
+            ) = {}
             if node.domain in ("amd_rdna", "rdna"):
                 extra_primitives = RDNA_INSTRUCTION_PRIMITIVES
             elif node.domain in ("nvidia_sass", "sass"):

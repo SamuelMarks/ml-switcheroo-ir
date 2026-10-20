@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import typing
+import typing_extensions
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,7 +54,7 @@ class OnnxSchemaProtocol(typing.Protocol):
     name: str
     since_version: int
     domain: str
-    attributes: Mapping[str, object]
+    attributes: Mapping[str, JsonValue]
     inputs: Sequence[OnnxParamProtocol]
     outputs: Sequence[OnnxParamProtocol]
 
@@ -73,19 +74,24 @@ def extract_section(block: str, section_name: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+OnnxOpEntryValue: typing_extensions.TypeAlias = typing.Union[
+    str, int, list[str], dict[str, dict[str, JsonValue]]
+]
+
+
 def cross_validate_with_onnx_defs(
-    ops: dict[str, dict[str, object]],
-) -> dict[str, dict[str, object]]:
+    ops: dict[str, dict[str, OnnxOpEntryValue]],
+) -> dict[str, dict[str, OnnxOpEntryValue]]:
     """Cross-validate parsed operator schemas against official onnx.defs if available.
 
     Eliminates hallucinated attributes, corrects inputs on zero-input operators, and
     harmonizes domains.
 
     Args:
-        ops (dict[str, dict[str, object]]): Parsed operator dictionary.
+        ops (dict[str, dict[str, OnnxOpEntryValue]]): Parsed operator dictionary.
 
     Returns:
-        dict[str, dict[str, object]]: Cleaned, grounded operator dictionary.
+        dict[str, dict[str, OnnxOpEntryValue]]: Cleaned, grounded operator dictionary.
     """
     try:
         import onnx.defs
@@ -124,7 +130,7 @@ def cross_validate_with_onnx_defs(
 
 def parse_onnx_docs(
     md_file: str, cross_validate: bool = False
-) -> dict[str, dict[str, object]]:
+) -> dict[str, dict[str, OnnxOpEntryValue]]:
     """Parse ONNX Operators.md markdown documentation to extract op schemas.
 
     Args:
@@ -132,7 +138,7 @@ def parse_onnx_docs(
         cross_validate (bool): Whether to cross-validate against canonical onnx.defs.
 
     Returns:
-        dict[str, dict[str, object]]: Dictionary mapping operator names to operator schema definitions.
+        dict[str, dict[str, OnnxOpEntryValue]]: Dictionary mapping operator names to operator schema definitions.
     """
     with open(md_file, "r", encoding="utf-8") as f:
         content = f.read()
@@ -146,7 +152,7 @@ def parse_onnx_docs(
         flags=re.MULTILINE,
     )
 
-    ops: dict[str, dict[str, object]] = {}
+    ops: dict[str, dict[str, OnnxOpEntryValue]] = {}
 
     for block in op_blocks[1:]:  # skip first block which is preamble
         name_match = re.search(r'^<a\s+name="[^"]+">\*\*(.*?)\*\*</a>', block)

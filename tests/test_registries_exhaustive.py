@@ -418,7 +418,6 @@ def test_onnx_schemas_loader_edge_cases(tmp_path: Path) -> None:
             "domain": "ai.onnx",
             "version": 1,
             "schema_version": 18,
-            "deprecated": True,
             "inputs": ["x"],
             "outputs": ["y"],
             "attributes": {
@@ -436,7 +435,6 @@ def test_onnx_schemas_loader_edge_cases(tmp_path: Path) -> None:
     res = onnx_registry.load_onnx_schemas(json_path=custom_file)
     assert "CustomOp" in res
     assert res["CustomOp"].schema_version == 18
-    assert res["CustomOp"].deprecated is True
     assert "dict_attr" in res["CustomOp"].attributes
     assert res["CustomOp"].attributes["dict_attr"].required is True
     assert res["CustomOp"].attributes["dict_attr"].default == 42

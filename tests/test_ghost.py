@@ -7,6 +7,7 @@ from pydantic import BaseModel, ValidationError
 
 from ml_switcheroo_ir.schema.ghost import (
     ExtendedGhostParam,
+    ExtendedGhostRef,
     GhostParam,
     GhostRef,
     LogicOp,
@@ -14,7 +15,6 @@ from ml_switcheroo_ir.schema.ghost import (
     SemanticTier,
     SnapshotEnvelope,
     StandardMap,
-    migrate_ghost_ref_v2,
 )
 
 
@@ -70,39 +70,8 @@ def test_standard_map_model() -> None:
     assert sm.macro_template is None
 
 
-def test_migrate_ghost_ref_v2_hydration() -> None:
-    """Test hydrating schema dicts into v2.0.0 ExtendedGhostRef."""
-    v1_data = {
-        "name": "old_func",
-        "api_path": "old.func",
-        "kind": "function",
-        "has_varargs": True,
-        "params": [
-            {
-                "name": "a",
-                "kind": "POSITIONAL_OR_KEYWORD",
-            },
-            {
-                "name": "b",
-                "kind": "_ParameterKind.POSITIONAL_OR_KEYWORD",
-            },
-        ],
-    }
-
-    ref = migrate_ghost_ref_v2(v1_data)
-
-    assert ref.schema_version == "2.0.0"
-    assert ref.name == "old_func"
-    assert ref.has_varargs is True
-    assert len(ref.params) == 2
-    assert ref.params[0].name == "a"
-    assert ref.params[0].kind == ParameterKind.POSITIONAL_OR_KEYWORD
-    assert ref.params[1].name == "b"
-    assert ref.params[1].kind == ParameterKind.POSITIONAL_OR_KEYWORD
-
-
-def test_migrate_ghost_ref_v2_preserves_version() -> None:
-    """Test migrating v2.x schema dict to ExtendedGhostRef."""
+def test_extended_ghost_ref_validation() -> None:
+    """Test validating schema dicts into v2.0.0 ExtendedGhostRef."""
     v2_data = {
         "name": "new_func",
         "api_path": "new.func",
@@ -117,35 +86,35 @@ def test_migrate_ghost_ref_v2_preserves_version() -> None:
         ],
     }
 
-    ref = migrate_ghost_ref_v2(v2_data)
+    ref = ExtendedGhostRef.model_validate(v2_data)
     assert ref.schema_version == "2.0.0"
     assert ref.name == "new_func"
     assert ref.params[0].kind == ParameterKind.POSITIONAL_ONLY
 
 
-def test_migrate_ghost_ref_no_params() -> None:
-    """Test migrating ghost ref with no params key."""
-    v1_data = {
+def test_extended_ghost_ref_no_params() -> None:
+    """Test validating ghost ref with no params key."""
+    data = {
         "name": "no_params",
         "api_path": "no.params",
         "kind": "function",
         "has_varargs": False,
     }
-    ref = migrate_ghost_ref_v2(v1_data)
+    ref = ExtendedGhostRef.model_validate(data)
     assert ref.schema_version == "2.0.0"
     assert len(ref.params) == 0
 
 
-def test_migrate_ghost_ref_param_no_kind() -> None:
-    """Test migrating ghost ref where a param lacks a kind (for branch coverage)."""
-    v1_data = {
+def test_extended_ghost_ref_param_no_kind() -> None:
+    """Test validating ghost ref where a param lacks a kind."""
+    bad_data = {
         "name": "bad_param",
         "api_path": "bad.param",
         "kind": "function",
         "params": [{"name": "x"}],
     }
     with pytest.raises(ValueError):
-        migrate_ghost_ref_v2(v1_data)
+        ExtendedGhostRef.model_validate(bad_data)
 
 
 def test_extended_ghost_param_canonical_constraints() -> None:

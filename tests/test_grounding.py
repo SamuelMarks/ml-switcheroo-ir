@@ -167,7 +167,9 @@ def test_compute_levenshtein() -> None:
 
 def test_grounding_validator_list_manifest() -> None:
     """Test GroundingValidator ingesting top-level list manifests and unnamed attribute/operand entries."""
-    list_manifest = [
+    from ml_switcheroo_ir.validation.grounding import SnapshotManifestType
+
+    list_manifest: SnapshotManifestType = [
         {
             "name": "dot_general",
             "api_path": "stablehlo.dot_general",
@@ -289,7 +291,9 @@ def test_grounding_validator_directory_and_audit_graph(tmp_path: Path) -> None:
 
 def test_grounding_validator_fuzzy_suggestions() -> None:
     """Test fuzzy typo suggestions for hallucinated operators and attributes."""
-    snapshot = {
+    from ml_switcheroo_ir.validation.grounding import SnapshotManifestType
+
+    snapshot: SnapshotManifestType = {
         "stablehlo.dot_general": {
             "name": "dot_general",
             "api_path": "stablehlo.dot_general",
@@ -413,8 +417,8 @@ def test_grounding_validator_accepted_kwargs() -> None:
     assert "Ungrounded attribute 'hallucinated_kwarg'" in errs[0].message
 
 
-def test_grounding_against_ml_framework_snapshots_golden(tmp_path: Path) -> None:
-    """Verify GroundingValidator against real ml-framework-snapshots datasets or synthesized golden fixture.
+def test_grounding_against_ml_ecosystem_snapshots_golden(tmp_path: Path) -> None:
+    """Verify GroundingValidator against real ml-ecosystem-snapshots datasets or synthesized golden fixture.
 
     Args:
         tmp_path (Path): Temporary path fixture for generating test snapshots.
@@ -498,7 +502,7 @@ def test_grounding_against_dumped_ir_snapshot(tmp_path: Path) -> None:
     assert not gv_ir.validate_grounding(node_good)
 
 
-def test_grounding_against_ml_framework_snapshots_golden_fallback(
+def test_grounding_against_ml_ecosystem_snapshots_golden_fallback(
     tmp_path: Path,
 ) -> None:
     """Test fallback branch when live snapshot directory has no stablehlo*.json files.
@@ -509,7 +513,7 @@ def test_grounding_against_ml_framework_snapshots_golden_fallback(
     empty_snap_dir = tmp_path / "empty_snaps"
     empty_snap_dir.mkdir(parents=True, exist_ok=True)
     with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(empty_snap_dir)):
-        test_grounding_against_ml_framework_snapshots_golden(tmp_path)
+        test_grounding_against_ml_ecosystem_snapshots_golden(tmp_path)
 
 
 def test_snapshots_dir_resolution_env_and_siblings(tmp_path: Path) -> None:

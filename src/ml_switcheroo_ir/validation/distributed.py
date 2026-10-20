@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import typing
+import pydantic
 
 from ml_switcheroo_ir.distributed import PartitionAxisElement
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalMesh, LogicalNode
@@ -19,14 +19,16 @@ __all__ = [
 ]
 
 
-class CommunicationVolumeReport(typing.TypedDict):
-    """Typed dictionary reporting analytical collective communication volume.
+class CommunicationVolumeReport(pydantic.BaseModel):
+    """Pydantic model reporting analytical collective communication volume.
 
     Attributes:
         total_volume_bytes (int): Total bytes transferred across all collective nodes.
         by_axis (dict[str, int]): Breakdown of communication volume in bytes per mesh axis.
         by_op (dict[str, int]): Breakdown of communication volume in bytes per operator type.
     """
+
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     total_volume_bytes: int
     by_axis: dict[str, int]
@@ -124,11 +126,11 @@ def estimate_graph_communication_volume(
             by_axis[axis] = by_axis.get(axis, 0) + vol
             by_op[node.op_type] = by_op.get(node.op_type, 0) + vol
 
-    return {
-        "total_volume_bytes": total_bytes,
-        "by_axis": by_axis,
-        "by_op": by_op,
-    }
+    return CommunicationVolumeReport(
+        total_volume_bytes=total_bytes,
+        by_axis=by_axis,
+        by_op=by_op,
+    )
 
 
 def validate_sharding_node(

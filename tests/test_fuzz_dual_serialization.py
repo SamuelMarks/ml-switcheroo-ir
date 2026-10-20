@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import typing
 
 import hypothesis.strategies as st
 from hypothesis import given, settings
@@ -138,7 +139,7 @@ def test_fuzz_pythonic_cst_eval(graph: LogicalGraph) -> None:
     from ml_switcheroo_ir.export import export_to_python
 
     py_code = export_to_python(graph, function_name="build_fuzzed_graph")
-    scope: dict[str, object] = {}
+    scope: dict[str, typing.Callable[[], LogicalGraph]] = {}
     exec(py_code, scope)  # noqa: S102
     builder_fn = scope["build_fuzzed_graph"]
     assert callable(builder_fn)

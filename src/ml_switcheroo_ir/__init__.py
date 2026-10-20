@@ -15,12 +15,10 @@ from ml_switcheroo_ir.distributed import (
     MicrobatchSplittingConfig,
     PipelineScheduleConfig,
     PipelineTopologyConfig,
-    PipelineTopologyDict,
     SchedulePhaseConfig,
     StageCommunicationConfig,
     WebRTCPeerConfig,
     WebRTCSignalingTopology,
-    WebRTCSignalingTopologyDict,
 )
 from ml_switcheroo_ir.export import (
     export_schemas,
@@ -131,7 +129,6 @@ __all__ = [
     "PartitionSpec",
     "PipelineScheduleConfig",
     "PipelineTopologyConfig",
-    "PipelineTopologyDict",
     "Polynomial",
     "SchedulePhaseConfig",
     "ShapeMetadataType",
@@ -152,7 +149,6 @@ __all__ = [
     "TensorSpec",
     "WebRTCPeerConfig",
     "WebRTCSignalingTopology",
-    "WebRTCSignalingTopologyDict",
     "ZeroTangent",
     "__version__",
     "_load_zstandard",

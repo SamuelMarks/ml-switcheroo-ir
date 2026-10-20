@@ -123,13 +123,7 @@ def test_grounding_validator_engine_exception_handling(tmp_path: Path) -> None:
         gv_fail = GroundingValidator()
         assert gv_fail._engine is None
 
-    with (
-        patch.dict("sys.modules", {"ml_ecosystem_snapshots.grounding.engine": None}),
-        patch(
-            "ml_framework_snapshots.grounding.engine.GroundingEngine",
-            side_effect=RuntimeError("init failed"),
-        ),
-    ):
+    with patch.dict("sys.modules", {"ml_ecosystem_snapshots.grounding.engine": None}):
         gv_fail_fallback = GroundingValidator()
         assert gv_fail_fallback._engine is None
 

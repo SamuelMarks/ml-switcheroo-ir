@@ -26,6 +26,7 @@ from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 from ml_switcheroo_ir.types import JsonValue
+from ml_switcheroo_ir.validation.grounding import SnapshotManifestNode
 from ml_switcheroo_ir.validator import (
     CORE_MLIR_DIALECTS,
     DEFAULT_SNAPSHOT_DIR,
@@ -153,11 +154,13 @@ def _verify_category_items_have_identifiers(
     return errors
 
 
-def _extract_known_attributes(sym_record: Mapping[str, object]) -> set[str]:
+def _extract_known_attributes(
+    sym_record: Mapping[str, SnapshotManifestNode],
+) -> set[str]:
     """Extract known parameter and attribute names from a snapshot symbol record.
 
     Args:
-        sym_record (Mapping[str, object]): Snapshot symbol dictionary.
+        sym_record (Mapping[str, SnapshotManifestNode]): Snapshot symbol dictionary.
 
     Returns:
         set[str]: Set of grounded attribute/parameter names.

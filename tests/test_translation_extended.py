@@ -82,22 +82,22 @@ def test_permute_conv_weights() -> None:
     class MockTensorTranspose:
         """Mock tensor implementing transpose method."""
 
-        def __init__(self, data: object) -> None:
+        def __init__(self, data: str) -> None:
             """Initialize with data.
 
             Args:
-                data (object): Underlying payload.
+                data (str): Underlying payload.
             """
             self.data = data
 
-        def transpose(self, perm: tuple[int, ...]) -> tuple[object, tuple[int, ...]]:
+        def transpose(self, perm: tuple[int, ...]) -> tuple[str, tuple[int, ...]]:
             """Transpose with permutation.
 
             Args:
                 perm (tuple[int, ...]): Permutation axes.
 
             Returns:
-                tuple[object, tuple[int, ...]]: Data and permutation tuple.
+                tuple[str, tuple[int, ...]]: Data and permutation tuple.
             """
             return (self.data, perm)
 
@@ -109,22 +109,22 @@ def test_permute_conv_weights() -> None:
     class MockTensorPermute:
         """Mock tensor implementing permute method."""
 
-        def __init__(self, data: object) -> None:
+        def __init__(self, data: str) -> None:
             """Initialize with data.
 
             Args:
-                data (object): Underlying payload.
+                data (str): Underlying payload.
             """
             self.data = data
 
-        def permute(self, perm: tuple[int, ...]) -> tuple[object, tuple[int, ...]]:
+        def permute(self, perm: tuple[int, ...]) -> tuple[str, tuple[int, ...]]:
             """Permute with permutation.
 
             Args:
                 perm (tuple[int, ...]): Permutation axes.
 
             Returns:
-                tuple[object, tuple[int, ...]]: Data and permutation tuple.
+                tuple[str, tuple[int, ...]]: Data and permutation tuple.
             """
             return (self.data, perm)
 

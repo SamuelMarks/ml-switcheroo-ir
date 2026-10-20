@@ -726,6 +726,12 @@ has been available since version 1.
             == "ai.onnx.preview.training"
         )
 
+    from scripts.generate_registry import (
+        OnnxOpEntryValue,
+        OnnxParamProtocol,
+    )
+    from ml_switcheroo_ir.types import JsonValue
+
     # Test cross_validate_with_onnx_defs with empty domain schema and non-empty domain
     class FakeSchema:
         """Mock ONNX operator schema definition for unit testing."""
@@ -738,9 +744,9 @@ has been available since version 1.
             """
             self.name = "FakeOp"
             self.since_version = 1
-            self.attributes: dict[str, object] = {}
-            self.inputs: list[object] = []
-            self.outputs: list[object] = []
+            self.attributes: dict[str, JsonValue] = {}
+            self.inputs: list[OnnxParamProtocol] = []
+            self.outputs: list[OnnxParamProtocol] = []
             self.domain = domain
 
     fake_onnx_defs = MagicMock()
@@ -751,7 +757,7 @@ has been available since version 1.
     with patch.dict(
         "sys.modules", {"onnx": fake_onnx_pkg, "onnx.defs": fake_onnx_defs}
     ):
-        test_ops = {
+        test_ops: dict[str, dict[str, OnnxOpEntryValue]] = {
             "FakeOp": {
                 "domain": "ai.onnx",
                 "version": 1,
@@ -775,7 +781,7 @@ has been available since version 1.
     with patch.dict(
         "sys.modules", {"onnx": fake_onnx_pkg, "onnx.defs": fake_onnx_defs}
     ):
-        test_ops2 = {
+        test_ops2: dict[str, dict[str, OnnxOpEntryValue]] = {
             "FakeOp": {
                 "domain": "ai.onnx",
                 "version": 1,
@@ -1302,7 +1308,9 @@ def test_extract_known_attributes() -> None:
     assert _extract_known_attributes(rec1) == {"p1", "attr_d1", "attr_d2"}
 
     # 2. List attributes with dicts and strings
-    rec2 = {
+    from ml_switcheroo_ir.validation.grounding import SnapshotManifestNode
+
+    rec2: dict[str, SnapshotManifestNode] = {
         "params": [],
         "attributes": [
             {"name": "attr_l1"},

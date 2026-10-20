@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import re
-from typing import Sequence
 
 from ml_switcheroo_ir.graph import LogicalNode
 from ml_switcheroo_ir.schema.ghost import (

@@ -13,7 +13,7 @@ import keyword
 from pathlib import Path
 import re
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 from pydantic import TypeAdapter
 
@@ -41,7 +41,7 @@ from ml_switcheroo_ir.types import DType, JsonValue, TensorShape, TensorSpec
 
 DRAFT_2020_12_SCHEMA_URI: str = "https://json-schema.org/draft/2020-12/schema"
 
-SchemaTargetLiteral: TypeAlias = typing.Literal[
+SchemaTargetLiteral: typing_extensions.TypeAlias = typing.Literal[
     "LogicalGraph",
     "LogicalNode",
     "SnapshotEnvelope",
@@ -368,7 +368,8 @@ def _format_shape_tuple(
     """
     if shape is None:
         return "None"
-    formatted_dims = [_format_sym_node(d) for d in shape]
+    dims_seq = shape.dims if isinstance(shape, TensorShape) else shape
+    formatted_dims = [_format_sym_node(d) for d in dims_seq]
     if len(formatted_dims) == 1:
         return f"({formatted_dims[0]},)"
     return f"({', '.join(formatted_dims)})"

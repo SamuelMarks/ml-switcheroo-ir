@@ -7,39 +7,67 @@ import contextlib
 import json
 from pathlib import Path
 import threading
-import typing
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ml_switcheroo_ir.schema.ghost import (
+    RdnaPrimitiveSpec,
+    SassPrimitiveSpec,
+)
 from ml_switcheroo_ir.snapshots import find_schema_file
-from ml_switcheroo_ir.types import AttributeValue
+from ml_switcheroo_ir.types import AttributeValue, JsonValue
 
 REGISTRY_LOCK = threading.RLock()
 
 
-class RawOpAttributeDict(typing.TypedDict, total=False):
-    """TypedDict for raw JSON attribute entry in an operator catalog."""
+class RawOpAttributeSpec(BaseModel):
+    """Pydantic model for a raw JSON attribute entry in an operator catalog.
+
+    Attributes:
+        name (str): Attribute name.
+        type (str): Attribute type string.
+        required (bool): Whether the attribute is required.
+        default (AttributeValue): Optional default value.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    name: str = ""
+    type: str = "str"
+    required: bool = False
+    default: AttributeValue = None
+
+
+class RawOpSchemaSpec(BaseModel):
+    """Pydantic model for a raw JSON operator entry in an operator catalog.
+
+    Attributes:
+        name (str): Operator name.
+        domain (str): Operator domain.
+        version (int): Operator version.
+        schema_version (int | None): Optional upstream schema version.
+        attributes (list[RawOpAttributeSpec] | dict[str, RawOpAttributeSpec]): Operator attributes.
+        inputs (list[str]): Input operand names.
+        outputs (list[str]): Output operand names.
+        latency (int | None): Optional execution latency.
+        vopd_slot (str | None): Optional RDNA VOPD slot.
+        vopd_equiv (str | None): Optional RDNA VOPD equivalent opcode.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str
-    type: str
-    required: bool
-    default: AttributeValue
-
-
-class RawOpSchemaDict(typing.TypedDict, total=False):
-    """TypedDict for raw JSON operator entry in an operator catalog."""
-
-    name: str
-    domain: str
-    version: int
-    schema_version: int | None
-    deprecated: bool
-    attributes: Sequence[RawOpAttributeDict] | Mapping[str, RawOpAttributeDict]
-    inputs: Sequence[str]
-    outputs: Sequence[str]
-    latency: int
-    vopd_slot: str
-    vopd_equiv: str
+    domain: str = ""
+    version: int = 1
+    schema_version: int | None = None
+    attributes: list[RawOpAttributeSpec] | dict[str, RawOpAttributeSpec] = Field(
+        default_factory=list
+    )
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    latency: int | None = None
+    vopd_slot: str | None = None
+    vopd_equiv: str | None = None
 
 
 class OpAttribute(BaseModel):
@@ -93,7 +121,6 @@ class OpSchema(BaseModel):
         inputs (list[str]): List of formal input operand names.
         outputs (list[str]): List of formal output operand names.
         schema_version (int | None): Optional upstream opset/schema version.
-        deprecated (bool): Whether this operator version is deprecated.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -105,7 +132,6 @@ class OpSchema(BaseModel):
     inputs: list[str]
     outputs: list[str]
     schema_version: int | None = None
-    deprecated: bool = False
 
     def __init__(
         self,
@@ -116,7 +142,6 @@ class OpSchema(BaseModel):
         inputs: Sequence[str],
         outputs: Sequence[str],
         schema_version: int | None = None,
-        deprecated: bool = False,
     ) -> None:
         """Initialize OpSchema.
 
@@ -128,7 +153,6 @@ class OpSchema(BaseModel):
             inputs (Sequence[str]): List of formal input operand names.
             outputs (Sequence[str]): List of formal output operand names.
             schema_version (int | None): Optional upstream opset/schema version.
-            deprecated (bool): Whether this operator version is deprecated.
         """
         super().__init__(
             name=name,
@@ -138,7 +162,6 @@ class OpSchema(BaseModel):
             inputs=list(inputs),
             outputs=list(outputs),
             schema_version=schema_version,
-            deprecated=deprecated,
         )
 
 
@@ -207,7 +230,6 @@ class CustomOpSchema(BaseModel):
         outputs (list[str]): List of expected outputs.
         version (int): Operator version (default: 1).
         schema_version (int | None): Optional upstream opset/schema version.
-        deprecated (bool): Whether this operator schema is deprecated.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -221,7 +243,6 @@ class CustomOpSchema(BaseModel):
     outputs: list[str] = Field(default_factory=list)
     version: int = 1
     schema_version: int | None = None
-    deprecated: bool = False
 
     def __init__(
         self,
@@ -236,7 +257,6 @@ class CustomOpSchema(BaseModel):
         outputs: Sequence[str] | None = None,
         version: int = 1,
         schema_version: int | None = None,
-        deprecated: bool = False,
     ) -> None:
         """Initialize CustomOpSchema.
 
@@ -249,7 +269,6 @@ class CustomOpSchema(BaseModel):
             outputs (Sequence[str] | None): Expected output names.
             version (int): Operator version (default: 1).
             schema_version (int | None): Optional upstream opset/schema version.
-            deprecated (bool): Whether this operator schema is deprecated.
         """
         norm_attrs: (
             list[CustomAttributeSchema] | dict[str, CustomAttributeSchema | OpAttribute]
@@ -266,7 +285,6 @@ class CustomOpSchema(BaseModel):
             outputs=list(outputs) if outputs is not None else [],
             version=version,
             schema_version=schema_version,
-            deprecated=deprecated,
         )
 
     def to_op_schema(self) -> OpSchema:
@@ -301,19 +319,18 @@ class CustomOpSchema(BaseModel):
             inputs=self.inputs,
             outputs=self.outputs,
             schema_version=self.schema_version,
-            deprecated=self.deprecated,
         )
 
 
 def parse_op_schema_entry(
-    op_data: Mapping[str, object],
+    op_data: Mapping[str, JsonValue],
     domain_default: str,
     attr_type_default: str = "str",
 ) -> OpSchema:
     """Parse a single JSON operator schema dictionary entry into an OpSchema.
 
     Args:
-        op_data (Mapping[str, object]): Raw JSON operator definition dictionary.
+        op_data (Mapping[str, JsonValue]): Raw JSON operator definition dictionary.
         domain_default (str): Fallback domain identifier if not present in op_data.
         attr_type_default (str): Fallback attribute type string if not present.
 
@@ -363,7 +380,6 @@ def parse_op_schema_entry(
         outputs=outputs_list,
         version=ver_int,
         schema_version=int(raw_sv) if isinstance(raw_sv, int) else None,
-        deprecated=bool(op_data.get("deprecated", False)),
     )
     return schema.to_op_schema()
 
@@ -374,7 +390,7 @@ def load_op_schema_catalog(
     json_path: Path | str | None = None,
     find_file_fn: Callable[[str, Path | str | None], Path | None] = find_schema_file,
     attr_type_default: str = "str",
-    on_entry: Callable[[Mapping[str, object]], None] | None = None,
+    on_entry: Callable[[Mapping[str, JsonValue]], None] | None = None,
 ) -> dict[str, OpSchema]:
     """Load operator schemas from a JSON catalog file containing an 'ops' list.
 
@@ -384,7 +400,7 @@ def load_op_schema_catalog(
         json_path (Path | str | None): Explicit path override for the JSON catalog.
         find_file_fn (Callable[[str, Path | str | None], Path | None]): File resolution function.
         attr_type_default (str): Default attribute type string when unspecified.
-        on_entry (Callable[[Mapping[str, object]], None] | None): Optional callback invoked per raw op_data entry.
+        on_entry (Callable[[Mapping[str, JsonValue]], None] | None): Optional callback invoked per raw op_data entry.
 
     Returns:
         dict[str, OpSchema]: Mapping from operator names to parsed OpSchema definitions.
@@ -407,13 +423,14 @@ def load_op_schema_catalog(
 
 
 def build_isa_primitive_schemas(
-    primitives: Mapping[str, object],
+    primitives: Mapping[str, RdnaPrimitiveSpec] | Mapping[str, SassPrimitiveSpec],
     domain: str,
 ) -> dict[str, OpSchema]:
     """Convert raw ISA instruction primitive definitions into OpSchema instances.
 
     Args:
-        primitives (Mapping[str, object]): Mapping of instruction mnemonics to operand specs.
+        primitives (Mapping[str, RdnaPrimitiveSpec] | Mapping[str, SassPrimitiveSpec]):
+            Mapping of instruction mnemonics to operand specs.
         domain (str): Target hardware ISA domain (e.g. 'amd_rdna', 'nvidia_sass').
 
     Returns:
@@ -421,17 +438,7 @@ def build_isa_primitive_schemas(
     """
     result: dict[str, OpSchema] = {}
     for op_name, op_info in primitives.items():
-        raw_operands = (
-            op_info.get("operands", [])
-            if isinstance(op_info, Mapping)
-            else getattr(op_info, "operands", [])
-        )
-        operands = (
-            [str(op) for op in raw_operands]
-            if isinstance(raw_operands, Sequence)
-            and not isinstance(raw_operands, (str, bytes))
-            else []
-        )
+        operands = list(op_info.operands)
         inputs = [op for op in operands if op != "dst"]
         outputs = ["dst"] if "dst" in operands else []
         schema = CustomOpSchema(

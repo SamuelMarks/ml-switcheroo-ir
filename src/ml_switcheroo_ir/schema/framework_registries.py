@@ -13,6 +13,7 @@ from ml_switcheroo_ir.schema.base import (
     load_op_schema_catalog,
 )
 from ml_switcheroo_ir.snapshots import find_schema_file
+from ml_switcheroo_ir.types import JsonValue
 
 ATEN_REGISTRY: dict[str, OpSchema] = {}
 ARRAY_API_REGISTRY: dict[str, OpSchema] = {}
@@ -251,11 +252,11 @@ def _load_framework_schema_file(
         dict[str, OpSchema]: Mapping from operator names to OpSchema instances.
     """
 
-    def _record_dialects(op_data: Mapping[str, object]) -> None:
+    def _record_dialects(op_data: Mapping[str, JsonValue]) -> None:
         """Record dialect mappings from an ODL operator entry if present.
 
         Args:
-            op_data (Mapping[str, object]): Raw operator definition dictionary.
+            op_data (Mapping[str, JsonValue]): Raw operator definition dictionary.
         """
         raw_dialects = op_data.get("dialects")
         if isinstance(raw_dialects, Mapping):

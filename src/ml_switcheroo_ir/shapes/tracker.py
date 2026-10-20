@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 from ml_switcheroo_ir.shapes.ast import DimensionType, SymConst, SymInt, SymNode
 
-DimensionBound: TypeAlias = typing.Union[int, str, SymNode, SymInt]
+DimensionBound: typing_extensions.TypeAlias = typing.Union[int, str, SymNode, SymInt]
 
 __all__ = [
     "DimensionBound",

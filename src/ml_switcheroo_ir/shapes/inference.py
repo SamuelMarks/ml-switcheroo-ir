@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.types import TensorSpec
@@ -35,8 +35,14 @@ __all__ = [
     "resolve_symbolic_bounds",
 ]
 
-TelemetryValueType: TypeAlias = typing.Union[
-    Sequence[int], Mapping[str, object], int, str, float, bool, None
+TelemetryValueType: typing_extensions.TypeAlias = typing.Union[
+    Sequence[int],
+    Mapping[str, typing.Union[Sequence[int], int, str, float, bool, None]],
+    int,
+    str,
+    float,
+    bool,
+    None,
 ]
 
 
@@ -371,7 +377,7 @@ class ShapeTracker:
 
     @staticmethod
     def resolve_dynamic_bounds(
-        graph: SupportsShapeNodesProtocol | object,
+        graph: SupportsShapeNodesProtocol,
         feedback_telemetry: Mapping[str, TelemetryValueType],
         tracker: SymbolicConstraintTracker | None = None,
         strict_rank: bool = False,
@@ -379,7 +385,7 @@ class ShapeTracker:
         """Resolve dynamic SymInt variables across a graph into static integer bounds using telemetry.
 
         Args:
-            graph (SupportsShapeNodesProtocol | object): LogicalGraph instance containing nodes with symbolic dimensions.
+            graph (SupportsShapeNodesProtocol): LogicalGraph instance containing nodes with symbolic dimensions.
             feedback_telemetry (Mapping[str, TelemetryValueType]):
                 Observed runtime telemetry with concrete shapes.
             tracker (SymbolicConstraintTracker | None): Optional constraint tracker for unification.

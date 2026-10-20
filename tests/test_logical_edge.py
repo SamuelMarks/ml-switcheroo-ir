@@ -93,7 +93,7 @@ def test_graph_iteration_and_indexing() -> None:
     n2 = LogicalNode(id="b", op_type="Relu")
     graph = LogicalGraph(nodes={"a": n1, "b": n2})
 
-    nodes_iterated = list(graph)
+    nodes_iterated = list(graph.nodes_list)
     assert nodes_iterated == [n1, n2]
     assert len(graph) == 2
     assert graph["a"] is n1
@@ -165,8 +165,14 @@ def test_add_edge_multi_port_value_name_and_nodedict_mutations() -> None:
     cloned = graph.clone()
     assert any(e.value_name == "s1" for e in cloned.edges)
     dumped = graph.to_dict()
-    assert dumped["nodes"]["if_node"]["subgraphs"]["attr_meta"] == "scalar_meta"
-    then_branch = dumped["nodes"]["if_node"]["subgraphs"]["then_branch"]
+    nodes_dumped = dumped["nodes"]
+    assert isinstance(nodes_dumped, dict)
+    if_node_dumped = nodes_dumped["if_node"]
+    assert isinstance(if_node_dumped, dict)
+    subgraphs_dumped = if_node_dumped["subgraphs"]
+    assert isinstance(subgraphs_dumped, dict)
+    assert subgraphs_dumped["attr_meta"] == "scalar_meta"
+    then_branch = subgraphs_dumped["then_branch"]
     assert isinstance(then_branch, dict)
     assert "edges" in then_branch
     restored = LogicalGraph.from_dict(dumped)
@@ -177,6 +183,7 @@ def test_add_edge_multi_port_value_name_and_nodedict_mutations() -> None:
     assert "if_node" not in cloned.nodes
     popped = cloned.nodes.pop("add")
     assert popped.id == "add"
+    assert cloned.nodes.pop("nonexistent", None) is None
     cloned.nodes.update({"new_n": LogicalNode(id="new_n", op_type="Relu")})
     assert "new_n" in cloned.nodes
     cloned.nodes.clear()

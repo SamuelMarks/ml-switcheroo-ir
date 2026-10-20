@@ -86,7 +86,7 @@ graph = LogicalGraph(
 # Access nodes using dictionary key or sequence iteration
 assert graph["norm"].op_type == "RMSNorm"
 assert len(graph) == 2
-for node in graph:
+for node in graph.nodes_list:
     print(f"Node: {node.id} ({node.op_type})")
 
 # Nested Subgraph Example: Loop or Conditional Block
@@ -248,8 +248,8 @@ assert vol_bytes == 6 * 1024 * 1024
 # 2. Aggregate whole-graph communication volume
 coll_graph = LogicalGraph(nodes={"all_reduce1": ar_node}, mesh=mesh)
 summary = estimate_graph_communication_volume(coll_graph)
-print(f"Total Transfer: {summary['total_volume_bytes']} bytes")
-print(f"By Mesh Axis: {summary['by_axis']}")
+print(f"Total Transfer: {summary.total_volume_bytes} bytes")
+print(f"By Mesh Axis: {summary.by_axis}")
 ```
 
 ### Topological Sorting & Cycle Detection

@@ -165,12 +165,13 @@ def test_cli_compliance_verbose_mapping_exception(
     """
     import inspect
     import json
+    import types
 
-    def mock_getdoc(obj: object) -> str:
+    def mock_getdoc(obj: types.FunctionType | type) -> str:
         """Mock inspect.getdoc to raise a RuntimeError.
 
         Args:
-            obj (object): Inspected object.
+            obj (types.FunctionType | type): Inspected object.
 
         Raises:
             RuntimeError: Always raised to test error resilience.

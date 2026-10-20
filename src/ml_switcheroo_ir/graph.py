@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Mapping
 import copy
+from enum import Enum
 import gzip
 import io
 import json
@@ -24,9 +25,10 @@ from ml_switcheroo_ir.distributed import (
     PipelineTopologyConfig,
 )
 from ml_switcheroo_ir.serialization import (
-    SerializedEdgeDict,
-    SerializedGraphDict,
-    SerializedNodeDict,
+    RawGraphValue,
+    SerializedEdgeModel,
+    SerializedGraphModel,
+    SerializedNodeModel,
     _apply_edges_list,
     _build_graph_from_parsed_sections,
     _decode_next_json_value,
@@ -49,6 +51,7 @@ from ml_switcheroo_ir.types import (
     AttributeValue,
     DType,
     InitializerValue,
+    JsonValue,
     ShapeMetadataType,
     TensorShape,
     TensorSpec,
@@ -72,9 +75,9 @@ __all__ = [
     "NoTangent",
     "NodeDict",
     "PartitionSpec",
-    "SerializedEdgeDict",
-    "SerializedGraphDict",
-    "SerializedNodeDict",
+    "SerializedEdgeModel",
+    "SerializedGraphModel",
+    "SerializedNodeModel",
     "ZeroTangent",
     "_apply_edges_list",
     "_build_graph_from_parsed_sections",
@@ -95,7 +98,14 @@ __all__ = [
     "zstandard",
 ]
 
-_CLONE_OMITTED: typing.Final[object] = object()
+
+class _OmittedSentinel(Enum):
+    """Sentinel enum indicating an omitted optional parameter."""
+
+    OMITTED = "OMITTED"
+
+
+_CLONE_OMITTED: typing.Final[_OmittedSentinel] = _OmittedSentinel.OMITTED
 
 
 class LogicalEdge(BaseModel):
@@ -168,15 +178,6 @@ class _TrackedOutputsList(list[str]):
             item (str): Output SSA name.
         """
         super().append(item)
-        self.version += 1
-
-    def extend(self, iterable: Iterable[str]) -> None:
-        """Extend output names and increment mutation version.
-
-        Args:
-            iterable (Iterable[str]): Output SSA names.
-        """
-        super().extend(iterable)
         self.version += 1
 
 
@@ -408,14 +409,14 @@ class LogicalNode(BaseModel):
         outputs: list[str] | None = None,
         shape_metadata: ShapeMetadataType
         | Iterable[DimensionType]
-        | object = _CLONE_OMITTED,
-        source_ast_ref: str | None | object = _CLONE_OMITTED,
-        sharding: PartitionSpec | None | object = _CLONE_OMITTED,
-        dtype: DType | None | object = _CLONE_OMITTED,
+        | _OmittedSentinel = _CLONE_OMITTED,
+        source_ast_ref: str | None | _OmittedSentinel = _CLONE_OMITTED,
+        sharding: PartitionSpec | None | _OmittedSentinel = _CLONE_OMITTED,
+        dtype: DType | None | _OmittedSentinel = _CLONE_OMITTED,
         output_specs: list[TensorSpec] | None = None,
         subgraphs: Mapping[str, LogicalGraph | AttributeValue] | None = None,
-        device: str | None | object = _CLONE_OMITTED,
-        stream: str | None | object = _CLONE_OMITTED,
+        device: str | None | _OmittedSentinel = _CLONE_OMITTED,
+        stream: str | None | _OmittedSentinel = _CLONE_OMITTED,
         **kwargs: AttributeValue,
     ) -> LogicalNode:
         """Create a deep clone of this LogicalNode with optional keyword overrides.
@@ -428,14 +429,14 @@ class LogicalNode(BaseModel):
             attributes (Mapping[str, AttributeValue] | None): Override attributes dictionary.
             inputs (list[str] | None): Override input IDs.
             outputs (list[str] | None): Override output names.
-            shape_metadata (ShapeMetadataType | Iterable[DimensionType] | object): Override tensor shape metadata.
-            source_ast_ref (str | None | object): Override source AST reference.
-            sharding (PartitionSpec | None | object): Override partition specification.
-            dtype (DType | None | object): Override data type.
+            shape_metadata (ShapeMetadataType | Iterable[DimensionType] | _OmittedSentinel): Override tensor shape metadata.
+            source_ast_ref (str | None | _OmittedSentinel): Override source AST reference.
+            sharding (PartitionSpec | None | _OmittedSentinel): Override partition specification.
+            dtype (DType | None | _OmittedSentinel): Override data type.
             output_specs (list[TensorSpec] | None): Override output tensor specifications.
             subgraphs (Mapping[str, LogicalGraph | AttributeValue] | None): Override nested subgraphs.
-            device (str | None | object): Override target device placement.
-            stream (str | None | object): Override asynchronous execution stream.
+            device (str | None | _OmittedSentinel): Override target device placement.
+            stream (str | None | _OmittedSentinel): Override asynchronous execution stream.
             **kwargs (AttributeValue): Additional attribute overrides.
 
         Returns:
@@ -457,41 +458,27 @@ class LogicalNode(BaseModel):
             for k, v in raw_subgraphs.items()
         }
 
-        resolved_shape_meta = (
-            copy.deepcopy(self.shape_metadata)
-            if shape_metadata is _CLONE_OMITTED
-            else _normalize_shape_metadata(shape_metadata)  # type: ignore[arg-type]
-        )
+        if isinstance(shape_metadata, _OmittedSentinel):
+            resolved_shape_meta = copy.deepcopy(self.shape_metadata)
+        else:
+            resolved_shape_meta = _normalize_shape_metadata(shape_metadata)
 
         resolved_ast_ref = (
-            source_ast_ref
-            if (source_ast_ref is None or isinstance(source_ast_ref, str))
-            and source_ast_ref is not _CLONE_OMITTED
-            else self.source_ast_ref
+            self.source_ast_ref
+            if isinstance(source_ast_ref, _OmittedSentinel)
+            else source_ast_ref
         )
         resolved_sharding = (
-            copy.deepcopy(sharding)
-            if (sharding is None or isinstance(sharding, PartitionSpec))
-            and sharding is not _CLONE_OMITTED
-            else copy.deepcopy(self.sharding)
+            copy.deepcopy(self.sharding)
+            if isinstance(sharding, _OmittedSentinel)
+            else copy.deepcopy(sharding)
         )
-        resolved_dtype = (
-            dtype
-            if (dtype is None or isinstance(dtype, DType))
-            and dtype is not _CLONE_OMITTED
-            else self.dtype
-        )
+        resolved_dtype = self.dtype if isinstance(dtype, _OmittedSentinel) else dtype
         resolved_device = (
-            device
-            if (device is None or isinstance(device, str))
-            and device is not _CLONE_OMITTED
-            else self.device
+            self.device if isinstance(device, _OmittedSentinel) else device
         )
         resolved_stream = (
-            stream
-            if (stream is None or isinstance(stream, str))
-            and stream is not _CLONE_OMITTED
-            else self.stream
+            self.stream if isinstance(stream, _OmittedSentinel) else stream
         )
 
         cls = self.__class__
@@ -542,6 +529,27 @@ class LogicalNode(BaseModel):
 
 
 _DefaultT = typing.TypeVar("_DefaultT")
+
+
+class _SupportsNodeKeysAndGetItem(typing.Protocol):
+    """Protocol for mapping-like objects accepted by NodeDict.update."""
+
+    def keys(self) -> Iterable[str]:
+        """Return iterable of node IDs.
+
+        Returns:
+            Iterable[str]: Node IDs.
+        """
+
+    def __getitem__(self, key: str, /) -> LogicalNode:
+        """Retrieve LogicalNode by ID.
+
+        Args:
+            key (str): Node ID.
+
+        Returns:
+            LogicalNode: Node instance.
+        """
 
 
 class NodeDict(dict[str, LogicalNode]):
@@ -616,20 +624,21 @@ class NodeDict(dict[str, LogicalNode]):
     def pop(
         self,
         key: str,
-        default: LogicalNode | _DefaultT | object = _CLONE_OMITTED,
+        default: LogicalNode | _DefaultT | _OmittedSentinel = _CLONE_OMITTED,
     ) -> LogicalNode | _DefaultT:
         """Remove and return a node by ID and increment version.
 
         Args:
             key (str): Node ID.
-            default (LogicalNode | _DefaultT | object): Optional default value.
+            default (LogicalNode | _DefaultT | _OmittedSentinel): Optional default value.
 
         Returns:
             LogicalNode | _DefaultT: Removed LogicalNode or default.
         """
-        res = (
-            super().pop(key) if default is _CLONE_OMITTED else super().pop(key, default)  # type: ignore[arg-type]
-        )
+        if isinstance(default, _OmittedSentinel):
+            res: LogicalNode | _DefaultT = super().pop(key)
+        else:
+            res = super().pop(key, default)
         self.version += 1
         return res
 
@@ -638,15 +647,44 @@ class NodeDict(dict[str, LogicalNode]):
         super().clear()
         self.version += 1
 
-    def update(  # type: ignore[override]
+    @typing.overload
+    def update(
         self,
-        other: Mapping[str, LogicalNode] | Iterable[tuple[str, LogicalNode]] = (),
+        other: _SupportsNodeKeysAndGetItem,
+        /,
+        **kwargs: LogicalNode,
+    ) -> None:
+        """Update mapping from a mapping-like object of node IDs to LogicalNode instances.
+
+        Args:
+            other (_SupportsNodeKeysAndGetItem): Mapping of node IDs to nodes.
+            **kwargs (LogicalNode): Additional keyword node entries.
+        """
+
+    @typing.overload
+    def update(
+        self,
+        other: Iterable[tuple[str, LogicalNode]] = (),
+        /,
+        **kwargs: LogicalNode,
+    ) -> None:
+        """Update mapping from an iterable of (node_id, LogicalNode) pairs or keyword entries.
+
+        Args:
+            other (Iterable[tuple[str, LogicalNode]]): Iterable of key-value pairs.
+            **kwargs (LogicalNode): Additional keyword node entries.
+        """
+
+    def update(
+        self,
+        other: _SupportsNodeKeysAndGetItem | Iterable[tuple[str, LogicalNode]] = (),
+        /,
         **kwargs: LogicalNode,
     ) -> None:
         """Update mapping with new nodes and increment version.
 
         Args:
-            other (Mapping[str, LogicalNode] | Iterable[tuple[str, LogicalNode]]):
+            other (_SupportsNodeKeysAndGetItem | Iterable[tuple[str, LogicalNode]]):
                 Mapping or iterable of key-value pairs.
             **kwargs (LogicalNode): Keyword node entries.
         """
@@ -1165,14 +1203,6 @@ class LogicalGraph(BaseModel):
             )
         ]
 
-    def __iter__(self) -> Iterator[LogicalNode]:  # type: ignore[override]
-        """Yield nodes in dictionary insertion order.
-
-        Returns:
-            Iterator[LogicalNode]: Node iterator.
-        """
-        return iter(self.nodes.values())
-
     def __len__(self) -> int:
         """Return total node count in graph.
 
@@ -1192,13 +1222,13 @@ class LogicalGraph(BaseModel):
         """
         return self.nodes[node_id]
 
-    def to_dict(self) -> SerializedGraphDict:
+    def to_dict(self) -> dict[str, AttributeValue | dict[str, InitializerValue]]:
         """Convert LogicalGraph to a serializable dictionary.
 
         Returns:
-            SerializedGraphDict: Dictionary representation of the graph.
+            dict[str, AttributeValue | dict[str, InitializerValue]]: Dictionary representation of the graph.
         """
-        mesh_dict: dict[str, object] | None = None
+        mesh_dict: dict[str, JsonValue] | None = None
         if self.mesh is not None:
             mesh_dict = {
                 "shape": {k: int(v) for k, v in self.mesh.shape.items()},
@@ -1208,7 +1238,7 @@ class LogicalGraph(BaseModel):
                     else None
                 ),
             }
-        pipe_dict: dict[str, object] | None = (
+        pipe_dict: dict[str, JsonValue] | None = (
             dict(self.pipeline_topology.to_dict())
             if self.pipeline_topology is not None
             else None
@@ -1312,11 +1342,15 @@ class LogicalGraph(BaseModel):
             raise ValueError(f"Unsupported compression format: {compression}")
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> LogicalGraph:
+    def from_dict(
+        cls,
+        data: SerializedGraphModel | Mapping[str, RawGraphValue],
+    ) -> LogicalGraph:
         """Deserialize a graph from a dictionary representation.
 
         Args:
-            data (Mapping[str, object]): Dictionary containing graph fields.
+            data (SerializedGraphModel | Mapping[str, RawGraphValue]):
+                Dictionary or model containing graph fields.
 
         Returns:
             LogicalGraph: Deserialized graph instance.
@@ -1324,7 +1358,8 @@ class LogicalGraph(BaseModel):
         Raises:
             TypeError: If the 'nodes' entry is not a Mapping.
         """
-        raw_nodes = data.get("nodes", {})
+        raw_map = data.model_dump() if isinstance(data, SerializedGraphModel) else data
+        raw_nodes = raw_map.get("nodes", {})
         if not isinstance(raw_nodes, Mapping):
             raise TypeError(
                 f"LogicalGraph.from_dict expected 'nodes' to be a Mapping, got {type(raw_nodes).__name__}."
@@ -1336,7 +1371,7 @@ class LogicalGraph(BaseModel):
                 if isinstance(ndata, Mapping)
             }
         )
-        return _build_graph_from_parsed_sections(cls, nodes, data)
+        return _build_graph_from_parsed_sections(cls, nodes, raw_map)
 
     @classmethod
     def from_file(

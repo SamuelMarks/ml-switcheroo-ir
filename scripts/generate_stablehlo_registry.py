@@ -93,11 +93,11 @@ _DICT_STABLEHLO_ATTRS: frozenset[str] = frozenset(
 )
 
 
-def _normalize_stablehlo_op_name(raw: Mapping[str, object]) -> str:
+def _normalize_stablehlo_op_name(raw: Mapping[str, JsonValue]) -> str:
     """Resolve canonical snake_case StableHLO operator name from a raw snapshot entry.
 
     Args:
-        raw (Mapping[str, object]): Raw operator snapshot dictionary.
+        raw (Mapping[str, JsonValue]): Raw operator snapshot dictionary.
 
     Returns:
         str: Canonical operator name.
@@ -116,14 +116,14 @@ def _normalize_stablehlo_op_name(raw: Mapping[str, object]) -> str:
 
 
 def _infer_stablehlo_attr_spec(
-    op_name: str, a_name: str, a_info: object
+    op_name: str, a_name: str, a_info: JsonValue
 ) -> dict[str, JsonValue]:
     """Infer Python type, required flag, and default value for a StableHLO attribute.
 
     Args:
         op_name (str): Canonical StableHLO operator name.
         a_name (str): Attribute identifier.
-        a_info (object): Raw attribute metadata from snapshot.
+        a_info (JsonValue): Raw attribute metadata from snapshot.
 
     Returns:
         dict[str, JsonValue]: Normalized attribute schema dictionary.
@@ -188,13 +188,13 @@ def _infer_stablehlo_attr_spec(
 
 
 def _extract_stablehlo_attributes(
-    op_name: str, attrs_raw: object
+    op_name: str, attrs_raw: JsonValue
 ) -> list[dict[str, JsonValue]]:
     """Extract normalized attribute schema list from a StableHLO snapshot record.
 
     Args:
         op_name (str): Canonical operator name.
-        attrs_raw (object): Raw attributes dict or list.
+        attrs_raw (JsonValue): Raw attributes dict or list.
 
     Returns:
         list[dict[str, JsonValue]]: List of attribute schema dictionaries.
@@ -242,7 +242,7 @@ def extract_stablehlo_schemas(
     with open(snapshot_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    raw_ops: list[Mapping[str, object]] = []
+    raw_ops: list[Mapping[str, JsonValue]] = []
     if isinstance(data, list):
         raw_ops = [item for item in data if isinstance(item, Mapping)]
     elif isinstance(data, dict):

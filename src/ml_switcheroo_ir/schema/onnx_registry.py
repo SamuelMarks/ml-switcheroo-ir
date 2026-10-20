@@ -10,7 +10,7 @@ import re
 
 from ml_switcheroo_ir.schema.base import REGISTRY_LOCK, OpAttribute, OpSchema
 from ml_switcheroo_ir.snapshots import find_schema_file
-from ml_switcheroo_ir.types import AttributeValue
+from ml_switcheroo_ir.types import AttributeValue, JsonValue
 
 _logger = logging.getLogger(__name__)
 
@@ -48,12 +48,12 @@ def _parse_onnx_proto_default(raw: AttributeValue) -> AttributeValue:
 
 
 def _parse_onnx_fallback_ops(
-    raw_ops: Sequence[Mapping[str, object]],
+    raw_ops: Sequence[Mapping[str, JsonValue]],
 ) -> dict[str, OpSchema]:
     """Convert raw upstream ONNX snapshot operator entries into OpSchema instances.
 
     Args:
-        raw_ops (Sequence[Mapping[str, object]]): Raw operator records from _load_onnx_ops().
+        raw_ops (Sequence[Mapping[str, JsonValue]]): Raw operator records from _load_onnx_ops().
 
     Returns:
         dict[str, OpSchema]: Mapping of operator names to OpSchema definitions.
@@ -120,7 +120,6 @@ def _parse_onnx_fallback_ops(
             inputs=inputs_list,
             outputs=outputs_list,
             schema_version=int(raw_sv) if isinstance(raw_sv, int) else ver,
-            deprecated=bool(op_data.get("deprecated", False)),
         )
     return loaded
 
@@ -171,7 +170,6 @@ def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema
                     inputs=op_data.get("inputs", []),
                     outputs=op_data.get("outputs", []),
                     schema_version=int(raw_sv) if isinstance(raw_sv, int) else ver,
-                    deprecated=bool(op_data.get("deprecated", False)),
                 )
         else:
             try:

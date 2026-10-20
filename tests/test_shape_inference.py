@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import pytest
 
 from ml_switcheroo_ir.shapes import (
+    DimensionType,
     ShapeMismatchError,
+    ShapeNodeProtocol,
     ShapeTracker,
     SymbolicConstraintTracker,
     SymConst,
@@ -259,15 +263,24 @@ def test_shape_tracker_inference_and_feedback() -> None:
     class MockNodeShapeOnly:
         """Mock node with only shape attribute."""
 
-        def __init__(self, node_id: str, shape: tuple[object, ...]) -> None:
+        def __init__(self, node_id: str, shape: tuple[DimensionType, ...]) -> None:
             """Initialize mock node with shape.
 
             Args:
                 node_id (str): Identifier for the mock node.
-                shape (tuple[object, ...]): Shape tuple.
+                shape (tuple[DimensionType, ...]): Shape tuple.
             """
-            self.id = node_id
+            self._id = node_id
             self.shape = shape
+
+        @property
+        def id(self) -> str:
+            """Return node ID.
+
+            Returns:
+                str: Node ID.
+            """
+            return self._id
 
     n_so = MockNodeShapeOnly(
         "n_so", (SymInt("si_track_none"), SymVar("sv_track_none"), "var_dim", 64, 128)
@@ -276,13 +289,22 @@ def test_shape_tracker_inference_and_feedback() -> None:
     class _SimpleNodeContainer:
         """Container with nodes mapping for duck-typed node resolution tests."""
 
-        def __init__(self, nodes_map: dict[str, object]) -> None:
+        def __init__(self, nodes_map: Mapping[str, ShapeNodeProtocol]) -> None:
             """Initialize node container.
 
             Args:
-                nodes_map (dict[str, object]): Mapping of node ID to node object.
+                nodes_map (Mapping[str, ShapeNodeProtocol]): Mapping of node ID to node object.
             """
-            self.nodes = nodes_map
+            self._nodes = nodes_map
+
+        @property
+        def nodes(self) -> Mapping[str, ShapeNodeProtocol]:
+            """Return nodes mapping.
+
+            Returns:
+                Mapping[str, ShapeNodeProtocol]: Nodes mapping.
+            """
+            return self._nodes
 
     g_so = _SimpleNodeContainer({"n_so": n_so})
 
@@ -357,15 +379,24 @@ def test_shape_tracker_inference_and_feedback() -> None:
     class MockNodeShapeMetaOnly:
         """Node with shape_metadata only and no shape property."""
 
-        def __init__(self, node_id: str, shape_meta: tuple[object, ...]) -> None:
+        def __init__(self, node_id: str, shape_meta: tuple[DimensionType, ...]) -> None:
             """Initialize node with shape_metadata.
 
             Args:
                 node_id (str): Identifier for the node.
-                shape_meta (tuple[object, ...]): Shape metadata tuple.
+                shape_meta (tuple[DimensionType, ...]): Shape metadata tuple.
             """
-            self.id = node_id
+            self._id = node_id
             self.shape_metadata = shape_meta
+
+        @property
+        def id(self) -> str:
+            """Return node ID.
+
+            Returns:
+                str: Node ID.
+            """
+            return self._id
 
     n_smo = MockNodeShapeMetaOnly("n_smo", (16, 32))
     g_exact = _SimpleNodeContainer(

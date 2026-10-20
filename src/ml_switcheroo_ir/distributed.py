@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PartitionAxisAtom: TypeAlias = typing.Union[str, int, None]
-PartitionAxisInner: TypeAlias = typing.Union[
+from ml_switcheroo_ir.types import JsonValue
+
+PartitionAxisAtom: typing_extensions.TypeAlias = typing.Union[str, int, None]
+PartitionAxisInner: typing_extensions.TypeAlias = typing.Union[
     PartitionAxisAtom,
     tuple[PartitionAxisAtom, ...],
     list[PartitionAxisAtom],
 ]
-PartitionAxisElement: TypeAlias = typing.Union[
+PartitionAxisElement: typing_extensions.TypeAlias = typing.Union[
     PartitionAxisInner,
     tuple[PartitionAxisInner, ...],
     list[PartitionAxisInner],
@@ -97,132 +99,6 @@ class LogicalMesh(BaseModel):
             webrtc_topology (WebRTCSignalingTopology | None): Optional WebRTC cluster mesh signaling configuration.
         """
         super().__init__(shape=dict(shape), webrtc_topology=webrtc_topology)
-
-
-class MicrobatchSplittingDict(typing.TypedDict):
-    """TypedDict representation of MicrobatchSplittingConfig.
-
-    Attributes:
-        strategy (str): Microbatch splitting strategy.
-        num_microbatches (int): Total number of microbatches.
-    """
-
-    strategy: str
-    num_microbatches: int
-
-
-class MeshMappingDict(typing.TypedDict):
-    """TypedDict representation of MeshMappingConfig.
-
-    Attributes:
-        devices_per_stage (int): Number of devices assigned to each pipeline stage.
-    """
-
-    devices_per_stage: int
-
-
-class StageCommunicationDict(typing.TypedDict):
-    """TypedDict representation of StageCommunicationConfig.
-
-    Attributes:
-        protocol (str): Transport protocol identifier.
-    """
-
-    protocol: str
-
-
-class DependencyDict(typing.TypedDict):
-    """TypedDict representation of DependencyConfig.
-
-    Attributes:
-        source_stage (str): Producer stage identifier.
-        target_stage (str): Consumer stage identifier.
-        offset_mb (int): Microbatch offset index.
-    """
-
-    source_stage: str
-    target_stage: str
-    offset_mb: int
-
-
-class SchedulePhaseDict(typing.TypedDict):
-    """TypedDict representation of SchedulePhaseConfig.
-
-    Attributes:
-        type (str): Schedule phase type.
-        operations (list[str]): Ordered operations executed in this phase.
-        count_expression (str): Expression resolving the execution iteration count.
-    """
-
-    type: str
-    operations: list[str]
-    count_expression: str
-
-
-class PipelineScheduleDict(typing.TypedDict):
-    """TypedDict representation of PipelineScheduleConfig.
-
-    Attributes:
-        phases (list[SchedulePhaseDict]): Ordered schedule phases.
-    """
-
-    phases: list[SchedulePhaseDict]
-
-
-class PipelineTopologyDict(typing.TypedDict):
-    """TypedDict representation of PipelineTopologyConfig.
-
-    Attributes:
-        microbatch_splitting (MicrobatchSplittingDict): Microbatch splitting configuration.
-        mesh_mapping (MeshMappingDict): Stage device mapping configuration.
-        stage_communication (StageCommunicationDict): Communication protocol.
-        dependencies (list[DependencyDict]): Inter-stage synchronization dependencies.
-        schedule (PipelineScheduleDict | None): Optional pipeline schedule configuration.
-    """
-
-    microbatch_splitting: MicrobatchSplittingDict
-    mesh_mapping: MeshMappingDict
-    stage_communication: StageCommunicationDict
-    dependencies: list[DependencyDict]
-    schedule: PipelineScheduleDict | None
-
-
-class WebRTCPeerDict(typing.TypedDict):
-    """TypedDict representation of WebRTCPeerConfig.
-
-    Attributes:
-        peer_id (str): Unique peer identifier.
-        device_capability (str): Accelerator capability.
-        network_transport (str): Transport channel type.
-        ice_transport_policy (str): ICE transport policy.
-    """
-
-    peer_id: str
-    device_capability: str
-    network_transport: str
-    ice_transport_policy: str
-
-
-class WebRTCSignalingTopologyDict(typing.TypedDict):
-    """TypedDict representation of WebRTCSignalingTopology.
-
-    Attributes:
-        signaling_url (str): WebSocket or HTTP signaling server endpoint.
-        ice_servers (list[str]): STUN/TURN server URLs.
-        high_watermark_bytes (int): Buffer high-water mark for backpressure management.
-        low_watermark_bytes (int): Buffer low-water mark for resumed transmission.
-        chunk_size_bytes (int): Maximum chunk payload size for large tensor transfers.
-        connectivity_matrix (list[list[int]]): Peer connectivity adjacency matrix.
-        peers (list[WebRTCPeerDict]): List of participating peer specifications.
-    """
-
-    signaling_url: str
-    ice_servers: list[str]
-    high_watermark_bytes: int
-    low_watermark_bytes: int
-    chunk_size_bytes: int
-    connectivity_matrix: list[list[int]]
-    peers: list[WebRTCPeerDict]
 
 
 class MicrobatchSplittingConfig(BaseModel):
@@ -312,7 +188,7 @@ class PipelineTopologyConfig(BaseModel):
 
     Attributes:
         microbatch_splitting (MicrobatchSplittingConfig): Microbatch splitting configuration.
-        mesh_mapping (MeshMappingDict): Stage device mapping configuration.
+        mesh_mapping (MeshMappingConfig): Stage device mapping configuration.
         stage_communication (StageCommunicationConfig): Communication protocol.
         dependencies (list[DependencyConfig]): Inter-stage synchronization dependencies.
         schedule (PipelineScheduleConfig | None): Optional pipeline schedule configuration.
@@ -326,13 +202,13 @@ class PipelineTopologyConfig(BaseModel):
     dependencies: list[DependencyConfig] = Field(default_factory=list)
     schedule: PipelineScheduleConfig | None = None
 
-    def to_dict(self) -> PipelineTopologyDict:
+    def to_dict(self) -> dict[str, JsonValue]:
         """Convert pipeline topology configuration to dictionary representation.
 
         Returns:
-            PipelineTopologyDict: Strongly typed dictionary representation.
+            dict[str, JsonValue]: JSON-serializable dictionary representation.
         """
-        schedule_dict: PipelineScheduleDict | None = (
+        schedule_dict: JsonValue = (
             {
                 "phases": [
                     {
@@ -370,12 +246,12 @@ class PipelineTopologyConfig(BaseModel):
 
     @classmethod
     def from_dict(
-        cls, data: PipelineTopologyDict | Mapping[str, object]
+        cls, data: PipelineTopologyConfig | Mapping[str, JsonValue]
     ) -> PipelineTopologyConfig:
         """Construct PipelineTopologyConfig from dictionary representation.
 
         Args:
-            data (PipelineTopologyDict | Mapping[str, object]): Dictionary containing topology configuration.
+            data (PipelineTopologyConfig | Mapping[str, JsonValue]): Dictionary containing topology configuration.
 
         Returns:
             PipelineTopologyConfig: Parsed configuration instance.
@@ -426,11 +302,11 @@ class WebRTCSignalingTopology(BaseModel):
     connectivity_matrix: list[list[int]] = Field(default_factory=list)
     peers: list[WebRTCPeerConfig] = Field(default_factory=list)
 
-    def to_dict(self) -> WebRTCSignalingTopologyDict:
+    def to_dict(self) -> dict[str, JsonValue]:
         """Convert WebRTC signaling topology to dictionary representation.
 
         Returns:
-            WebRTCSignalingTopologyDict: Strongly typed dictionary representation.
+            dict[str, JsonValue]: JSON-serializable dictionary representation.
         """
         return {
             "signaling_url": self.signaling_url,
@@ -452,12 +328,12 @@ class WebRTCSignalingTopology(BaseModel):
 
     @classmethod
     def from_dict(
-        cls, data: WebRTCSignalingTopologyDict | Mapping[str, object]
+        cls, data: WebRTCSignalingTopology | Mapping[str, JsonValue]
     ) -> WebRTCSignalingTopology:
         """Construct WebRTCSignalingTopology from dictionary representation.
 
         Args:
-            data (WebRTCSignalingTopologyDict | Mapping[str, object]): Dictionary containing signaling topology configuration.
+            data (WebRTCSignalingTopology | Mapping[str, JsonValue]): Dictionary containing signaling topology configuration.
 
         Returns:
             WebRTCSignalingTopology: Parsed signaling topology instance.

@@ -324,7 +324,7 @@ def test_tensor_shape_operations_and_properties() -> None:
     assert not s1.is_dynamic
     assert s1.static_shape == (1, 3, 224, 224)
     assert len(s1) == 4
-    assert list(s1) == [1, 3, 224, 224]
+    assert list(s1.dims) == [1, 3, 224, 224]
     assert s1[1] == 3
 
     # From list
@@ -484,12 +484,12 @@ def test_nested_subgraphs_and_transforms() -> None:
 
 def test_canonical_subgraphs_deserialization() -> None:
     """Test from_dict deserializes canonical subgraphs dictionary into node.subgraphs."""
-    sub_raw: dict[str, object] = {
+    sub_raw = {
         "name": "CanonicalSub",
         "nodes": {"n1": {"id": "n1", "op_type": "Relu"}},
         "outputs": ["n1"],
     }
-    raw_data: dict[str, object] = {
+    raw_data = {
         "name": "ModelWithSubgraphs",
         "nodes": {
             "node_body": {

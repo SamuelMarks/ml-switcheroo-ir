@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping, Sequence
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 from ml_switcheroo_ir.graph import (
     LogicalEdge,
@@ -33,12 +33,12 @@ from ml_switcheroo_ir.shapes import (
     matmul_shape,
     normalize_axis,
 )
-from ml_switcheroo_ir.types import AttributeValue, DType, TensorSpec
+from ml_switcheroo_ir.types import AttributeValue, DType, InitializerValue, TensorSpec
 
-HashableAttrKey: TypeAlias = typing.Union[
+HashableAttrKey: typing_extensions.TypeAlias = typing.Union[
     str, int, float, bool, None, tuple["HashableAttrKey", ...]
 ]
-NodeCseSignatureKey: TypeAlias = tuple[
+NodeCseSignatureKey: typing_extensions.TypeAlias = tuple[
     str,
     str,
     tuple[str, ...],
@@ -267,12 +267,19 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
 
 
 def _serialize_attr_for_key(
-    val: AttributeValue | LogicalGraph | Mapping[str, object],
+    val: (
+        AttributeValue
+        | InitializerValue
+        | LogicalGraph
+        | Mapping[str, LogicalGraph | AttributeValue]
+        | Mapping[str, AttributeValue | dict[str, InitializerValue]]
+    ),
 ) -> HashableAttrKey:
     """Normalize attribute values for deterministic equivalence hashing.
 
     Args:
-        val (AttributeValue | LogicalGraph | Mapping[str, object]): Attribute value to normalize.
+        val (AttributeValue | InitializerValue | LogicalGraph | Mapping[str, LogicalGraph | AttributeValue] | Mapping[str, AttributeValue | dict[str, InitializerValue]]):
+            Attribute value to normalize.
 
     Returns:
         HashableAttrKey: Hashable normalized representation.
@@ -281,7 +288,7 @@ def _serialize_attr_for_key(
         return _serialize_attr_for_key(val.to_dict())
     if isinstance(val, Mapping):
         return tuple(
-            sorted((str(k), _serialize_attr_for_key(v)) for k, v in val.items())  # type: ignore[arg-type]
+            sorted((str(k), _serialize_attr_for_key(v)) for k, v in val.items())
         )
     if isinstance(val, (list, tuple)):
         return tuple(_serialize_attr_for_key(v) for v in val)

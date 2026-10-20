@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 
 import ml_switcheroo_ir as sw_ir
@@ -52,7 +54,7 @@ def test_export_to_python_basic_roundtrip() -> None:
     assert "def create_linear_graph() -> sw_ir.LogicalGraph:" in code
     assert 'if __name__ == "__main__":' in code
 
-    scope: dict[str, object] = {}
+    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
     exec(code, scope)  # noqa: S102
     builder_fn = scope["create_linear_graph"]
     assert callable(builder_fn)
@@ -77,7 +79,7 @@ def test_export_to_python_default_node_fields() -> None:
     assert "dtype=None" in code
     assert "output_specs=[]" in code
 
-    scope: dict[str, object] = {}
+    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
     exec(code, scope)  # noqa: S102
     builder = scope["build_graph"]
     assert callable(builder)
@@ -95,7 +97,7 @@ def test_export_to_python_empty_graph() -> None:
     assert "def build_graph() -> sw_ir.LogicalGraph:" in code
     assert '__name__ == "__main__"' not in code
 
-    scope: dict[str, object] = {}
+    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
     exec(code, scope)  # noqa: S102
     builder = scope["build_graph"]
     assert callable(builder)
@@ -119,7 +121,7 @@ def test_export_to_python_autodiff_sentinels() -> None:
     assert "sw_ir.ZeroTangent(" in code
     assert "sw_ir.NoTangent(" in code
 
-    scope: dict[str, object] = {}
+    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
     exec(code, scope)  # noqa: S102
     builder = scope["build_ad_graph"]
     assert callable(builder)
@@ -178,7 +180,7 @@ def test_export_to_python_distributed_topologies() -> None:
     assert "webrtc_topology = sw_ir.WebRTCSignalingTopology.from_dict(" in code
     assert "mesh = sw_ir.LogicalMesh(" in code
 
-    scope: dict[str, object] = {}
+    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
     exec(code, scope)  # noqa: S102
     builder = scope["build_distributed"]
     assert callable(builder)
@@ -239,7 +241,7 @@ def test_export_to_python_mesh_without_webrtc() -> None:
     )
     code = export_to_python(graph)
     assert 'mesh = sw_ir.LogicalMesh(shape={"data": 4})' in code
-    scope: dict[str, object] = {}
+    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
     exec(code, scope)  # noqa: S102
     builder = scope["build_graph"]
     assert callable(builder)
@@ -274,12 +276,14 @@ def test_export_to_python_subgraphs_and_missing_black(
 
     code = export_to_python(graph)
     assert "LogicalGraph.from_dict(" in code
-    scope: dict[str, object] = {}
+    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
     exec(code, scope)  # noqa: S102
     builder = scope["build_graph"]
     assert callable(builder)
     reconstructed = builder()
-    assert reconstructed.nodes["scan_op"].subgraphs["body"].name == "BodySubgraph"
+    body_sub = reconstructed.nodes["scan_op"].subgraphs["body"]
+    assert isinstance(body_sub, sw_ir.LogicalGraph)
+    assert body_sub.name == "BodySubgraph"
     assert reconstructed.nodes["scan_op"].subgraphs["meta"] == "custom_tag"
 
     monkeypatch.setitem(sys.modules, "black", None)
@@ -302,7 +306,7 @@ def test_export_to_python_special_characters_and_sanitization() -> None:
 
     code_digit = export_to_python(graph, function_name="123-my.func!")
     compiled = compile(code_digit, "<exported>", "exec")
-    scope: dict[str, object] = {}
+    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
     exec(compiled, scope)  # noqa: S102
     builder = scope["_123_my_func"]
     assert callable(builder)

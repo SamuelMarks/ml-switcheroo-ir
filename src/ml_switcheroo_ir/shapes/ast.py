@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 import pydantic
 import pydantic_core
@@ -1431,8 +1431,8 @@ class SymInt:
         raise TypeError(f"Cannot convert dynamic SymInt '{self.expr}' to concrete int.")
 
 
-DimensionType: TypeAlias = typing.Union[int, str, SymNode, SymInt]
-ShapeType: TypeAlias = Sequence[DimensionType]
-SymCondition: TypeAlias = typing.Union[
+DimensionType: typing_extensions.TypeAlias = typing.Union[int, str, SymNode, SymInt]
+ShapeType: typing_extensions.TypeAlias = Sequence[DimensionType]
+SymCondition: typing_extensions.TypeAlias = typing.Union[
     Callable[[dict[str, int]], bool], SymNode, bool, str
 ]

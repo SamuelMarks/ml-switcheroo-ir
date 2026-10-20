@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from enum import Enum
 import gzip
 import json
 import logging
 import os
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +19,7 @@ from ml_switcheroo_ir.schema.onnx_registry import OpSchema
 from ml_switcheroo_ir.snapshots import (
     get_effective_snapshot_dir as _get_snapshot_dir,
 )
+from ml_switcheroo_ir.types import JsonValue
 from ml_switcheroo_ir.validation.core import (
     KNOWN_SYNONYMS,
     ValidationError,
@@ -40,8 +41,25 @@ __all__ = [
     "audit_graph_grounding",
 ]
 
-SnapshotManifestType: TypeAlias = typing.Union[
-    Mapping[str, object], Sequence[object], str, None
+if typing.TYPE_CHECKING:
+    SnapshotManifestNode: typing_extensions.TypeAlias = (
+        str
+        | int
+        | float
+        | bool
+        | None
+        | Collection["SnapshotManifestNode"]
+        | Sequence["SnapshotManifestNode"]
+        | Mapping[str, "SnapshotManifestNode"]
+    )
+else:
+    SnapshotManifestNode: typing_extensions.TypeAlias = JsonValue
+
+SnapshotManifestType: typing_extensions.TypeAlias = typing.Union[
+    Mapping[str, SnapshotManifestNode],
+    Sequence[SnapshotManifestNode],
+    str,
+    None,
 ]
 
 
@@ -232,9 +250,9 @@ class GroundingValidator(Validator):
             use_default_if_none (bool): If True and snapshot_manifest is None, load from DEFAULT_SNAPSHOT_DIR.
         """
         super().__init__(registry=registry)
-        self.grounded_symbols: dict[str, dict[str, object]] = {}
-        self.concept_map: dict[str, dict[str, object]] = {}
-        self.parameter_translations: dict[str, object] = {}
+        self.grounded_symbols: dict[str, dict[str, SnapshotManifestNode]] = {}
+        self.concept_map: dict[str, dict[str, SnapshotManifestNode]] = {}
+        self.parameter_translations: dict[str, SnapshotManifestNode] = {}
         self._engine: GroundingEngineProtocol | None = None
 
         target = snapshot_manifest if snapshot_manifest is not None else snapshots_dir
@@ -266,11 +284,13 @@ class GroundingValidator(Validator):
         elif use_default_if_none and os.path.isdir(default_dir):
             self._load_directory(default_dir)
 
-    def _ingest_manifest_target(self, target: object) -> None:
+    def _ingest_manifest_target(
+        self, target: SnapshotManifestType | SnapshotManifestNode
+    ) -> None:
         """Ingest snapshot manifest from diverse target types.
 
         Args:
-            target (object): Directory path, file path, dict, or list.
+            target (SnapshotManifestType | SnapshotManifestNode): Directory path, file path, dict, or list.
         """
         if isinstance(target, str):
             if os.path.isdir(target):
@@ -323,12 +343,12 @@ class GroundingValidator(Validator):
                     self._load_file(os.path.join(root, fname))
 
     def _register_symbol_record(
-        self, item: Mapping[str, object], default_key: str | None = None
+        self, item: Mapping[str, SnapshotManifestNode], default_key: str | None = None
     ) -> None:
         """Register an individual symbol record under primary and short keys.
 
         Args:
-            item (Mapping[str, object]): Symbol definition record.
+            item (Mapping[str, SnapshotManifestNode]): Symbol definition record.
             default_key (str | None): Fallback key if neither api_path, name, nor mnemonic is present.
         """
         item_dict = {str(k): v for k, v in item.items()}
@@ -350,12 +370,13 @@ class GroundingValidator(Validator):
                 self.grounded_symbols[unqualified] = item_dict
 
     def _load_snapshot_data(
-        self, data: Mapping[str, object] | Sequence[object]
+        self,
+        data: Mapping[str, SnapshotManifestNode] | Sequence[SnapshotManifestNode],
     ) -> None:
         """Load snapshot entries from categorized, flat, or top-level list formats.
 
         Args:
-            data (Mapping[str, object] | Sequence[object]): Parsed snapshot data.
+            data (Mapping[str, SnapshotManifestNode] | Sequence[SnapshotManifestNode]): Parsed snapshot data.
         """
         if isinstance(data, list):
             for item in data:
@@ -509,7 +530,7 @@ class GroundingValidator(Validator):
         errors: list[ValidationError] = []
         full_path = f"{node.domain}.{node.op_type}"
 
-        match: Mapping[str, object] | None = self.grounded_symbols.get(
+        match: Mapping[str, SnapshotManifestNode] | None = self.grounded_symbols.get(
             full_path
         ) or self.grounded_symbols.get(node.op_type)
         discover_fn = getattr(self._engine, "_discover_target_files", None)

@@ -90,8 +90,8 @@ def test_topological_sort_missing_nodes() -> None:
     assert {n.id for n in sorted_nodes} == {"n1", "n2"}
 
 
-def test_dataclasses_coverage() -> None:
-    """Ensure dataclass instantiation logic works cleanly for coverage."""
+def test_pydantic_models_coverage() -> None:
+    """Ensure Pydantic model instantiation logic works cleanly for coverage."""
     axis = LogicalAxis(name="batch", size=32)
     assert axis.name == "batch"
     assert axis.size == 32
@@ -110,17 +110,17 @@ def test_dataclasses_coverage() -> None:
 def test_not_implemented_errors() -> None:
     """Test that abstract methods raise NotImplementedError."""
 
-    class PartialBackend(CompilerBackend[object]):
+    class PartialBackend(CompilerBackend[str]):
         """A partial implementation of CompilerBackend for testing."""
 
-        def compile(self, graph: LogicalGraph) -> object:
+        def compile(self, graph: LogicalGraph) -> str:
             """Override compile to call super().
 
             Args:
                 graph (LogicalGraph): The logical graph.
 
             Returns:
-                object: The compiled output.
+                str: The compiled output.
 
             """
             return CompilerBackend.compile(self, graph)
@@ -744,12 +744,14 @@ def test_to_json_from_json() -> None:
 
 def test_from_dict_subgraph_edge_branches() -> None:
     """Test edge branches in from_dict for subgraphs and input_specs."""
+    from ml_switcheroo_ir.serialization import RawGraphValue
+
     direct_sub = LogicalGraph(
         name="DirectSub",
         nodes={"s": LogicalNode(id="s", op_type="Relu")},
         outputs=["s"],
     )
-    raw = {
+    raw: dict[str, RawGraphValue] = {
         "nodes": {
             "n": {
                 "id": "n",
@@ -778,13 +780,20 @@ def test_from_dict_and_from_json_comprehensive() -> None:
     )
     spec_obj = TensorSpec(shape=(1, 4), dtype=DType.float32)
 
-    raw_dict: dict[str, object] = {
+    from ml_switcheroo_ir.serialization import RawGraphValue
+
+    raw_dict: dict[str, RawGraphValue] = {
         "name": "FullTestGraph",
         "nodes": {
             "n1": {
                 "id": "n1",
                 "op_type": "Conv",
                 "dtype": "float32",
+                "attributes": {
+                    "kernel": 3,
+                    "nested_dict": {"pad": 1},
+                    "nested_list": [1, 2],
+                },
                 "sharding": PartitionSpec(axes=("data", None)),
                 "output_specs": [{"shape": (1, 16), "dtype": "float32"}, spec_obj],
                 "subgraphs": {
@@ -792,7 +801,11 @@ def test_from_dict_and_from_json_comprehensive() -> None:
                     "sub_dict": {
                         "name": "NestedDict",
                         "nodes": {
-                            "sub_dict_n": {"id": "sub_dict_n", "op_type": "Identity"}
+                            "sub_dict_n": {
+                                "id": "sub_dict_n",
+                                "op_type": "Identity",
+                                "sharding": {"axes": [["data", "model"], None]},
+                            }
                         },
                         "outputs": ["sub_dict_n"],
                     },
@@ -803,6 +816,11 @@ def test_from_dict_and_from_json_comprehensive() -> None:
         "input_specs": {
             "in_x": spec_obj,
             "in_y": {"shape": (2, 8), "dtype": "int32"},
+        },
+        "initializers": {
+            "w": [1.0, 2.0],
+            "meta": {"scale": 1.0},
+            "other": None,
         },
         "outputs": ["n1"],
     }

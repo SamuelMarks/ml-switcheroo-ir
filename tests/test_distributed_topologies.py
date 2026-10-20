@@ -62,7 +62,9 @@ def test_pipeline_topology_models_and_graph_integration() -> None:
 
     # Test dictionary export and import
     topo_dict = pipe_topo.to_dict()
-    assert topo_dict["microbatch_splitting"]["num_microbatches"] == 8
+    mb_dict = topo_dict["microbatch_splitting"]
+    assert isinstance(mb_dict, dict)
+    assert mb_dict["num_microbatches"] == 8
     reconstructed_topo = PipelineTopologyConfig.from_dict(topo_dict)
     assert reconstructed_topo.mesh_mapping.devices_per_stage == 2
 

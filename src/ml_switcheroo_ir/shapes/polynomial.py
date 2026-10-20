@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.shapes.ast import SymNode
 
-MonomialType: TypeAlias = tuple[tuple[str, int], ...]
+MonomialType: typing_extensions.TypeAlias = tuple[tuple[str, int], ...]
 
 __all__ = [
     "MonomialType",

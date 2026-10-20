@@ -12,6 +12,7 @@ from ml_switcheroo_ir.schema.base import (
     load_op_schema_catalog,
 )
 from ml_switcheroo_ir.snapshots import find_schema_file
+from ml_switcheroo_ir.types import JsonValue
 
 SASS_REGISTRY: dict[str, OpSchema] = {}
 SASS_PIPELINE_LATENCIES: dict[str, int] = {}
@@ -24,11 +25,11 @@ def _load_sass_schemas(json_path: Path | str | None = None) -> None:
         json_path (Optional[Union[Path, str]]): Explicit path override for sass_ops.json.
     """
 
-    def _record_sass_latency(op_data: Mapping[str, object]) -> None:
+    def _record_sass_latency(op_data: Mapping[str, JsonValue]) -> None:
         """Record execution latency from a SASS schema entry.
 
         Args:
-            op_data (Mapping[str, object]): Raw operator definition dictionary.
+            op_data (Mapping[str, JsonValue]): Raw operator definition dictionary.
         """
         raw_lat = op_data.get("execution_latency", 4)
         SASS_PIPELINE_LATENCIES[str(op_data["name"])] = (

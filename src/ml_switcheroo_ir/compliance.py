@@ -7,20 +7,21 @@ from collections.abc import Sequence
 import json
 import os
 import sys
-import typing
+
+import pydantic
 
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 
 
 def _fallback_tabulate(
-    tabular_data: Sequence[Sequence[object]],
+    tabular_data: Sequence[Sequence[str | int | float]],
     headers: Sequence[str] = (),
     tablefmt: str = "grid",
 ) -> str:
     """Format tabular data as a pipe-separated ASCII table when tabulate is unavailable.
 
     Args:
-        tabular_data (Sequence[Sequence[object]]): Rows of table cells.
+        tabular_data (Sequence[Sequence[str | int | float]]): Rows of table cells.
         headers (Sequence[str]): Sequence of column header labels.
         tablefmt (str): Table formatting style identifier.
 
@@ -36,8 +37,8 @@ def _fallback_tabulate(
     return res
 
 
-class FileComplianceResult(typing.TypedDict):
-    """Typed dictionary representing the compliance analysis of a Python file.
+class FileComplianceResult(pydantic.BaseModel):
+    """Pydantic model representing the compliance analysis of a Python file.
 
     Attributes:
         is_ir (bool): Whether the file defines an IR Backend or Frontend.
@@ -47,11 +48,13 @@ class FileComplianceResult(typing.TypedDict):
         fw_score (tuple[int, int]): Tuple of (met_requirements, total_requirements) for FrameworkAdapter.
     """
 
-    is_ir: bool
-    is_fw: bool
-    implemented_ops: set[str]
-    ir_score: tuple[int, int]
-    fw_score: tuple[int, int]
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    is_ir: bool = False
+    is_fw: bool = False
+    implemented_ops: set[str] = pydantic.Field(default_factory=set)
+    ir_score: tuple[int, int] = (0, 5)
+    fw_score: tuple[int, int] = (0, 4)
 
 
 __all__ = [
@@ -300,38 +303,31 @@ def analyze_python_file(filepath: str, dialect_ops: set[str]) -> FileComplianceR
     """Analyze a python file for IR, FrameworkAdapter, and Dialect compliance.
 
     Args:
-        filepath: Path to the python file.
-        dialect_ops: Set of all dialect operations.
+        filepath (str): Path to the python file.
+        dialect_ops (set[str]): Set of all dialect operations.
 
     Returns:
-        FileComplianceResult: Dictionary with compliance findings.
+        FileComplianceResult: Model with compliance findings.
     """
-    result: FileComplianceResult = {
-        "is_ir": False,
-        "is_fw": False,
-        "implemented_ops": set(),
-        "ir_score": (0, 5),
-        "fw_score": (0, 4),
-    }
-
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             source = f.read()
         tree = ast.parse(source)
     except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
-        return result
+        return FileComplianceResult()
 
     is_ir, ir_score = _score_ir_classes(tree)
     is_fw, fw_score = _score_fw_adapters(tree)
     implemented = _extract_ast_dialect_ops(tree, dialect_ops)
     implemented.update(extract_dynamic_definitions(tree, filepath, dialect_ops))
 
-    result["is_ir"] = is_ir
-    result["ir_score"] = ir_score
-    result["is_fw"] = is_fw
-    result["fw_score"] = fw_score
-    result["implemented_ops"] = implemented
-    return result
+    return FileComplianceResult(
+        is_ir=is_ir,
+        ir_score=ir_score,
+        is_fw=is_fw,
+        fw_score=fw_score,
+        implemented_ops=implemented,
+    )
 
 
 def _render_verbose_missing_report(
@@ -495,23 +491,23 @@ def run_compliance_check(
 
         res = analyze_python_file(filepath, dialect_ops)
 
-        if res["is_ir"]:
+        if res.is_ir:
             found_any_ir = True
-            if res["ir_score"][0] > best_ir_score[0]:
-                best_ir_score = res["ir_score"]
+            if res.ir_score[0] > best_ir_score[0]:
+                best_ir_score = res.ir_score
 
-        if res["is_fw"]:
+        if res.is_fw:
             found_any_fw = True
-            if res["fw_score"][0] > best_fw_score[0]:
-                best_fw_score = res["fw_score"]
+            if res.fw_score[0] > best_fw_score[0]:
+                best_fw_score = res.fw_score
 
-        if res["implemented_ops"]:
-            aggregated_dialect_ops.update(res["implemented_ops"])
+        if res.implemented_ops:
+            aggregated_dialect_ops.update(res.implemented_ops)
             found_any_dialect_targets = True
 
         if (
-            not res["is_ir"]
-            and not res["is_fw"]
+            not res.is_ir
+            and not res.is_fw
             and filepath in [os.path.abspath(t) for t in targets if os.path.isfile(t)]
         ):
             found_any_dialect_targets = True
