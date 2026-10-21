@@ -7,3 +7,4 @@ build
 hypothesis
 jsonschema
 onnx
+griffe @ git+https://github.com/SamuelMarks/griffe.git@rest

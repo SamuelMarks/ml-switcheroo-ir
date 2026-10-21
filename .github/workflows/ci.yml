@@ -90,6 +90,7 @@ jobs:
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
+        grep -v '^ml-switcheroo-ir' ../ml-ecosystem-snapshots/requirements.txt | pip install -r /dev/stdin
         pip install --no-deps -e ../ml-ecosystem-snapshots
         pip install .[test]
 
