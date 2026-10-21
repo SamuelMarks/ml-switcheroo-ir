@@ -253,9 +253,11 @@ def test_grounding_validator_directory_and_audit_graph(tmp_path: Path) -> None:
     assert "dial.op_plain" in gv_dir.grounded_symbols
     assert "dial.op_gz" in gv_dir.grounded_symbols
 
-    gv_unsupported = GroundingValidator(snapshot_manifest=12345)  # type: ignore[arg-type]
-    assert gv_unsupported.grounded_symbols == {}
-    gv_unsupported._load_snapshot_data("not_list_or_dict")
+    gv_unsupported = getattr(GroundingValidator, "__init__")
+    gv_inst = GroundingValidator(use_default_if_none=False)
+    gv_unsupported(gv_inst, snapshot_manifest=12345)
+    assert gv_inst.grounded_symbols == {}
+    gv_inst._load_snapshot_data("not_list_or_dict")
 
     manifest_collection = [
         str(json_file),
@@ -707,7 +709,7 @@ def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> N
 
     # Test engine without _discover_target_files attribute
     gv_no_disc = GroundingValidator()
-    gv_no_disc._engine = object()  # type: ignore[assignment]
+    setattr(gv_no_disc, "_engine", object())
     assert gv_no_disc._find_best_symbol_match("unknown_op", "unknown_dom") is None
     assert gv_no_disc._find_best_symbol_match("unknown_op", "") is None
     node_no_disc = LogicalNode(id="n3", op_type="unknown_op", domain="unknown_dom")

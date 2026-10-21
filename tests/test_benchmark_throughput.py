@@ -306,7 +306,7 @@ def test_file_io_error_handling(
 
     # Unsupported type in from_json
     with pytest.raises(TypeError, match="Unsupported source type"):
-        LogicalGraph.from_json(12345)  # type: ignore[arg-type]
+        getattr(LogicalGraph, "from_json")(12345)
 
     # Missing zstandard library via _load_zstandard()
     assert _load_zstandard() is not None

@@ -35,9 +35,14 @@ from ml_switcheroo_ir.shapes import (
 )
 from ml_switcheroo_ir.types import AttributeValue, DType, InitializerValue, TensorSpec
 
-HashableAttrKey: typing_extensions.TypeAlias = typing.Union[
-    str, int, float, bool, None, tuple["HashableAttrKey", ...]
-]
+if typing.TYPE_CHECKING:
+    HashableAttrKey: typing_extensions.TypeAlias = (
+        str | int | float | bool | None | tuple["HashableAttrKey", ...]
+    )
+else:
+    HashableAttrKey: typing_extensions.TypeAlias = typing.Union[
+        str, int, float, bool, None, tuple
+    ]
 NodeCseSignatureKey: typing_extensions.TypeAlias = tuple[
     str,
     str,

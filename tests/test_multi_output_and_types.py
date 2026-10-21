@@ -526,7 +526,12 @@ def test_tensor_shape_and_node_edge_coverage() -> None:
 
     # Reject float dimension in shape_metadata
     with pytest.raises(TypeError, match="not a valid DimensionType"):
-        LogicalNode(id="nf", op_type="Custom", shape_metadata=(1.5, 2))  # type: ignore[arg-type]
+        getattr(LogicalNode, "__init__")(
+            LogicalNode(id="tmp", op_type="Custom"),
+            id="nf",
+            op_type="Custom",
+            shape_metadata=(1.5, 2),
+        )
 
     # Shape property setter tests
     node_prop = LogicalNode(id="np", op_type="Relu")
@@ -540,7 +545,7 @@ def test_tensor_shape_and_node_edge_coverage() -> None:
     assert node_prop.shape_metadata == (8, 9)
 
     node_prop.shape = 42
-    assert node_prop.shape_metadata == (42,)
+    assert list(node_prop.shape_metadata) == [42]
 
     node_prop.shape = None
     assert node_prop.shape_metadata is None

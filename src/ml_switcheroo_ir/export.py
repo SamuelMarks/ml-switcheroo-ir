@@ -15,7 +15,7 @@ import re
 import typing
 import typing_extensions
 
-from pydantic import TypeAdapter
+import pydantic
 
 from ml_switcheroo_ir.distributed import (
     PipelineTopologyConfig,
@@ -85,13 +85,13 @@ def get_json_schema(
     if target_clean == "ZeroTangent":
         from ml_switcheroo_ir import sentinels as _sentinels  # noqa: F401
 
-        schema = TypeAdapter(ZeroTangent).json_schema()
+        schema = pydantic.TypeAdapter(ZeroTangent).json_schema()
         schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
         return schema
     if target_clean == "NoTangent":
         from ml_switcheroo_ir import sentinels as _sentinels  # noqa: F401
 
-        schema = TypeAdapter(NoTangent).json_schema()
+        schema = pydantic.TypeAdapter(NoTangent).json_schema()
         schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
         return schema
     if target_clean == "PipelineTopologyConfig":

@@ -11,31 +11,31 @@ import sys
 import typing
 import typing_extensions
 
-from pydantic import BaseModel, ConfigDict, Field
+import pydantic
 
 from ml_switcheroo_ir.types import JsonValue
 
 
-class OnnxAttrSpecModel(BaseModel):
+class OnnxAttrSpecModel(pydantic.BaseModel):
     """Pydantic model for a parsed ONNX operator attribute specification."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     type: str = "Any"
     required: bool = False
     default: JsonValue = None
 
 
-class OnnxOpSpecModel(BaseModel):
+class OnnxOpSpecModel(pydantic.BaseModel):
     """Pydantic model for a parsed ONNX operator schema specification."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     domain: str = "ai.onnx"
     version: int = 1
-    attributes: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
-    inputs: list[str] = Field(default_factory=list)
-    outputs: list[str] = Field(default_factory=list)
+    attributes: dict[str, dict[str, JsonValue]] = pydantic.Field(default_factory=dict)
+    inputs: list[str] = pydantic.Field(default_factory=list)
+    outputs: list[str] = pydantic.Field(default_factory=list)
 
 
 OnnxAttrSpecModel.model_rebuild()
@@ -75,7 +75,11 @@ def extract_section(block: str, section_name: str) -> str:
 
 
 OnnxOpEntryValue: typing_extensions.TypeAlias = typing.Union[
-    str, int, list[str], dict[str, dict[str, JsonValue]]
+    str,
+    int,
+    list[str],
+    list[dict[str, JsonValue]],
+    dict[str, dict[str, JsonValue]],
 ]
 
 

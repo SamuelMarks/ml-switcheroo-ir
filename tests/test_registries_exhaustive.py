@@ -535,6 +535,19 @@ def test_snapshots_discovery_precedence(tmp_path: Path) -> None:
         resolved_cache = get_default_snapshots_dir()
         assert resolved_cache == str(cache_dir.resolve())
 
+    # Sibling repo root with empty snapshots subdir falls back to DEFAULT_SNAPSHOT_DIR
+    from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR, resolve_snapshots_path
+
+    sibling_root = (
+        Path(__file__).resolve().parent.parent.parent / "ml-ecosystem-snapshots"
+    )
+    with mock.patch(
+        "ml_switcheroo_ir.snapshots._has_snapshot_files", return_value=False
+    ):
+        assert (
+            resolve_snapshots_path(sibling_root) == Path(DEFAULT_SNAPSHOT_DIR).resolve()
+        )
+
 
 def test_find_schema_file_all_branches(tmp_path: Path) -> None:
     """Verify find_schema_file handles override paths, candidate resolution, and missing files.

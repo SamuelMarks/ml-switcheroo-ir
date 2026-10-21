@@ -8,20 +8,41 @@ import json
 import logging
 import os
 import typing
-from typing_extensions import TypeAlias
+import typing_extensions
 
 import pydantic
-from pydantic import BaseModel, ConfigDict, Field
 
 from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR
 from ml_switcheroo_ir.types import AttributeValue, JsonValue
 
 _logger = logging.getLogger(__name__)
 
-RoleFrameworkMap: TypeAlias = dict[str, list[str]]
+RoleFrameworkMap: typing_extensions.TypeAlias = dict[str, list[str]]
 
 
-class OperationTranslationSpec(BaseModel):
+def _is_4d_nested_sequence(
+    val: TensorLike,
+) -> typing.TypeGuard[Sequence[Sequence[Sequence[Sequence[JsonValue]]]]]:
+    """Check whether val is a non-empty 4D nested sequence (list or tuple).
+
+    Args:
+        val (TensorLike): Candidate tensor or sequence.
+
+    Returns:
+        typing.TypeGuard[Sequence[Sequence[Sequence[Sequence[JsonValue]]]]]: True if 4D nested sequence.
+    """
+    return (
+        isinstance(val, (list, tuple))
+        and len(val) > 0
+        and isinstance(val[0], (list, tuple))
+        and len(val[0]) > 0
+        and isinstance(val[0][0], (list, tuple))
+        and len(val[0][0]) > 0
+        and isinstance(val[0][0][0], (list, tuple))
+    )
+
+
+class OperationTranslationSpec(pydantic.BaseModel):
     """Pydantic model for operation parameter role translations across frameworks.
 
     Attributes:
@@ -29,9 +50,9 @@ class OperationTranslationSpec(BaseModel):
         defaults (dict[str, dict[str, JsonValue]] | None): Optional default parameter values per framework.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = pydantic.ConfigDict(extra="allow")
 
-    roles: dict[str, RoleFrameworkMap] = Field(default_factory=dict)
+    roles: dict[str, RoleFrameworkMap] = pydantic.Field(default_factory=dict)
     defaults: dict[str, dict[str, JsonValue]] | None = None
 
     def __getitem__(self, key: str) -> dict[str, RoleFrameworkMap]:
@@ -81,31 +102,34 @@ class OperationTranslationSpec(BaseModel):
         return self.roles
 
 
-class TranslationMap(BaseModel):
+class TranslationMap(pydantic.BaseModel):
     """Pydantic model wrapping a mapping of operation names to OperationTranslationSpec.
 
     Attributes:
         operations (dict[str, OperationTranslationSpec]): Operation translation specifications.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid")
 
-    operations: dict[str, OperationTranslationSpec] = Field(default_factory=dict)
+    operations: dict[str, OperationTranslationSpec] = pydantic.Field(
+        default_factory=dict
+    )
 
     @pydantic.model_validator(mode="before")
     @classmethod
     def _coerce_mapping(
         cls,
-        data: Mapping[str, OperationTranslationSpec | Mapping[str, object]],
-    ) -> dict[str, object]:
+        data: Mapping[str, OperationTranslationSpec | Mapping[str, JsonValue]],
+    ) -> dict[str, dict[str, OperationTranslationSpec | Mapping[str, JsonValue]]]:
         """Coerce raw dictionary of operation specs into the 'operations' field.
 
         Args:
-            data (Mapping[str, OperationTranslationSpec | Mapping[str, object]]):
+            data (Mapping[str, OperationTranslationSpec | Mapping[str, JsonValue]]):
                 Input mapping.
 
         Returns:
-            dict[str, object]: Normalized dictionary for Pydantic validation.
+            dict[str, dict[str, OperationTranslationSpec | Mapping[str, JsonValue]]]:
+                Normalized dictionary for Pydantic validation.
         """
         return {"operations": dict(data)}
 
@@ -133,11 +157,11 @@ class TranslationMap(BaseModel):
         """
         self.operations[key] = OperationTranslationSpec.model_validate(value)
 
-    def __contains__(self, key: object) -> bool:
+    def __contains__(self, key: str) -> bool:
         """Check whether an operation exists in the translation map.
 
         Args:
-            key (object): Operation name.
+            key (str): Operation name.
 
         Returns:
             bool: True if operation is present.
@@ -201,24 +225,24 @@ class TensorLikeProtocol(typing.Protocol):
 
     shape: Sequence[int]
 
-    def transpose(self, *axes: int | tuple[int, ...]) -> object:
+    def transpose(self, *axes: int | tuple[int, ...]) -> TensorLikeProtocol:
         """Return tensor with permuted dimensions.
 
         Args:
             *axes (int | tuple[int, ...]): Target axis permutation.
 
         Returns:
-            object: Transposed tensor-like object.
+            TensorLikeProtocol: Transposed tensor-like object.
         """
 
-    def reshape(self, *shape: int | tuple[int, ...]) -> object:
+    def reshape(self, *shape: int | tuple[int, ...]) -> TensorLikeProtocol:
         """Return tensor reshaped to target dimensions.
 
         Args:
             *shape (int | tuple[int, ...]): Target dimensions.
 
         Returns:
-            object: Reshaped tensor-like object.
+            TensorLikeProtocol: Reshaped tensor-like object.
         """
 
 
@@ -226,14 +250,16 @@ class TensorLikeProtocol(typing.Protocol):
 class TransposableTensorProtocol(typing.Protocol):
     """Structural protocol for tensor-like objects providing .transpose()."""
 
-    def transpose(self, perm: tuple[int, ...]) -> object:
+    def transpose(
+        self, perm: tuple[int, ...]
+    ) -> TransposableTensorProtocol | tuple[str, tuple[int, ...]] | JsonValue:
         """Return tensor with transposed dimensions.
 
         Args:
             perm (tuple[int, ...]): Target axis permutation.
 
         Returns:
-            object: Transposed tensor-like object.
+            TransposableTensorProtocol | tuple[str, tuple[int, ...]] | JsonValue: Transposed tensor-like object.
         """
 
 
@@ -241,14 +267,16 @@ class TransposableTensorProtocol(typing.Protocol):
 class PermutableTensorProtocol(typing.Protocol):
     """Structural protocol for PyTorch-like tensors providing .permute()."""
 
-    def permute(self, perm: tuple[int, ...]) -> object:
+    def permute(
+        self, perm: tuple[int, ...]
+    ) -> PermutableTensorProtocol | tuple[str, tuple[int, ...]] | JsonValue:
         """Return tensor with permuted dimensions.
 
         Args:
             perm (tuple[int, ...]): Target dimension order.
 
         Returns:
-            object: Permuted tensor-like object.
+            PermutableTensorProtocol | tuple[str, tuple[int, ...]] | JsonValue: Permuted tensor-like object.
         """
 
 
@@ -256,7 +284,9 @@ class PermutableTensorProtocol(typing.Protocol):
 class SplittableTensorProtocol(typing.Protocol):
     """Structural protocol for tensor-like objects providing .split()."""
 
-    def split(self, split_size: int, dim: int = 0) -> Sequence[object]:
+    def split(
+        self, split_size: int, dim: int = 0
+    ) -> Sequence[SplittableTensorProtocol | JsonValue]:
         """Split tensor into chunks along a dimension.
 
         Args:
@@ -264,26 +294,40 @@ class SplittableTensorProtocol(typing.Protocol):
             dim (int): Dimension along which to split.
 
         Returns:
-            Sequence[object]: Sequence of split tensor chunks.
+            Sequence[SplittableTensorProtocol | JsonValue]: Sequence of split tensor chunks.
         """
 
 
-NestedTensorSequence: TypeAlias = Sequence[
-    typing.Union[int, float, bool, str, "NestedTensorSequence"]
-]
-TensorLike: TypeAlias = typing.Union[
-    TensorLikeProtocol,
-    TransposableTensorProtocol,
-    PermutableTensorProtocol,
-    SplittableTensorProtocol,
-    NestedTensorSequence,
-    Sequence[object],
-    Mapping[str, object],
-    int,
-    float,
-    str,
-    object,
-]
+if typing.TYPE_CHECKING:
+    NestedTensorSequence: typing_extensions.TypeAlias = Sequence[
+        int | float | bool | str | "NestedTensorSequence"
+    ]
+    TensorLike: typing_extensions.TypeAlias = (
+        TensorLikeProtocol
+        | TransposableTensorProtocol
+        | PermutableTensorProtocol
+        | SplittableTensorProtocol
+        | list[list[list[list[JsonValue]]]]
+        | NestedTensorSequence
+        | Sequence[JsonValue]
+        | Mapping[str, JsonValue]
+        | tuple[str, tuple[int, ...]]
+        | JsonValue
+    )
+else:
+    NestedTensorSequence = Sequence
+    TensorLike = (
+        TensorLikeProtocol,
+        TransposableTensorProtocol,
+        PermutableTensorProtocol,
+        SplittableTensorProtocol,
+        Sequence,
+        Mapping,
+        int,
+        float,
+        bool,
+        str,
+    )
 
 __all__ = [
     "NestedTensorSequence",
@@ -703,7 +747,7 @@ class ParameterTranslationEngine:
         weights: TensorLike,
         source_format: str,
         target_format: str,
-    ) -> object:
+    ) -> TensorLike | tuple[TensorLike, tuple[int, ...]]:
         """Permute 2D convolution weight tensors across framework memory layouts.
 
         Permutes between PyTorch format (OIHW / [out_channels, in_channels, H, W])
@@ -715,7 +759,7 @@ class ParameterTranslationEngine:
             target_format (str): Target layout string (e.g. 'OIHW', 'HWIO', 'HWOI').
 
         Returns:
-            object: Transposed weight array or list with target layout.
+            TensorLike | tuple[TensorLike, tuple[int, ...]]: Transposed weight array or list with target layout.
 
         Raises:
             ValueError: If source_format or target_format is invalid or ranks mismatch.
@@ -736,15 +780,7 @@ class ParameterTranslationEngine:
             return weights.transpose(tuple(perm))
         if isinstance(weights, PermutableTensorProtocol):
             return weights.permute(tuple(perm))
-        if (
-            isinstance(weights, (list, tuple))
-            and len(weights) > 0
-            and isinstance(weights[0], (list, tuple))
-            and len(weights[0]) > 0
-            and isinstance(weights[0][0], (list, tuple))
-            and len(weights[0][0]) > 0
-            and isinstance(weights[0][0][0], (list, tuple))
-        ):
+        if _is_4d_nested_sequence(weights):
             dims = [
                 len(weights),
                 len(weights[0]),
@@ -752,13 +788,13 @@ class ParameterTranslationEngine:
                 len(weights[0][0][0]),
             ]
             out_dims = [dims[p] for p in perm]
-            out_4d: list[list[list[list[object]]]] = []
+            out_4d: list[list[list[list[JsonValue]]]] = []
             for i0 in range(out_dims[0]):
-                plane1: list[list[list[object]]] = []
+                plane1: list[list[list[JsonValue]]] = []
                 for i1 in range(out_dims[1]):
-                    plane2: list[list[object]] = []
+                    plane2: list[list[JsonValue]] = []
                     for i2 in range(out_dims[2]):
-                        row: list[object] = []
+                        row: list[JsonValue] = []
                         for i3 in range(out_dims[3]):
                             out_idx = [i0, i1, i2, i3]
                             src_idx = [0, 0, 0, 0]
@@ -779,7 +815,11 @@ class ParameterTranslationEngine:
         num_heads: int,
         head_dim: int,
         split_dim: int = 0,
-    ) -> tuple[object, object, object]:
+    ) -> tuple[
+        TensorLike | tuple[str, TensorLike],
+        TensorLike | tuple[str, TensorLike],
+        TensorLike | tuple[str, TensorLike],
+    ]:
         """Split combined QKV projection weights into separate Q, K, and V weights.
 
         Args:
@@ -789,7 +829,8 @@ class ParameterTranslationEngine:
             split_dim (int): Dimension along which to split (default 0).
 
         Returns:
-            tuple[object, object, object]: (q_weight, k_weight, v_weight) tuple.
+            tuple[TensorLike | tuple[str, TensorLike], TensorLike | tuple[str, TensorLike], TensorLike | tuple[str, TensorLike]]:
+                (q_weight, k_weight, v_weight) tuple.
 
         Raises:
             ValueError: If num_heads or head_dim is non-positive.
@@ -818,7 +859,7 @@ class ParameterTranslationEngine:
         k_weight: TensorLike,
         v_weight: TensorLike,
         concat_dim: int = 0,
-    ) -> object:
+    ) -> TensorLike | tuple[str, tuple[TensorLike, TensorLike, TensorLike], int]:
         """Merge separate Q, K, and V projection weights into a single combined QKV tensor.
 
         Args:
@@ -828,12 +869,13 @@ class ParameterTranslationEngine:
             concat_dim (int): Dimension along which to concatenate (default 0).
 
         Returns:
-            object: Merged QKV weight object.
+            TensorLike | tuple[str, tuple[TensorLike, TensorLike, TensorLike], int]:
+                Merged QKV weight object.
         """
         if (
             isinstance(q_weight, list)
             and isinstance(k_weight, list)
             and isinstance(v_weight, list)
         ):
-            return q_weight + k_weight + v_weight
+            return [*q_weight, *k_weight, *v_weight]
         return ("qkv", (q_weight, k_weight, v_weight), concat_dim)

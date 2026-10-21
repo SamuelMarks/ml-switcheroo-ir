@@ -82,7 +82,7 @@ def test_logical_graph_rejects_nodes_as_list() -> None:
     """Test LogicalGraph raises TypeError when initialized with a list of nodes."""
     n1 = LogicalNode(id="n1", op_type="Input")
     with pytest.raises(TypeError, match="must be a Mapping"):
-        LogicalGraph(name="ListGraph", nodes=[n1])  # type: ignore[arg-type]
+        getattr(LogicalGraph, "__init__")(LogicalGraph(), name="ListGraph", nodes=[n1])
 
 
 def test_logical_graph_explicit_edges() -> None:
@@ -166,10 +166,20 @@ def test_logical_node_rejects_invalid_shape_metadata() -> None:
         """A class simulating an invalid shape."""
 
     with pytest.raises(TypeError, match="not a valid DimensionType"):
-        LogicalNode(id="n4", op_type="Linear", shape_metadata=BadShape())  # type: ignore[arg-type]
+        getattr(LogicalNode, "__init__")(
+            LogicalNode(id="tmp", op_type="Linear"),
+            id="n4",
+            op_type="Linear",
+            shape_metadata=BadShape(),
+        )
 
     with pytest.raises(TypeError, match="not a valid DimensionType"):
-        LogicalNode(id="n5", op_type="Custom", shape_metadata=object())  # type: ignore[arg-type]
+        getattr(LogicalNode, "__init__")(
+            LogicalNode(id="tmp", op_type="Custom"),
+            id="n5",
+            op_type="Custom",
+            shape_metadata=object(),
+        )
 
     with pytest.raises(TypeError, match="Invalid shape_metadata"):
         LogicalNode(id="n6", op_type="Custom", shape_metadata="invalid_str")

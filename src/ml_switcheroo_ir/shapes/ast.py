@@ -116,18 +116,19 @@ class SymNode:
     @classmethod
     def __get_pydantic_core_schema__(
         cls,
-        source_type: object,
+        source_type: type[SymNode],
         handler: pydantic.GetCoreSchemaHandler | None = None,
     ) -> pydantic_core.CoreSchema | None:
         """Generate Pydantic core schema for SymNode serializing as string or integer.
 
         Args:
-            source_type (object): Source type.
+            source_type (type[SymNode]): Source type.
             handler (pydantic.GetCoreSchemaHandler | None): Schema generation handler.
 
         Returns:
             pydantic_core.CoreSchema | None: Pydantic core schema representation.
         """
+        del source_type, handler
         try:
             from pydantic_core import core_schema
 
@@ -1191,18 +1192,19 @@ class SymInt:
     @classmethod
     def __get_pydantic_core_schema__(
         cls,
-        source_type: object,
+        source_type: type[SymInt],
         handler: pydantic.GetCoreSchemaHandler | None = None,
     ) -> pydantic_core.CoreSchema | None:
         """Generate Pydantic core schema for SymInt serializing as string or integer.
 
         Args:
-            source_type (object): Source type.
+            source_type (type[SymInt]): Source type.
             handler (pydantic.GetCoreSchemaHandler | None): Schema generation handler.
 
         Returns:
             pydantic_core.CoreSchema | None: Pydantic core schema representation.
         """
+        del source_type, handler
         try:
             from pydantic_core import core_schema
 

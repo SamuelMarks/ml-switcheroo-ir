@@ -617,13 +617,13 @@ class _AttributeValuePydanticAnnotation:
     @classmethod
     def __get_pydantic_core_schema__(
         cls,
-        source_type: object,
+        source_type: type[AttributeValue],
         handler: pydantic.GetCoreSchemaHandler,
     ) -> pydantic_core.CoreSchema:
         """Return core_schema.any_schema() for runtime AttributeValue preservation.
 
         Args:
-            source_type (object): Annotated type.
+            source_type (type[AttributeValue]): Annotated type.
             handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
 
         Returns:

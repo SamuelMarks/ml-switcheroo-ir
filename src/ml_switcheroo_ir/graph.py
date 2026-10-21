@@ -15,7 +15,6 @@ from pathlib import Path
 import typing
 
 import pydantic
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 import pydantic_core
 
 from ml_switcheroo_ir.distributed import (
@@ -108,7 +107,7 @@ class _OmittedSentinel(Enum):
 _CLONE_OMITTED: typing.Final[_OmittedSentinel] = _OmittedSentinel.OMITTED
 
 
-class LogicalEdge(BaseModel):
+class LogicalEdge(pydantic.BaseModel):
     """Represents a directed data-flow edge between two nodes in the graph.
 
     Attributes:
@@ -119,7 +118,7 @@ class LogicalEdge(BaseModel):
         value_name (str | None): Name of the intermediate SSA value (default: None).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     source: str
     target: str
@@ -204,7 +203,7 @@ def _normalize_shape_metadata(
     return _validate_dimension_tuple(shape_metadata)
 
 
-class LogicalNode(BaseModel):
+class LogicalNode(pydantic.BaseModel):
     """Represents a computation unit (Layer) in the graph.
 
     Attributes:
@@ -225,7 +224,7 @@ class LogicalNode(BaseModel):
         stream (str | None): Asynchronous execution stream name.
     """
 
-    model_config = ConfigDict(
+    model_config = pydantic.ConfigDict(
         arbitrary_types_allowed=True,
         extra="forbid",
         validate_assignment=True,
@@ -235,20 +234,20 @@ class LogicalNode(BaseModel):
     op_type: str = ""
     domain: str = "ai.onnx"
     version: int = 1
-    attributes: dict[str, AttributeValue] = Field(default_factory=dict)
-    inputs: list[str] = Field(default_factory=list)
-    outputs: list[str] = Field(default_factory=list)
+    attributes: dict[str, AttributeValue] = pydantic.Field(default_factory=dict)
+    inputs: list[str] = pydantic.Field(default_factory=list)
+    outputs: list[str] = pydantic.Field(default_factory=list)
     shape_metadata: tuple[DimensionType, ...] | None = None
     source_ast_ref: str | None = None
     sharding: PartitionSpec | None = None
     dtype: DType | None = None
-    output_specs: list[TensorSpec] = Field(default_factory=list)
+    output_specs: list[TensorSpec] = pydantic.Field(default_factory=list)
     subgraphs: dict[
         str,
         typing.Annotated[
             LogicalGraph | AttributeValue, _AttributeValuePydanticAnnotation
         ],
-    ] = Field(default_factory=dict)
+    ] = pydantic.Field(default_factory=dict)
     device: str | None = None
     stream: str | None = None
 
@@ -694,18 +693,19 @@ class NodeDict(dict[str, LogicalNode]):
     @classmethod
     def __get_pydantic_core_schema__(
         cls,
-        source_type: object,
+        source_type: type[NodeDict],
         handler: pydantic.GetCoreSchemaHandler,
     ) -> pydantic_core.CoreSchema:
         """Generate Pydantic core schema for NodeDict as dict[str, LogicalNode].
 
         Args:
-            source_type (object): Source type annotation.
+            source_type (type[NodeDict]): Source type annotation.
             handler (pydantic.GetCoreSchemaHandler): Core schema handler.
 
         Returns:
             pydantic_core.CoreSchema: Core schema wrapping dict[str, LogicalNode].
         """
+        del source_type
         from pydantic_core import core_schema
 
         dict_schema = handler.generate_schema(dict[str, LogicalNode])
@@ -800,7 +800,7 @@ def _infer_graph_outputs(
     return out_ids
 
 
-class LogicalGraph(BaseModel):
+class LogicalGraph(pydantic.BaseModel):
     """Represents a computational model or function definition.
 
     Attributes:
@@ -814,29 +814,31 @@ class LogicalGraph(BaseModel):
         pipeline_topology (PipelineTopologyConfig | None): Optional distributed pipeline topology.
     """
 
-    model_config = ConfigDict(
+    model_config = pydantic.ConfigDict(
         arbitrary_types_allowed=True,
         extra="forbid",
         validate_assignment=True,
     )
 
     name: str = "Model"
-    nodes: NodeDict = Field(default_factory=NodeDict)
-    inputs: list[str] = Field(default_factory=list)
-    input_specs: dict[str, TensorSpec] = Field(default_factory=dict)
-    outputs: list[str] = Field(default_factory=list)
-    initializers: dict[str, InitializerValue] = Field(default_factory=dict)
+    nodes: NodeDict = pydantic.Field(default_factory=NodeDict)
+    inputs: list[str] = pydantic.Field(default_factory=list)
+    input_specs: dict[str, TensorSpec] = pydantic.Field(default_factory=dict)
+    outputs: list[str] = pydantic.Field(default_factory=list)
+    initializers: dict[str, InitializerValue] = pydantic.Field(default_factory=dict)
     mesh: LogicalMesh | None = None
     pipeline_topology: PipelineTopologyConfig | None = None
 
-    _cached_output_map: dict[str, tuple[LogicalNode, int]] | None = PrivateAttr(
-        default=None
+    _cached_output_map: dict[str, tuple[LogicalNode, int]] | None = (
+        pydantic.PrivateAttr(default=None)
     )
-    _cached_nodes_version: int = PrivateAttr(default=-1)
-    _cached_outputs_node: LogicalNode | None = PrivateAttr(default=None)
-    _cached_outputs_list_ref: list[str] | None = PrivateAttr(default=None)
-    _cached_outputs_version: int = PrivateAttr(default=-1)
-    _edge_value_names: dict[tuple[str, int], str] = PrivateAttr(default_factory=dict)
+    _cached_nodes_version: int = pydantic.PrivateAttr(default=-1)
+    _cached_outputs_node: LogicalNode | None = pydantic.PrivateAttr(default=None)
+    _cached_outputs_list_ref: list[str] | None = pydantic.PrivateAttr(default=None)
+    _cached_outputs_version: int = pydantic.PrivateAttr(default=-1)
+    _edge_value_names: dict[tuple[str, int], str] = pydantic.PrivateAttr(
+        default_factory=dict
+    )
 
     @pydantic.field_validator("nodes", mode="before")
     @classmethod

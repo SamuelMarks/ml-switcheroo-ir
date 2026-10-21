@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 import re
 
+import pydantic
+
 from ml_switcheroo_ir.schema.base import REGISTRY_LOCK, OpAttribute, OpSchema
 from ml_switcheroo_ir.snapshots import find_schema_file
 from ml_switcheroo_ir.types import AttributeValue, JsonValue
@@ -66,14 +68,19 @@ def _parse_onnx_fallback_ops(
         attributes: dict[str, OpAttribute] = {}
         raw_attrs = op_data.get("attributes", [])
         if isinstance(raw_attrs, list):
-            for a in raw_attrs:
-                if isinstance(a, dict) and "name" in a:
-                    a_name = str(a["name"])
-                    parsed_default = _parse_onnx_proto_default(a.get("default"))
+            for a_raw in raw_attrs:
+                a_dict = (
+                    a_raw.model_dump()
+                    if isinstance(a_raw, pydantic.BaseModel)
+                    else a_raw
+                )
+                if isinstance(a_dict, dict) and "name" in a_dict:
+                    a_name = str(a_dict["name"])
+                    parsed_default = _parse_onnx_proto_default(a_dict.get("default"))
                     attributes[a_name] = OpAttribute(
                         name=a_name,
-                        type=str(a.get("type", "Any")),
-                        required=bool(a.get("required", False)),
+                        type=str(a_dict.get("type", "Any")),
+                        required=bool(a_dict.get("required", False)),
                         default=parsed_default,
                     )
         elif isinstance(raw_attrs, dict):

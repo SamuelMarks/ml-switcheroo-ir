@@ -11,7 +11,7 @@ import os
 import typing
 import typing_extensions
 
-from pydantic import BaseModel, ConfigDict, Field
+import pydantic
 
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.ghost import ExtendedGhostRef
@@ -92,7 +92,7 @@ class GroundingEngineProtocol(typing.Protocol):
         """
 
 
-class GroundingAuditReport(BaseModel):
+class GroundingAuditReport(pydantic.BaseModel):
     """Audit report detailing graph grounding against ground-truth framework snapshots.
 
     Attributes:
@@ -103,7 +103,7 @@ class GroundingAuditReport(BaseModel):
         diagnostics (list[ValidationError]): Diagnostic error reports.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     total_nodes: int
     grounded_count: int
@@ -145,7 +145,7 @@ class DiagnosticSeverity(str, Enum):
     ERROR = "ERROR"
 
 
-class GroundingDiagnostic(BaseModel):
+class GroundingDiagnostic(pydantic.BaseModel):
     """Specific diagnostic message emitted during symbol or operation verification.
 
     Attributes:
@@ -155,19 +155,21 @@ class GroundingDiagnostic(BaseModel):
         suggested_fix (str | None): Suggested replacement or typo correction.
     """
 
-    field: str = Field(description="The component, attribute, or operand evaluated.")
-    message: str = Field(description="Human-readable diagnostic explanation.")
-    severity: DiagnosticSeverity = Field(
+    field: str = pydantic.Field(
+        description="The component, attribute, or operand evaluated."
+    )
+    message: str = pydantic.Field(description="Human-readable diagnostic explanation.")
+    severity: DiagnosticSeverity = pydantic.Field(
         default=DiagnosticSeverity.ERROR,
         description="Severity level of the diagnostic.",
     )
-    suggested_fix: str | None = Field(
+    suggested_fix: str | None = pydantic.Field(
         default=None,
         description="Suggested replacement or typo correction.",
     )
 
 
-class GroundingReport(BaseModel):
+class GroundingReport(pydantic.BaseModel):
     """Comprehensive validation report for a verified operation or symbol.
 
     Attributes:
@@ -178,18 +180,18 @@ class GroundingReport(BaseModel):
         matched_ref (ExtendedGhostRef | None): Resolved ground-truth reference object if discovered.
     """
 
-    is_grounded: bool = Field(
+    is_grounded: bool = pydantic.Field(
         description="True if the symbol is grounded and valid without fatal errors."
     )
-    target: str = Field(description="Target framework, dialect, or ISA.")
-    symbol: str = Field(
+    target: str = pydantic.Field(description="Target framework, dialect, or ISA.")
+    symbol: str = pydantic.Field(
         description="Queried symbol, mnemonic, or operation identifier."
     )
-    diagnostics: list[GroundingDiagnostic] = Field(
+    diagnostics: list[GroundingDiagnostic] = pydantic.Field(
         default_factory=list,
         description="Collection of diagnostics produced during verification.",
     )
-    matched_ref: ExtendedGhostRef | None = Field(
+    matched_ref: ExtendedGhostRef | None = pydantic.Field(
         default=None,
         description="Resolved ground-truth reference object if discovered.",
     )

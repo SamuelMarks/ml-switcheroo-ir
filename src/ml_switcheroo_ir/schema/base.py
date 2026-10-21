@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import threading
 
-from pydantic import BaseModel, ConfigDict, Field
+import pydantic
 
 from ml_switcheroo_ir.schema.ghost import (
     RdnaPrimitiveSpec,
@@ -20,7 +20,7 @@ from ml_switcheroo_ir.types import AttributeValue, JsonValue
 REGISTRY_LOCK = threading.RLock()
 
 
-class RawOpAttributeSpec(BaseModel):
+class RawOpAttributeSpec(pydantic.BaseModel):
     """Pydantic model for a raw JSON attribute entry in an operator catalog.
 
     Attributes:
@@ -30,7 +30,7 @@ class RawOpAttributeSpec(BaseModel):
         default (AttributeValue): Optional default value.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str = ""
     type: str = "str"
@@ -38,7 +38,7 @@ class RawOpAttributeSpec(BaseModel):
     default: AttributeValue = None
 
 
-class RawOpSchemaSpec(BaseModel):
+class RawOpSchemaSpec(pydantic.BaseModel):
     """Pydantic model for a raw JSON operator entry in an operator catalog.
 
     Attributes:
@@ -54,23 +54,23 @@ class RawOpSchemaSpec(BaseModel):
         vopd_equiv (str | None): Optional RDNA VOPD equivalent opcode.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str
     domain: str = ""
     version: int = 1
     schema_version: int | None = None
-    attributes: list[RawOpAttributeSpec] | dict[str, RawOpAttributeSpec] = Field(
-        default_factory=list
+    attributes: list[RawOpAttributeSpec] | dict[str, RawOpAttributeSpec] = (
+        pydantic.Field(default_factory=list)
     )
-    inputs: list[str] = Field(default_factory=list)
-    outputs: list[str] = Field(default_factory=list)
+    inputs: list[str] = pydantic.Field(default_factory=list)
+    outputs: list[str] = pydantic.Field(default_factory=list)
     latency: int | None = None
     vopd_slot: str | None = None
     vopd_equiv: str | None = None
 
 
-class OpAttribute(BaseModel):
+class OpAttribute(pydantic.BaseModel):
     """Represents a single operator attribute schema.
 
     Attributes:
@@ -80,7 +80,7 @@ class OpAttribute(BaseModel):
         default (AttributeValue): Default value if optional.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str
     type: str
@@ -110,7 +110,7 @@ class OpAttribute(BaseModel):
         )
 
 
-class OpSchema(BaseModel):
+class OpSchema(pydantic.BaseModel):
     """Represents a single operator schema.
 
     Attributes:
@@ -123,7 +123,7 @@ class OpSchema(BaseModel):
         schema_version (int | None): Optional upstream opset/schema version.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str
     domain: str
@@ -165,7 +165,7 @@ class OpSchema(BaseModel):
         )
 
 
-class CustomAttributeSchema(BaseModel):
+class CustomAttributeSchema(pydantic.BaseModel):
     """Represents an attribute for a custom operator.
 
     Attributes:
@@ -175,7 +175,7 @@ class CustomAttributeSchema(BaseModel):
         default (AttributeValue): The default value if not provided.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str = ""
     type: str = "Any"
@@ -218,7 +218,7 @@ class CustomAttributeSchema(BaseModel):
         )
 
 
-class CustomOpSchema(BaseModel):
+class CustomOpSchema(pydantic.BaseModel):
     """Represents a custom operator schema.
 
     Attributes:
@@ -232,15 +232,15 @@ class CustomOpSchema(BaseModel):
         schema_version (int | None): Optional upstream opset/schema version.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str
     domain: str
     attributes: (
         list[CustomAttributeSchema] | dict[str, CustomAttributeSchema | OpAttribute]
-    ) = Field(default_factory=list)
-    inputs: list[str] = Field(default_factory=list)
-    outputs: list[str] = Field(default_factory=list)
+    ) = pydantic.Field(default_factory=list)
+    inputs: list[str] = pydantic.Field(default_factory=list)
+    outputs: list[str] = pydantic.Field(default_factory=list)
     version: int = 1
     schema_version: int | None = None
 

@@ -8,16 +8,16 @@ import os
 from pathlib import Path
 import sys
 
-from pydantic import BaseModel, ConfigDict, Field
+import pydantic
 
 from ml_switcheroo_ir.types import JsonValue
 from ml_switcheroo_ir.validator import DEFAULT_SNAPSHOT_DIR
 
 
-class StableHloAttrSpecModel(BaseModel):
+class StableHloAttrSpecModel(pydantic.BaseModel):
     """Pydantic model for a generated StableHLO operator attribute schema."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     name: str
     type: str = "str"
@@ -25,16 +25,16 @@ class StableHloAttrSpecModel(BaseModel):
     default: JsonValue = None
 
 
-class StableHloOpSpecModel(BaseModel):
+class StableHloOpSpecModel(pydantic.BaseModel):
     """Pydantic model for a generated StableHLO operator schema."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     name: str
     domain: str = "stablehlo"
-    inputs: list[str] = Field(default_factory=list)
-    outputs: list[str] = Field(default_factory=list)
-    attributes: list[StableHloAttrSpecModel] = Field(default_factory=list)
+    inputs: list[str] = pydantic.Field(default_factory=list)
+    outputs: list[str] = pydantic.Field(default_factory=list)
+    attributes: list[StableHloAttrSpecModel] = pydantic.Field(default_factory=list)
 
 
 StableHloAttrSpecModel.model_rebuild()

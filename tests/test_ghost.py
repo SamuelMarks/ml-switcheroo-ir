@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from pydantic import BaseModel, ValidationError
+import pydantic
 
 from ml_switcheroo_ir.schema.ghost import (
     ExtendedGhostParam,
@@ -156,7 +156,7 @@ def test_extended_ghost_param_canonical_constraints() -> None:
 def test_parameter_kind_enum_roundtrip() -> None:
     """Test ParameterKind enumeration functional roundtrip and validation."""
 
-    class DummyModel(BaseModel):
+    class DummyModel(pydantic.BaseModel):
         """Dummy docstring."""
 
         kind: ParameterKind
@@ -167,14 +167,14 @@ def test_parameter_kind_enum_roundtrip() -> None:
     serialized = json.loads(model.model_dump_json())
     assert serialized["kind"] == "POSITIONAL_OR_KEYWORD"
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(pydantic.ValidationError):
         DummyModel.model_validate_json('{"kind": "INVALID_KIND"}')
 
 
 def test_semantic_tier_enum_roundtrip() -> None:
     """Test SemanticTier enumeration functional roundtrip and validation."""
 
-    class DummyModel(BaseModel):
+    class DummyModel(pydantic.BaseModel):
         """Dummy docstring."""
 
         tier: SemanticTier
@@ -185,14 +185,14 @@ def test_semantic_tier_enum_roundtrip() -> None:
     serialized = json.loads(model.model_dump_json())
     assert serialized["tier"] == "neural_ops"
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(pydantic.ValidationError):
         DummyModel.model_validate_json('{"tier": "nonexistent_tier"}')
 
 
 def test_logic_op_enum_roundtrip() -> None:
     """Test LogicOp enumeration functional roundtrip and validation."""
 
-    class DummyModel(BaseModel):
+    class DummyModel(pydantic.BaseModel):
         """Dummy docstring."""
 
         op: LogicOp
@@ -203,5 +203,5 @@ def test_logic_op_enum_roundtrip() -> None:
     serialized = json.loads(model.model_dump_json())
     assert serialized["op"] == "gte"
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(pydantic.ValidationError):
         DummyModel.model_validate_json('{"op": "not_an_operator"}')

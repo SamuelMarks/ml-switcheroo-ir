@@ -87,17 +87,12 @@ warn_unreachable = false
 [[tool.mypy.overrides]]
 module = [
     "tabulate",
-    "tabulate.*",
-    "ml_ecosystem_snapshots",
     "ml_ecosystem_snapshots.*",
     "onnx",
     "onnx.*",
-    "numpy",
-    "numpy.*",
     "hypothesis",
     "hypothesis.*",
     "pytest",
-    "_pytest.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

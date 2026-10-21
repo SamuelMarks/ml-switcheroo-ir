@@ -217,12 +217,14 @@ def test_get_test_coverage_failure() -> None:
 def test_get_coverage_metrics_temp_file_handling() -> None:
     """Test get_coverage_metrics temporary file generation and cleanup."""
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> MagicMock:
+    def fake_subprocess_run(
+        cmd: list[str], **kwargs: bool | str | int | None
+    ) -> MagicMock:
         """Fake coverage json execution by dumping valid json.
 
         Args:
             cmd (list[str]): Command list.
-            **kwargs (object): Extra arguments.
+            **kwargs (bool | str | int | None): Extra arguments.
 
         Returns:
             MagicMock: Mock subprocess completed process.
@@ -276,12 +278,14 @@ def test_get_coverage_metrics_temp_file_handling() -> None:
 def test_update_readme_without_coverage_path_or_sibling() -> None:
     """Test update_readme when coverage_json_path is None and sibling coverage.json does not exist."""
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> MagicMock:
+    def fake_subprocess_run(
+        cmd: list[str], **kwargs: bool | str | int | None
+    ) -> MagicMock:
         """Fake coverage json execution.
 
         Args:
             cmd (list[str]): Command list.
-            **kwargs (object): Extra arguments.
+            **kwargs (bool | str | int | None): Extra arguments.
 
         Returns:
             MagicMock: Mock subprocess completed process.

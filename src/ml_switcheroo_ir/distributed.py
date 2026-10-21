@@ -6,24 +6,20 @@ from collections.abc import Mapping, Sequence
 import typing
 import typing_extensions
 
-from pydantic import BaseModel, ConfigDict, Field
+import pydantic
 
 from ml_switcheroo_ir.types import JsonValue
 
 PartitionAxisAtom: typing_extensions.TypeAlias = typing.Union[str, int, None]
 PartitionAxisInner: typing_extensions.TypeAlias = typing.Union[
-    PartitionAxisAtom,
-    tuple[PartitionAxisAtom, ...],
-    list[PartitionAxisAtom],
+    PartitionAxisAtom, tuple[PartitionAxisAtom, ...], list[PartitionAxisAtom]
 ]
 PartitionAxisElement: typing_extensions.TypeAlias = typing.Union[
-    PartitionAxisInner,
-    tuple[PartitionAxisInner, ...],
-    list[PartitionAxisInner],
+    PartitionAxisInner, tuple[PartitionAxisInner, ...], list[PartitionAxisInner]
 ]
 
 
-class LogicalAxis(BaseModel):
+class LogicalAxis(pydantic.BaseModel):
     """Represents a named dimension for tensor sizes and sharding (e.g., 'batch', 'embed', 'heads').
 
     Attributes:
@@ -31,7 +27,7 @@ class LogicalAxis(BaseModel):
         size (int | None): Optional fixed size of the axis.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
     name: str
     size: int | None = None
@@ -46,7 +42,7 @@ class LogicalAxis(BaseModel):
         super().__init__(name=name, size=size)
 
 
-class PartitionSpec(BaseModel):
+class PartitionSpec(pydantic.BaseModel):
     """Describes how a tensor's dimensions are mapped to a logical mesh.
 
     Each element in `axes` corresponds to a tensor dimension. An element can be:
@@ -58,7 +54,7 @@ class PartitionSpec(BaseModel):
         axes (tuple[PartitionAxisElement, ...]): Tuple mapping tensor dimensions to mesh axes.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     axes: tuple[PartitionAxisElement, ...] = ()
 
@@ -74,7 +70,7 @@ class PartitionSpec(BaseModel):
         super().__init__(axes=tuple(axes))
 
 
-class LogicalMesh(BaseModel):
+class LogicalMesh(pydantic.BaseModel):
     """Represents a multi-dimensional grid of devices for distributed execution.
 
     Attributes:
@@ -82,7 +78,7 @@ class LogicalMesh(BaseModel):
         webrtc_topology (WebRTCSignalingTopology | None): WebRTC cluster mesh signaling configuration.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     shape: dict[str, int]
     webrtc_topology: WebRTCSignalingTopology | None = None
@@ -101,7 +97,7 @@ class LogicalMesh(BaseModel):
         super().__init__(shape=dict(shape), webrtc_topology=webrtc_topology)
 
 
-class MicrobatchSplittingConfig(BaseModel):
+class MicrobatchSplittingConfig(pydantic.BaseModel):
     """Configuration for microbatch splitting strategy and count.
 
     Attributes:
@@ -109,37 +105,37 @@ class MicrobatchSplittingConfig(BaseModel):
         num_microbatches (int): Total number of microbatches.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     strategy: str = "uniform"
     num_microbatches: int = 1
 
 
-class MeshMappingConfig(BaseModel):
+class MeshMappingConfig(pydantic.BaseModel):
     """Configuration for mapping pipeline stages to accelerator devices.
 
     Attributes:
         devices_per_stage (int): Number of devices assigned to each pipeline stage.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     devices_per_stage: int = 1
 
 
-class StageCommunicationConfig(BaseModel):
+class StageCommunicationConfig(pydantic.BaseModel):
     """Configuration for inter-stage communication protocol.
 
     Attributes:
         protocol (str): Transport protocol ('p2p', 'webrtc', 'nccl', 'gloo').
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     protocol: str = "p2p"
 
 
-class DependencyConfig(BaseModel):
+class DependencyConfig(pydantic.BaseModel):
     """Configuration for synchronization dependencies between pipeline stages.
 
     Attributes:
@@ -148,14 +144,14 @@ class DependencyConfig(BaseModel):
         offset_mb (int): Microbatch offset index.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     source_stage: str
     target_stage: str
     offset_mb: int = 0
 
 
-class SchedulePhaseConfig(BaseModel):
+class SchedulePhaseConfig(pydantic.BaseModel):
     """Configuration for an execution phase in a pipeline schedule.
 
     Attributes:
@@ -164,26 +160,26 @@ class SchedulePhaseConfig(BaseModel):
         count_expression (str): Expression resolving the execution iteration count.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     type: str = "1F1B"
-    operations: list[str] = Field(default_factory=list)
+    operations: list[str] = pydantic.Field(default_factory=list)
     count_expression: str = "1"
 
 
-class PipelineScheduleConfig(BaseModel):
+class PipelineScheduleConfig(pydantic.BaseModel):
     """Configuration for ordered phases in a pipeline execution schedule.
 
     Attributes:
         phases (list[SchedulePhaseConfig]): Ordered schedule phases.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    phases: list[SchedulePhaseConfig] = Field(default_factory=list)
+    phases: list[SchedulePhaseConfig] = pydantic.Field(default_factory=list)
 
 
-class PipelineTopologyConfig(BaseModel):
+class PipelineTopologyConfig(pydantic.BaseModel):
     """Comprehensive specification for a distributed pipeline topology.
 
     Attributes:
@@ -194,12 +190,12 @@ class PipelineTopologyConfig(BaseModel):
         schedule (PipelineScheduleConfig | None): Optional pipeline schedule configuration.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     microbatch_splitting: MicrobatchSplittingConfig
     mesh_mapping: MeshMappingConfig
     stage_communication: StageCommunicationConfig
-    dependencies: list[DependencyConfig] = Field(default_factory=list)
+    dependencies: list[DependencyConfig] = pydantic.Field(default_factory=list)
     schedule: PipelineScheduleConfig | None = None
 
     def to_dict(self) -> dict[str, JsonValue]:
@@ -259,7 +255,7 @@ class PipelineTopologyConfig(BaseModel):
         return cls.model_validate(data)
 
 
-class WebRTCPeerConfig(BaseModel):
+class WebRTCPeerConfig(pydantic.BaseModel):
     """Configuration for a WebRTC mesh participant peer.
 
     Attributes:
@@ -269,7 +265,7 @@ class WebRTCPeerConfig(BaseModel):
         ice_transport_policy (str): ICE transport policy ('all', 'relay').
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     peer_id: str
     device_capability: str = "webgpu"
@@ -277,7 +273,7 @@ class WebRTCPeerConfig(BaseModel):
     ice_transport_policy: str = "all"
 
 
-class WebRTCSignalingTopology(BaseModel):
+class WebRTCSignalingTopology(pydantic.BaseModel):
     """Configuration for WebRTC mesh coordination, signaling endpoints, and buffer watermarks.
 
     Attributes:
@@ -290,17 +286,17 @@ class WebRTCSignalingTopology(BaseModel):
         peers (list[WebRTCPeerConfig]): List of participating peer specifications.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     signaling_url: str = "ws://localhost:8080"
-    ice_servers: list[str] = Field(
+    ice_servers: list[str] = pydantic.Field(
         default_factory=lambda: ["stun:stun.l.google.com:19302"]
     )
     high_watermark_bytes: int = 1048576
     low_watermark_bytes: int = 262144
     chunk_size_bytes: int = 65536
-    connectivity_matrix: list[list[int]] = Field(default_factory=list)
-    peers: list[WebRTCPeerConfig] = Field(default_factory=list)
+    connectivity_matrix: list[list[int]] = pydantic.Field(default_factory=list)
+    peers: list[WebRTCPeerConfig] = pydantic.Field(default_factory=list)
 
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert WebRTC signaling topology to dictionary representation.
