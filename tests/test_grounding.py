@@ -488,7 +488,7 @@ def test_grounding_against_dumped_ir_snapshot(tmp_path: Path) -> None:
     """
     from ml_switcheroo_ir.cli import main as cli_main
 
-    ir_file = tmp_path / "ir_v0.0.3.json"
+    ir_file = tmp_path / "ir_v0.0.4.json"
     cli_main(["dump-snapshot", "--output", str(ir_file)])
     assert ir_file.exists()
 

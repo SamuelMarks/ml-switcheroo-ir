@@ -550,7 +550,7 @@ def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
 
 
 def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify ir_v0.0.3.json snapshot matches runtime API signatures.
+    """Verify ir_v0.0.4.json snapshot matches runtime API signatures.
 
     Args:
         snapshots_dir (Path): Path to framework snapshots directory.
@@ -558,7 +558,7 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: List of diagnostic errors for mismatched public APIs.
     """
-    ir_file = snapshots_dir / "ir_v0.0.3.json"
+    ir_file = snapshots_dir / "ir_v0.0.4.json"
     if not ir_file.is_file():
         candidates = sorted(snapshots_dir.glob("ir_v*.json"))
         if not candidates:

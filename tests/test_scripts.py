@@ -1270,14 +1270,14 @@ def test_verify_ir_snapshot_grounding_paths() -> None:
         # Missing file and no candidates returns []
         assert verify_ir_snapshot_grounding(tmppath) == []
 
-        # Test candidate fallback with ir_v0.1.0.json when ir_v0.0.3.json is missing
+        # Test candidate fallback with ir_v0.1.0.json when ir_v0.0.4.json is missing
         candidate_json = tmppath / "ir_v0.1.0.json"
         with open(candidate_json, "w", encoding="utf-8") as f:
             json.dump({"categories": {"classes": [], "functions": []}}, f)
         assert verify_ir_snapshot_grounding(tmppath) == []
 
         # File with unresolvable classes and functions
-        ir_json = tmppath / "ir_v0.0.3.json"
+        ir_json = tmppath / "ir_v0.0.4.json"
         with open(ir_json, "w", encoding="utf-8") as f:
             json.dump(
                 {

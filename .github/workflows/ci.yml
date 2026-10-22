@@ -40,7 +40,7 @@ jobs:
       run: |
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks
-        gh release download v0.0.3 -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
+        gh release download v0.0.4 -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/*_exhaustive.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks/ 2>/dev/null || true
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/concept_map.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/ 2>/dev/null || true
         python -c "
