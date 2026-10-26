@@ -97,19 +97,41 @@ def test_format_cov() -> None:
 
 
 def test_get_doc_coverage() -> None:
-    """Test get_doc_coverage returns 100.0 and parses output correctly."""
+    """Test get_doc_coverage parses output correctly and raises ValueError on failure."""
     assert get_doc_coverage() == 100.0
 
     with patch("subprocess.run") as mock_run:
         mock_run.return_value.stdout = "actual: 97.4%\n"
         assert get_doc_coverage() == 97.4
 
-    with patch("subprocess.run") as mock_run_no_match:
-        mock_run_no_match.return_value.stdout = "no match in output\n"
-        assert get_doc_coverage() == 100.0
+    with (
+        patch("subprocess.run") as mock_run_zero,
+        pytest.raises(
+            ValueError,
+            match="Failed to determine documentation coverage from interrogate",
+        ),
+    ):
+        mock_run_zero.return_value.stdout = "actual: 0.0%\n"
+        get_doc_coverage()
 
-    with patch("subprocess.run", side_effect=RuntimeError("Failed")):
-        assert get_doc_coverage() == 100.0
+    with (
+        patch("subprocess.run") as mock_run_no_match,
+        pytest.raises(
+            ValueError,
+            match="Failed to determine documentation coverage from interrogate",
+        ),
+    ):
+        mock_run_no_match.return_value.stdout = "no match in output\n"
+        get_doc_coverage()
+
+    with (
+        patch("subprocess.run", side_effect=RuntimeError("Failed")),
+        pytest.raises(
+            ValueError,
+            match="Failed to determine documentation coverage from interrogate",
+        ),
+    ):
+        get_doc_coverage()
 
 
 def test_count_shields() -> None:
@@ -183,6 +205,16 @@ def test_enforce_coverage_shields() -> None:
                 "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
             )
         with pytest.raises(ValueError, match="Expected exactly 1 doc coverage shield"):
+            enforce_coverage_shields(readme)
+
+        # 0% coverage shield rejected
+        with open(readme, "w", encoding="utf-8") as f:
+            f.write(
+                "# Title\n"
+                "[![Test Coverage](https://img.shields.io/badge/test_coverage-0%25-red.svg)](#)\n"
+                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
+            )
+        with pytest.raises(ValueError, match="Coverage shield cannot be 0%"):
             enforce_coverage_shields(readme)
 
         # Valid shields: exactly 1 test, 1 doc, 0 branch
@@ -324,6 +356,16 @@ def test_update_readme_without_coverage_path_or_sibling() -> None:
             content = f.read()
         assert "test_coverage-100%25" in content
 
+        # Error when coverage subprocess fails (returns 0.0 -> raises ValueError)
+        with (
+            patch("subprocess.run", side_effect=RuntimeError("No coverage")),
+            pytest.raises(
+                ValueError,
+                match="Failed to determine test coverage or test coverage is 0%",
+            ),
+        ):
+            update_readme(readme_path=readme_file, coverage_json_path=None)
+
 
 def test_update_readme_missing_file() -> None:
     """Test update_readme returns gracefully when readme does not exist."""
@@ -337,6 +379,7 @@ def test_update_readme_success() -> None:
         "[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
         "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
     )
+    mock_res = MagicMock(stdout="actual: 100.0%\n")
     with TemporaryDirectory() as tmpdir:
         readme_file = os.path.join(tmpdir, "README.md")
         cov_file = os.path.join(tmpdir, "coverage.json")
@@ -356,7 +399,7 @@ def test_update_readme_success() -> None:
                 f,
             )
 
-        with patch("subprocess.run"):
+        with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=readme_file, coverage_json_path=cov_file)
 
         with open(readme_file, "r", encoding="utf-8") as f:
@@ -372,7 +415,7 @@ def test_update_readme_success() -> None:
         with open(readme_file, "w", encoding="utf-8") as f:
             f.write(updated + branch_badge)
 
-        with patch("subprocess.run"):
+        with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=readme_file, coverage_json_path=cov_file)
 
         with open(readme_file, "r", encoding="utf-8") as f:
@@ -384,6 +427,7 @@ def test_update_readme_success() -> None:
 
 def test_update_readme_insertions_and_deduplications() -> None:
     """Test update_readme insertion scenarios and duplicate shield pruning."""
+    mock_res = MagicMock(stdout="actual: 100.0%\n")
     with TemporaryDirectory() as tmpdir:
         cov_file = os.path.join(tmpdir, "coverage.json")
         with open(cov_file, "w", encoding="utf-8") as f:
@@ -395,7 +439,7 @@ def test_update_readme_insertions_and_deduplications() -> None:
             f.write(
                 "# Title\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
             )
-        with patch("subprocess.run"):
+        with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=case1_file, coverage_json_path=cov_file)
         with open(case1_file, "r", encoding="utf-8") as f:
             assert count_shields(f.read()) == (1, 1, 0)
@@ -404,7 +448,7 @@ def test_update_readme_insertions_and_deduplications() -> None:
         case2_file = os.path.join(tmpdir, "case2.md")
         with open(case2_file, "w", encoding="utf-8") as f:
             f.write("# Title\n\nSome body text.\n")
-        with patch("subprocess.run"):
+        with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=case2_file, coverage_json_path=cov_file)
         with open(case2_file, "r", encoding="utf-8") as f:
             assert count_shields(f.read()) == (1, 1, 0)
@@ -413,7 +457,7 @@ def test_update_readme_insertions_and_deduplications() -> None:
         case3_file = os.path.join(tmpdir, "case3.md")
         with open(case3_file, "w", encoding="utf-8") as f:
             f.write("Just raw text without header.\n")
-        with patch("subprocess.run"):
+        with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=case3_file, coverage_json_path=cov_file)
         with open(case3_file, "r", encoding="utf-8") as f:
             assert count_shields(f.read()) == (1, 1, 0)
@@ -428,7 +472,7 @@ def test_update_readme_insertions_and_deduplications() -> None:
                 "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
                 "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-60%25-red.svg)](#)\n"
             )
-        with patch("subprocess.run"):
+        with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=case4_file, coverage_json_path=cov_file)
         with open(case4_file, "r", encoding="utf-8") as f:
             assert count_shields(f.read()) == (1, 1, 0)
@@ -438,6 +482,7 @@ def test_update_readme_insertions_and_deduplications() -> None:
         with open(case5_file, "w", encoding="utf-8") as f:
             f.write("# Title\n")
         with (
+            patch("subprocess.run", return_value=mock_res),
             patch("scripts.update_badges.count_shields", return_value=(2, 1, 0)),
             pytest.raises(ValueError, match="Enforcement failed after update"),
         ):
@@ -446,6 +491,7 @@ def test_update_readme_insertions_and_deduplications() -> None:
 
 def test_update_badges_main() -> None:
     """Test executing update_badges_main with various arguments."""
+    mock_res = MagicMock(stdout="actual: 100.0%\n")
     with TemporaryDirectory() as tmpdir:
         readme_file = os.path.join(tmpdir, "README.md")
         cov_file = os.path.join(tmpdir, "coverage.json")
@@ -459,7 +505,7 @@ def test_update_badges_main() -> None:
             json.dump({"totals": {"percent_covered": 100.0}}, f)
 
         # Normal run
-        with patch("subprocess.run"):
+        with patch("subprocess.run", return_value=mock_res):
             assert update_badges_main([readme_file]) == 0
 
         # Enforce-only run success
@@ -478,6 +524,7 @@ def test_update_badges_main() -> None:
 def test_update_badges_runpy_main() -> None:
     """Test executing scripts.update_badges as __main__ module."""
     orig_badges_mod = sys.modules["scripts.update_badges"]
+    mock_res = MagicMock(stdout="actual: 100.0%\n")
     try:
         with TemporaryDirectory() as tmpdir:
             readme_file = os.path.join(tmpdir, "README.md")
@@ -495,7 +542,7 @@ def test_update_badges_runpy_main() -> None:
             sys.modules.pop("scripts.update_badges", None)
             with (
                 patch("sys.argv", ["update_badges.py", readme_file]),
-                patch("subprocess.run"),
+                patch("subprocess.run", return_value=mock_res),
             ):
                 runpy.run_module("scripts.update_badges", run_name="__main__")
 

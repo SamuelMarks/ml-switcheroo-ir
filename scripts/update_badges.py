@@ -133,6 +133,9 @@ def get_doc_coverage() -> float:
 
     Returns:
         Doc coverage percentage as a float.
+
+    Raises:
+        ValueError: If documentation coverage cannot be determined or is 0%.
     """
     try:
         res = subprocess.run(
@@ -154,10 +157,20 @@ def get_doc_coverage() -> float:
         )
         match = re.search(r"actual:\s*([0-9.]+)%", res.stdout)
         if match:
-            return float(match.group(1))
-    except (subprocess.SubprocessError, OSError, ValueError, TypeError, RuntimeError):
-        pass
-    return 100.0
+            val = float(match.group(1))
+            if val > 0.0:
+                return val
+    except (
+        subprocess.SubprocessError,
+        OSError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+    ) as err:
+        raise ValueError(
+            "Failed to determine documentation coverage from interrogate."
+        ) from err
+    raise ValueError("Failed to determine documentation coverage from interrogate.")
 
 
 def count_shields(content: str) -> tuple[int, int, int]:
@@ -205,6 +218,8 @@ def enforce_coverage_shields(readme_path: str = "README.md") -> None:
         raise ValueError(
             f"Enforcement failed: Expected exactly 1 doc coverage shield, found {doc_count}"
         )
+    if re.search(r"coverage-0(?:\.0+)?%25", content, flags=re.IGNORECASE):
+        raise ValueError("Enforcement failed: Coverage shield cannot be 0%")
 
 
 def parse_args(args: list[str]) -> tuple[bool, str]:
@@ -257,6 +272,8 @@ def update_readme(
             actual_cov_path = sibling_cov
 
     test_cov = get_test_coverage(coverage_json_path=actual_cov_path)
+    if test_cov <= 0.0:
+        raise ValueError("Failed to determine test coverage or test coverage is 0%.")
     doc_cov = get_doc_coverage()
 
     test_str = format_cov(test_cov)

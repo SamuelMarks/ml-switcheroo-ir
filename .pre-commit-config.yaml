@@ -31,10 +31,11 @@ repos:
 
       - id: pytest-coverage
         name: Run Pytest Coverage
-        entry: pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-fail-under=100
+        entry: pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=json:coverage.json --cov-fail-under=100
         language: system
         types: [python]
         pass_filenames: false
+        always_run: true
 
       - id: verify-grounding
         name: Verify Grounding
@@ -48,12 +49,14 @@ repos:
         entry: python3 scripts/update_badges.py
         language: system
         pass_filenames: false
+        always_run: true
 
       - id: enforce-badges
         name: Enforce Coverage Shields
         entry: python3 scripts/update_badges.py --enforce
         language: system
         pass_filenames: false
+        always_run: true
 
       - id: build
         name: Build Package
