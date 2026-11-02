@@ -75,7 +75,7 @@ def test_get_producing_output_index() -> None:
     assert graph.get_producing_output_index("split_node:not_int") is None
 
     # 5. Cache invalidation when node.outputs is mutated in-place (same node count)
-    split.outputs = ["new_part_a", "new_part_b"]
+    split.set_outputs(["new_part_a", "new_part_b"])
     assert graph.get_producing_output_index("part_a") is None
     res_mut = graph.get_producing_output_index("new_part_b")
     assert res_mut is not None
@@ -86,7 +86,17 @@ def test_get_producing_output_index() -> None:
     replacement_split = LogicalNode(
         id="split_node", op_type="Split", outputs=["rep_0", "rep_1"]
     )
-    graph.nodes["split_node"] = replacement_split
+    replacement_split.set_shape_metadata((2, 4))
+    assert replacement_split.shape_metadata == (2, 4)
+    replacement_split.update_attributes({"axis": 1}, split_size=2)
+    replacement_split.update_attributes(None)
+    assert replacement_split.attributes == {"axis": 1, "split_size": 2}
+    graph.replace_nodes(
+        {
+            "split_node": replacement_split,
+            "relu_node": relu,
+        }
+    )
     assert graph.get_producing_output_index("new_part_b") is None
     res_rep = graph.get_producing_output_index("rep_0")
     assert res_rep is not None

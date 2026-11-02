@@ -39,6 +39,7 @@ from ml_switcheroo_ir.graph import (
     LogicalNode,
     NodeDict,
     PartitionSpec,
+    VersionedOutputList,
     _load_zstandard,
     topological_sort,
     zstandard,
@@ -96,7 +97,7 @@ from ml_switcheroo_ir.validator import (
     estimate_graph_communication_volume,
 )
 
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 
 __all__ = [
     "ARRAY_API_REGISTRY",
@@ -147,6 +148,7 @@ __all__ = [
     "SymbolicSolver",
     "TensorShape",
     "TensorSpec",
+    "VersionedOutputList",
     "WebRTCPeerConfig",
     "WebRTCSignalingTopology",
     "ZeroTangent",

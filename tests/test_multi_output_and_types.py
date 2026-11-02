@@ -47,7 +47,7 @@ def test_extended_dtypes_and_quantization_vocabulary() -> None:
         "int2": "int2",
     }
     for name, val in expected_types.items():
-        enum_val = getattr(DType, name)
+        enum_val = DType[name]
         assert enum_val == val
         assert DType(val) == enum_val
         assert isinstance(enum_val, str)
@@ -526,11 +526,12 @@ def test_tensor_shape_and_node_edge_coverage() -> None:
 
     # Reject float dimension in shape_metadata
     with pytest.raises(TypeError, match="not a valid DimensionType"):
-        getattr(LogicalNode, "__init__")(
-            LogicalNode(id="tmp", op_type="Custom"),
-            id="nf",
-            op_type="Custom",
-            shape_metadata=(1.5, 2),
+        LogicalNode.model_validate(
+            {
+                "id": "nf",
+                "op_type": "Custom",
+                "shape_metadata": (1.5, 2),
+            }
         )
 
     # Shape property setter tests

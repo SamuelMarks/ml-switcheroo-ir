@@ -99,12 +99,13 @@ def _verify_backend(file_path: str, class_name: str) -> None:
         print_report()
         return
 
-    if not hasattr(module, class_name):
+    mod_dict = module.__dict__
+    if class_name not in mod_dict:
         print(f"Error: Class {class_name} not found in {file_path}")
         print_report()
         return
 
-    cls = getattr(module, class_name)
+    cls = mod_dict[class_name]
     checks["Class found"] = True
 
     try:
@@ -113,9 +114,10 @@ def _verify_backend(file_path: str, class_name: str) -> None:
     except TypeError:
         pass
 
-    if hasattr(cls, "compile") and callable(cls.compile):
+    compile_fn = cls.__dict__.get("compile") if isinstance(cls, type) else None
+    if callable(compile_fn):
         checks["Has compile() method"] = True
-        sig = inspect.signature(cls.compile)
+        sig = inspect.signature(compile_fn)
         if "graph" in sig.parameters:
             checks["compile() signature takes 'graph'"] = True
 

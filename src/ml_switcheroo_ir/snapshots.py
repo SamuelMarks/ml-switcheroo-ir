@@ -86,10 +86,9 @@ def get_effective_snapshot_dir() -> str:
     Returns:
         str: Effective default snapshot directory path.
     """
-    import sys
+    from ml_switcheroo_ir import validator as val_mod
 
-    val_mod = sys.modules.get("ml_switcheroo_ir.validator")
-    return str(getattr(val_mod, "DEFAULT_SNAPSHOT_DIR", DEFAULT_SNAPSHOT_DIR))
+    return str(val_mod.DEFAULT_SNAPSHOT_DIR)
 
 
 def _has_snapshot_files(directory: Path) -> bool:

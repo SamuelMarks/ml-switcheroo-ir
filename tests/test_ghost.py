@@ -39,7 +39,7 @@ def test_ghost_param_model() -> None:
     }
     param2 = GhostParam.model_validate(param_dict)
     assert param2.name == "y"
-    assert not hasattr(param2, "extra_field")
+    assert "extra_field" not in param2.model_dump()
 
 
 def test_ghost_ref_model() -> None:

@@ -25,6 +25,8 @@ from ml_switcheroo_ir.validation.grounding import (
     GroundingReport,
     GroundingValidator,
     SnapshotManifestType,
+    SupportsModelDumpProtocol,
+    TargetFileDiscovererProtocol,
     audit_graph_grounding,
 )
 from ml_switcheroo_ir.validation.hardware import (
@@ -50,6 +52,8 @@ __all__ = [
     "GroundingValidator",
     "KNOWN_SYNONYMS",
     "SnapshotManifestType",
+    "SupportsModelDumpProtocol",
+    "TargetFileDiscovererProtocol",
     "ValidationError",
     "ValidationLevel",
     "Validator",

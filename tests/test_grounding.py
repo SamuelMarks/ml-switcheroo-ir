@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ml_switcheroo_ir import LogicalGraph, LogicalNode
+from ml_switcheroo_ir.schema.ghost import ExtendedGhostRef
 from ml_switcheroo_ir.schema.onnx_registry import OpSchema
 from ml_switcheroo_ir.validator import (
     DEFAULT_SNAPSHOT_DIR,
@@ -253,9 +254,8 @@ def test_grounding_validator_directory_and_audit_graph(tmp_path: Path) -> None:
     assert "dial.op_plain" in gv_dir.grounded_symbols
     assert "dial.op_gz" in gv_dir.grounded_symbols
 
-    gv_unsupported = getattr(GroundingValidator, "__init__")
     gv_inst = GroundingValidator(use_default_if_none=False)
-    gv_unsupported(gv_inst, snapshot_manifest=12345)
+    gv_inst._ingest_manifest_target(12345)
     assert gv_inst.grounded_symbols == {}
     gv_inst._load_snapshot_data("not_list_or_dict")
 
@@ -708,8 +708,38 @@ def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> N
     )
 
     # Test engine without _discover_target_files attribute
+    class _BrokenEngine:
+        """Engine implementing GroundingEngineProtocol without _discover_target_files."""
+
+        def get_symbol(self, target: str, symbol: str) -> ExtendedGhostRef | None:
+            """Raise RuntimeError to exercise fallback handling.
+
+            Args:
+                target (str): Target domain.
+                symbol (str): Symbol name.
+
+            Returns:
+                ExtendedGhostRef | None: Never returns.
+            """
+            raise RuntimeError(f"broken get_symbol for {target}.{symbol}")
+
+        def suggest_closest_symbol(
+            self, target: str, symbol: str, max_distance: int = 3
+        ) -> str | None:
+            """Raise RuntimeError to exercise fallback handling.
+
+            Args:
+                target (str): Target domain.
+                symbol (str): Symbol name.
+                max_distance (int): Max distance.
+
+            Returns:
+                str | None: Never returns.
+            """
+            raise RuntimeError(f"broken suggest for {target}.{symbol} ({max_distance})")
+
     gv_no_disc = GroundingValidator()
-    setattr(gv_no_disc, "_engine", object())
+    gv_no_disc._engine = _BrokenEngine()
     assert gv_no_disc._find_best_symbol_match("unknown_op", "unknown_dom") is None
     assert gv_no_disc._find_best_symbol_match("unknown_op", "") is None
     node_no_disc = LogicalNode(id="n3", op_type="unknown_op", domain="unknown_dom")

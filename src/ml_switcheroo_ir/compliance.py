@@ -158,10 +158,9 @@ def extract_dynamic_definitions(
 
     for node in ast.walk(tree):
         if (
-            (
-                isinstance(node, ast.Call)
-                and getattr(node.func, "id", "") == "load_definitions"
-            )
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "load_definitions"
             and node.args
             and isinstance(node.args[0], ast.Constant)
         ):
@@ -211,7 +210,8 @@ def _extract_ast_dialect_ops(tree: ast.AST, dialect_ops: set[str]) -> set[str]:
             for dec in node.decorator_list:
                 if (
                     isinstance(dec, ast.Call)
-                    and getattr(dec.func, "id", "") == "register_op"
+                    and isinstance(dec.func, ast.Name)
+                    and dec.func.id == "register_op"
                     and len(dec.args) >= 2
                     and isinstance(dec.args[1], ast.Constant)
                 ):
@@ -246,10 +246,11 @@ def _score_ir_classes(tree: ast.AST) -> tuple[bool, tuple[int, int]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             is_backend = any(
-                getattr(b, "id", "") == "CompilerBackend" for b in node.bases
+                isinstance(b, ast.Name) and b.id == "CompilerBackend"
+                for b in node.bases
             )
             is_frontend = any(
-                getattr(b, "id", "") == "GraphFrontend" for b in node.bases
+                isinstance(b, ast.Name) and b.id == "GraphFrontend" for b in node.bases
             )
             if is_backend or is_frontend:
                 is_ir = True
@@ -284,7 +285,8 @@ def _score_fw_adapters(tree: ast.AST) -> tuple[bool, tuple[int, int]]:
             or "Importer" in node.name
             or any(
                 isinstance(d, ast.Call)
-                and getattr(d.func, "id", "") == "register_framework"
+                and isinstance(d.func, ast.Name)
+                and d.func.id == "register_framework"
                 for d in node.decorator_list
             )
         ):
@@ -375,7 +377,7 @@ def _render_verbose_missing_report(
 
                 try:
                     module = importlib.import_module(namespace)
-                    obj = getattr(module, symbol)
+                    obj = module.__dict__[symbol]
 
                     try:
                         sig = inspect.signature(obj)
@@ -395,6 +397,7 @@ def _render_verbose_missing_report(
                 except (
                     ImportError,
                     AttributeError,
+                    KeyError,
                     OSError,
                     ValueError,
                     TypeError,

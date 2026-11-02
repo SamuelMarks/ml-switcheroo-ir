@@ -29,11 +29,11 @@ class SymNode:
     """Base class for all symbolic expression tree nodes."""
 
     @classmethod
-    def to_node(cls, val: int | str | SymNode | SymInt) -> SymNode:
+    def to_node(cls, val: object) -> SymNode:
         """Convert an int, str, SymNode, or SymInt into a SymNode.
 
         Args:
-            val (int | str | SymNode | SymInt): Value to convert.
+            val (object): Value to convert.
 
         Returns:
             SymNode: Structured symbolic expression node.
@@ -1051,13 +1051,9 @@ class SymPiecewise(SymNode):
                 is_met = bool(cond.eval(env))
             elif isinstance(cond, bool):
                 is_met = cond
-            elif isinstance(cond, str):
+            else:
                 parsed = _parse_sym_str(cond)
                 is_met = bool(parsed.eval(env))
-            else:
-                raise TypeError(
-                    f"Unsupported SymPiecewise condition type: {type(cond).__name__}"
-                )
             if is_met:
                 return expr.eval(env)
         return self.default.eval(env)

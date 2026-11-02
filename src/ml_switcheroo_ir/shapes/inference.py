@@ -25,6 +25,8 @@ from ml_switcheroo_ir.shapes.tracker import (
 __all__ = [
     "ShapeNodeProtocol",
     "ShapeTracker",
+    "SupportsDirectShapeProtocol",
+    "SupportsShapeMetadataProtocol",
     "SupportsShapeNodesProtocol",
     "TelemetryValueType",
     "broadcast_dimension",
@@ -56,6 +58,20 @@ class ShapeNodeProtocol(typing.Protocol):
         Returns:
             str: Node identifier.
         """
+
+
+@typing.runtime_checkable
+class SupportsShapeMetadataProtocol(ShapeNodeProtocol, typing.Protocol):
+    """Runtime-checkable protocol for nodes carrying a mutable shape_metadata attribute."""
+
+    shape_metadata: tuple[DimensionType, ...] | None
+
+
+@typing.runtime_checkable
+class SupportsDirectShapeProtocol(ShapeNodeProtocol, typing.Protocol):
+    """Runtime-checkable protocol for nodes carrying a mutable shape attribute."""
+
+    shape: tuple[DimensionType, ...] | None
 
 
 class SupportsShapeNodesProtocol(typing.Protocol):
@@ -376,6 +392,23 @@ class ShapeTracker:
                 tracker.record_equality(dim, concrete_val)
 
     @staticmethod
+    def _get_node_shape_meta(
+        node: ShapeNodeProtocol,
+    ) -> tuple[DimensionType, ...] | None:
+        """Extract shape dimension tuple from a node supporting shape_metadata or shape.
+
+        Args:
+            node (ShapeNodeProtocol): Graph node instance.
+
+        Returns:
+            tuple[DimensionType, ...] | None: Tuple of dimensions if available, else None.
+        """
+        if isinstance(node, SupportsShapeMetadataProtocol):
+            return node.shape_metadata
+        assert isinstance(node, SupportsDirectShapeProtocol)
+        return node.shape
+
+    @staticmethod
     def resolve_dynamic_bounds(
         graph: SupportsShapeNodesProtocol,
         feedback_telemetry: Mapping[str, TelemetryValueType],
@@ -401,20 +434,18 @@ class ShapeTracker:
         concrete_shapes = ShapeTracker.update_from_feedback(feedback_telemetry, tracker)
         resolved_bounds: dict[str, int] = {}
 
-        raw_nodes = getattr(graph, "nodes", {})
-        node_iterable = (
+        raw_nodes = graph.nodes
+        node_iterable: Iterable[ShapeNodeProtocol] = (
             raw_nodes.values() if isinstance(raw_nodes, Mapping) else raw_nodes
         )
 
         for node in node_iterable:
-            node_id = str(getattr(node, "id", ""))
+            node_id = str(node.id)
             if node_id not in concrete_shapes:
                 continue
 
             observed_shape = concrete_shapes[node_id]
-            shape_meta = getattr(node, "shape_metadata", None)
-            if shape_meta is None:
-                shape_meta = getattr(node, "shape", None)
+            shape_meta = ShapeTracker._get_node_shape_meta(node)
 
             if isinstance(shape_meta, (tuple, list)):
                 if strict_rank and len(observed_shape) != len(shape_meta):
@@ -432,10 +463,12 @@ class ShapeTracker:
                     )
                     new_shape.append(concrete_val)
 
-                if hasattr(node, "shape_metadata"):
-                    setattr(node, "shape_metadata", tuple(new_shape))
-                if hasattr(node, "shape"):
-                    setattr(node, "shape", tuple(new_shape))
+                resolved_tuple = tuple(new_shape)
+                if isinstance(node, SupportsShapeMetadataProtocol):
+                    node.shape_metadata = resolved_tuple
+                else:
+                    assert isinstance(node, SupportsDirectShapeProtocol)
+                    node.shape = resolved_tuple
 
         return resolved_bounds
 

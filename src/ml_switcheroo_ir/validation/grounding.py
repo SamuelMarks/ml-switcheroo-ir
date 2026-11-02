@@ -38,6 +38,8 @@ __all__ = [
     "GroundingReport",
     "GroundingValidator",
     "SnapshotManifestType",
+    "SupportsModelDumpProtocol",
+    "TargetFileDiscovererProtocol",
     "audit_graph_grounding",
 ]
 
@@ -61,6 +63,33 @@ SnapshotManifestType: typing_extensions.TypeAlias = typing.Union[
     str,
     None,
 ]
+
+
+@typing.runtime_checkable
+class SupportsModelDumpProtocol(typing.Protocol):
+    """Runtime-checkable protocol for symbol references supporting model_dump()."""
+
+    def model_dump(self) -> dict[str, SnapshotManifestNode]:
+        """Serialize symbol reference into a dictionary.
+
+        Returns:
+            dict[str, SnapshotManifestNode]: Dictionary representation.
+        """
+
+
+@typing.runtime_checkable
+class TargetFileDiscovererProtocol(typing.Protocol):
+    """Runtime-checkable protocol for grounding engines supporting _discover_target_files()."""
+
+    def _discover_target_files(self, target: str) -> Sequence[object]:
+        """Discover target snapshot files for a given domain/target.
+
+        Args:
+            target (str): Target framework or domain name.
+
+        Returns:
+            Sequence[object]: Discovered target files.
+        """
 
 
 class GroundingEngineProtocol(typing.Protocol):
@@ -475,12 +504,14 @@ class GroundingValidator(Validator):
                 best_dist = d
                 best_match = sym
 
-        discover_fn = getattr(self._engine, "_discover_target_files", None)
         if (
             best_match is None
             and self._engine is not None
             and domain
-            and (not callable(discover_fn) or bool(discover_fn(domain)))
+            and (
+                not isinstance(self._engine, TargetFileDiscovererProtocol)
+                or bool(self._engine._discover_target_files(domain))
+            )
         ):
             try:
                 engine_cand = self._engine.suggest_closest_symbol(
@@ -535,18 +566,22 @@ class GroundingValidator(Validator):
         match: Mapping[str, SnapshotManifestNode] | None = self.grounded_symbols.get(
             full_path
         ) or self.grounded_symbols.get(node.op_type)
-        discover_fn = getattr(self._engine, "_discover_target_files", None)
         if (
             match is None
             and self._engine is not None
             and node.domain
-            and (not callable(discover_fn) or bool(discover_fn(node.domain)))
+            and (
+                not isinstance(self._engine, TargetFileDiscovererProtocol)
+                or bool(self._engine._discover_target_files(node.domain))
+            )
         ):
             try:
                 ref = self._engine.get_symbol(node.domain, node.op_type)
                 if ref is not None:
                     match = (
-                        ref.model_dump() if hasattr(ref, "model_dump") else vars(ref)
+                        ref.model_dump()
+                        if isinstance(ref, SupportsModelDumpProtocol)
+                        else vars(ref)
                     )
             except (
                 AttributeError,

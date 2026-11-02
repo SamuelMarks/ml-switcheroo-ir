@@ -144,9 +144,7 @@ def test_normalize_axis() -> None:
         normalize_axis(-5, 4)
 
     with pytest.raises(TypeError, match="Invalid type"):
-        from ml_switcheroo_ir.shapes import inference as _inf_mod
-
-        getattr(_inf_mod, "normalize_axis")("invalid", 4)
+        normalize_axis(True, 4)
 
 
 def test_symbolic_constraint_tracker() -> None:

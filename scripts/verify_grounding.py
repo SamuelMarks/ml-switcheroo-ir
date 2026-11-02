@@ -576,16 +576,16 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
         mod_path, obj_name = path.rsplit(".", 1)
         try:
             mod = importlib.import_module(mod_path)
-            getattr(mod, obj_name)
-        except (ImportError, AttributeError):
+            _ = mod.__dict__[obj_name]
+        except (ImportError, AttributeError, KeyError):
             if "." in mod_path:
                 try:
                     parent_mod_path, parent_cls = mod_path.rsplit(".", 1)
-                    parent = getattr(
-                        importlib.import_module(parent_mod_path), parent_cls
-                    )
-                    getattr(parent, obj_name)
-                except (ImportError, AttributeError):
+                    parent = importlib.import_module(parent_mod_path).__dict__[
+                        parent_cls
+                    ]
+                    _ = parent.__dict__[obj_name]
+                except (ImportError, AttributeError, KeyError):
                     errors.append(
                         f"Exported symbol '{path}' not resolvable at runtime."
                     )
@@ -599,8 +599,8 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
         mod_path, obj_name = path.rsplit(".", 1)
         try:
             mod = importlib.import_module(mod_path)
-            getattr(mod, obj_name)
-        except (ImportError, AttributeError):
+            _ = mod.__dict__[obj_name]
+        except (ImportError, AttributeError, KeyError):
             errors.append(f"Exported function '{path}' not resolvable at runtime.")
 
     return errors

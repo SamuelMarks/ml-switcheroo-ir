@@ -77,6 +77,7 @@ __all__ = [
     "SerializedEdgeModel",
     "SerializedGraphModel",
     "SerializedNodeModel",
+    "VersionedOutputList",
     "ZeroTangent",
     "_apply_edges_list",
     "_build_graph_from_parsed_sections",
@@ -156,13 +157,13 @@ class CyclicGraphError(Exception):
     """Raised when a cycle is detected in a graph during topological sorting."""
 
 
-class _TrackedOutputsList(list[str]):
+class VersionedOutputList(list[str]):
     """List subclass for LogicalNode.outputs that increments a mutation counter on change."""
 
     version: int = 0
 
     def __init__(self, iterable: Iterable[str] = ()) -> None:
-        """Initialize _TrackedOutputsList.
+        """Initialize VersionedOutputList.
 
         Args:
             iterable (Iterable[str]): Initial output names.
@@ -178,6 +179,33 @@ class _TrackedOutputsList(list[str]):
         """
         super().append(item)
         self.version += 1
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: type[VersionedOutputList],
+        handler: pydantic.GetCoreSchemaHandler,
+    ) -> pydantic_core.CoreSchema:
+        """Return Pydantic core schema for VersionedOutputList.
+
+        Args:
+            source_type (type[VersionedOutputList]): Target class.
+            handler (pydantic.GetCoreSchemaHandler): Core schema handler.
+
+        Returns:
+            pydantic_core.CoreSchema: Core schema wrapping list[str] in VersionedOutputList.
+        """
+        del source_type
+        from pydantic_core import core_schema
+
+        list_schema = handler.generate_schema(list[str])
+        return core_schema.no_info_after_validator_function(
+            cls,
+            list_schema,
+        )
+
+
+_TrackedOutputsList = VersionedOutputList
 
 
 def _normalize_shape_metadata(
@@ -213,7 +241,7 @@ class LogicalNode(pydantic.BaseModel):
         version (int): Operator set version (e.g., 1).
         attributes (dict[str, AttributeValue]): Dictionary of configuration parameters (e.g. ``kernel_size=3``).
         inputs (list[str]): Ordered list of upstream LogicalNode IDs.
-        outputs (list[str]): Ordered list of output names/SSA value identifiers produced by this node.
+        outputs (VersionedOutputList): Ordered list of output names/SSA value identifiers produced by this node.
         shape_metadata (tuple[DimensionType, ...] | None): Tuple of dimensions or None.
         source_ast_ref (str | None): Traceback to exact file path, line number, and cdd-python AST node ID.
         sharding (PartitionSpec | None): Optional layout specification for distributed placement of this node's output.
@@ -236,7 +264,7 @@ class LogicalNode(pydantic.BaseModel):
     version: int = 1
     attributes: dict[str, AttributeValue] = pydantic.Field(default_factory=dict)
     inputs: list[str] = pydantic.Field(default_factory=list)
-    outputs: list[str] = pydantic.Field(default_factory=list)
+    outputs: VersionedOutputList = pydantic.Field(default_factory=VersionedOutputList)
     shape_metadata: tuple[DimensionType, ...] | None = None
     source_ast_ref: str | None = None
     sharding: PartitionSpec | None = None
@@ -266,18 +294,20 @@ class LogicalNode(pydantic.BaseModel):
         """
         return _normalize_shape_metadata(val)
 
-    @pydantic.field_validator("outputs", mode="after")
+    @pydantic.field_validator("outputs", mode="before")
     @classmethod
-    def _ensure_tracked_outputs(cls, val: list[str]) -> list[str]:
-        """Wrap outputs in _TrackedOutputsList for mutation version tracking.
+    def _ensure_tracked_outputs(
+        cls, val: Iterable[str] | VersionedOutputList
+    ) -> VersionedOutputList:
+        """Wrap outputs in VersionedOutputList for mutation version tracking.
 
         Args:
-            val (list[str]): Validated outputs list.
+            val (Iterable[str] | VersionedOutputList): Validated outputs sequence.
 
         Returns:
-            list[str]: _TrackedOutputsList instance.
+            VersionedOutputList: VersionedOutputList instance.
         """
-        return _TrackedOutputsList(val)
+        return VersionedOutputList(val)
 
     def __init__(
         self,
@@ -287,7 +317,7 @@ class LogicalNode(pydantic.BaseModel):
         version: int = 1,
         attributes: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
-        outputs: list[str] | None = None,
+        outputs: Iterable[str] | None = None,
         shape_metadata: ShapeMetadataType | Iterable[DimensionType] = None,
         source_ast_ref: str | None = None,
         sharding: PartitionSpec | None = None,
@@ -306,7 +336,7 @@ class LogicalNode(pydantic.BaseModel):
             version (int): Operator set version (default: 1).
             attributes (Mapping[str, AttributeValue] | None): Operator configuration attributes.
             inputs (list[str] | None): Ordered list of upstream LogicalNode IDs.
-            outputs (list[str] | None): Ordered list of output SSA names.
+            outputs (Iterable[str] | None): Ordered list of output SSA names.
             shape_metadata (ShapeMetadataType | Iterable[DimensionType]): Tensor shape metadata.
             source_ast_ref (str | None): Source AST trace reference.
             sharding (PartitionSpec | None): Distributed partition layout.
@@ -330,7 +360,7 @@ class LogicalNode(pydantic.BaseModel):
             version=version,
             attributes=dict(attributes) if attributes is not None else {},
             inputs=list(inputs) if inputs is not None else [],
-            outputs=_TrackedOutputsList(outputs if outputs is not None else [id]),
+            outputs=VersionedOutputList(outputs if outputs is not None else [id]),
             shape_metadata=_normalize_shape_metadata(shape_metadata),
             source_ast_ref=source_ast_ref,
             sharding=sharding,
@@ -340,6 +370,40 @@ class LogicalNode(pydantic.BaseModel):
             device=device,
             stream=stream,
         )
+
+    def set_shape_metadata(
+        self, shape_metadata: ShapeMetadataType | Iterable[DimensionType]
+    ) -> None:
+        """Set normalized shape metadata on this node.
+
+        Args:
+            shape_metadata (ShapeMetadataType | Iterable[DimensionType]): Shape dimensions or TensorShape instance.
+        """
+        self.shape_metadata = _normalize_shape_metadata(shape_metadata)
+
+    def update_attributes(
+        self,
+        attributes: Mapping[str, AttributeValue] | None = None,
+        **kwargs: AttributeValue,
+    ) -> None:
+        """Update configuration attributes on this node in-place.
+
+        Args:
+            attributes (Mapping[str, AttributeValue] | None): Optional mapping of attributes to merge.
+            **kwargs (AttributeValue): Keyword attribute overrides to merge.
+        """
+        if attributes is not None:
+            self.attributes.update(attributes)
+        if kwargs:
+            self.attributes.update(kwargs)
+
+    def set_outputs(self, outputs: Iterable[str]) -> None:
+        """Replace output SSA names on this node with a new VersionedOutputList.
+
+        Args:
+            outputs (Iterable[str]): Replacement sequence of output SSA names.
+        """
+        self.outputs = VersionedOutputList(outputs)
 
     @property
     def shape(self) -> TensorShape | None:
@@ -1025,6 +1089,20 @@ class LogicalGraph(pydantic.BaseModel):
         self.nodes[node.id] = node
         self._cached_output_map = None
 
+    def replace_nodes(
+        self,
+        nodes: Mapping[str, LogicalNode] | Iterable[tuple[str, LogicalNode]],
+    ) -> None:
+        """Replace all nodes in the graph in-place while preserving NodeDict version tracking.
+
+        Args:
+            nodes (Mapping[str, LogicalNode] | Iterable[tuple[str, LogicalNode]]): Replacement nodes mapping or iterable.
+        """
+        new_items = dict(nodes)
+        self.nodes.clear()
+        self.nodes.update(new_items)
+        self._cached_output_map = None
+
     def add_edge(
         self,
         source: str,
@@ -1086,8 +1164,7 @@ class LogicalGraph(pydantic.BaseModel):
                 tracked_node is None
                 or (
                     tracked_node.outputs is self._cached_outputs_list_ref
-                    and getattr(tracked_node.outputs, "version", -1)
-                    == self._cached_outputs_version
+                    and tracked_node.outputs.version == self._cached_outputs_version
                 )
             )
         ):
@@ -1108,9 +1185,7 @@ class LogicalGraph(pydantic.BaseModel):
             first_multi_node.outputs if first_multi_node is not None else None
         )
         self._cached_outputs_version = (
-            getattr(first_multi_node.outputs, "version", 0)
-            if first_multi_node is not None
-            else 0
+            first_multi_node.outputs.version if first_multi_node is not None else 0
         )
         return mapping
 
@@ -1450,11 +1525,11 @@ class LogicalGraph(pydantic.BaseModel):
         """
         if isinstance(json_str, Path):
             return cls.from_file(json_str)
-        if not isinstance(json_str, (str, bytes)) and hasattr(json_str, "read"):
+        if not isinstance(json_str, (str, bytes)):
             return _stream_parse_graph(json_str, cls)
         if isinstance(json_str, bytes):
             data = json.loads(json_str.decode("utf-8"))
-        elif isinstance(json_str, str):
+        else:
             stripped = json_str.strip()
             if (
                 not stripped.startswith(("{", "["))
@@ -1465,10 +1540,6 @@ class LogicalGraph(pydantic.BaseModel):
             ):
                 return cls.from_file(json_str)
             data = json.loads(json_str)
-        else:
-            raise TypeError(
-                f"Unsupported source type for from_json: {type(json_str).__name__}"
-            )
         return cls.from_dict(data)
 
 

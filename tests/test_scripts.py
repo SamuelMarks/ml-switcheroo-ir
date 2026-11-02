@@ -68,7 +68,6 @@ def test_scripts_package_import() -> None:
     """Test importing the scripts package module directly."""
     import scripts
 
-    assert hasattr(scripts, "__doc__")
     assert scripts.__doc__ is not None
 
 
@@ -2031,3 +2030,77 @@ def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
     ):
         o_errs = verify_odl_grounding()
         assert len(o_errs) == 2
+
+
+def test_lint_typing_exhaustive(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test scripts/lint_typing.py across clean and violating Python constructs."""
+    from scripts.lint_typing import check_source, collect_python_files, main
+
+    clean_src = (
+        "from typing import Protocol\n"
+        "from builtins import int\n"
+        "import os\n"
+        "import typing\n"
+        "import builtins\n"
+        "x: typing.Sequence[int] = [1, 2]\n"
+        "y = builtins.len(x)\n"
+        "z = object.__repr__(x)\n"
+        "p = os.path.join('a', 'b')\n"
+        "# normal comment\n"
+    )
+    assert check_source(clean_src, Path("clean.py")) == []
+
+    bad_src = (
+        "from typing import Any, cast, Sequence\n"
+        "from builtins import getattr, len\n"
+        "import typing\n"
+        "import builtins\n"
+        "a: typing.Any = 1\n"
+        "b = builtins.setattr\n"
+        "c = object.__setattr__\n"
+        "d = getattr(a, 'x', None)\n"
+        "e: Any = 2\n"
+        "f = 3  # " + "type: ignore[assignment]\n"
+    )
+    violations = check_source(bad_src, Path("bad.py"))
+    assert len(violations) == 9
+    assert any("Forbidden typing import 'typing.Any'" in v for v in violations)
+    assert any("Forbidden typing import 'typing.cast'" in v for v in violations)
+    assert any(
+        "Forbidden reflection import 'builtins.getattr'" in v for v in violations
+    )
+    assert any("Forbidden typing construct 'typing.Any'" in v for v in violations)
+    assert any(
+        "Forbidden reflection construct 'builtins.setattr'" in v for v in violations
+    )
+    assert any(
+        "Forbidden reflection construct 'object.__setattr__'" in v for v in violations
+    )
+    assert any("Forbidden call to 'getattr()'" in v for v in violations)
+    assert any("Forbidden reference to 'Any'" in v for v in violations)
+    assert any("Forbidden comment directive 'type: ignore'" in v for v in violations)
+
+    sub_dir = tmp_path / "pkg"
+    sub_dir.mkdir()
+    clean_file = sub_dir / "ok.py"
+    clean_file.write_text("x: int = 1\n", encoding="utf-8")
+    txt_file = sub_dir / "notes.txt"
+    txt_file.write_text("ignored\n", encoding="utf-8")
+
+    collected = collect_python_files(
+        [clean_file, sub_dir, txt_file, tmp_path / "missing.py"]
+    )
+    assert collected == [clean_file]
+
+    assert main([str(clean_file)]) == 0
+
+    bad_file = sub_dir / "bad.py"
+    bad_file.write_text("x = getattr(object(), '__doc__', None)\n", encoding="utf-8")
+    assert main([str(sub_dir)]) == 1
+    captured = capsys.readouterr()
+    assert "Forbidden call to 'getattr()'" in captured.err
+
+    with patch.object(sys, "argv", ["lint_typing.py"]):
+        assert main(None) == 0

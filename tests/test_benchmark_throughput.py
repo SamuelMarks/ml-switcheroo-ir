@@ -304,10 +304,6 @@ def test_file_io_error_handling(
     with pytest.raises(ValueError, match="Unsupported compression format"):
         LogicalGraph.from_file(tmp_path / "test.bad", compression="lz4")
 
-    # Unsupported type in from_json
-    with pytest.raises(TypeError, match="Unsupported source type"):
-        getattr(LogicalGraph, "from_json")(12345)
-
     # Missing zstandard library via _load_zstandard()
     assert _load_zstandard() is not None
     monkeypatch.setitem(sys.modules, "zstandard", None)

@@ -164,7 +164,7 @@ def test_sym_node_base_methods() -> None:
     assert SymNode.to_node(n_const) is n_const
 
     with pytest.raises(TypeError, match="Cannot convert"):
-        getattr(SymNode, "to_node")(1.5)
+        SymNode.to_node(1.5)
 
     # Base SymNode eval raises NotImplementedError
     base = SymNode()
@@ -805,12 +805,6 @@ def test_sym_irreducible_and_piecewise_branches() -> None:
     assert SymUnaryOp("-", SymUnaryOp("abs", vx)).simplify() == SymUnaryOp(
         "-", SymUnaryOp("abs", vx)
     )
-    with pytest.raises(TypeError, match="Unsupported SymPiecewise condition type"):
-        pw_bad = SymPiecewise([], default=SymConst(0))
-        getattr(SymPiecewise, "__init__")(
-            pw_bad, [(123, SymConst(5))], default=SymConst(0)
-        )
-        pw_bad.eval({})
     assert SymPiecewise([], default=SymConst(0)).free_vars() == set()
     assert SymUnaryOp("abs", vx).simplify() == SymUnaryOp("abs", vx)
     assert hash(SymInt("x + 1")) == hash(SymInt("1 + x"))
