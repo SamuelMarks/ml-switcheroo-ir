@@ -105,8 +105,9 @@ def _load_stablehlo_schemas(json_path: Path | str | None = None) -> None:
                     __file__ as fw_file,
                 )
 
-                exhaustive_path = Path(fw_file).parent / "stablehlo_exhaustive.json"
-                if exhaustive_path.exists():
+                pkg_exhaustive = Path(fw_file).parent / "stablehlo_exhaustive.json"
+                exhaustive_path = pkg_exhaustive if pkg_exhaustive.exists() else find_schema_file("stablehlo_exhaustive.json")
+                if exhaustive_path is not None and exhaustive_path.exists():
                     with open(exhaustive_path, encoding="utf-8") as f:
                         data = json.load(f)
                     STABLEHLO_REGISTRY.update(parse_stablehlo_exhaustive_operations(data.get("operations", [])))

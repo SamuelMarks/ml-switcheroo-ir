@@ -40,7 +40,7 @@ jobs:
       run: |
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks
-        gh release download v0.0.5 -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
+        gh release download v0.0.5 -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots || gh release download -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots || gh release download v0.0.4 -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/*_exhaustive.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks/ 2>/dev/null || true
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/concept_map.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/ 2>/dev/null || true
         python -c "
@@ -100,15 +100,18 @@ jobs:
     - name: Check Linting (Ruff)
       run: ruff check .
 
+    - name: AST Typing & Anti-Reflection Linter
+      run: python scripts/lint_typing.py
+
     - name: Type Checking (Mypy)
-      run: mypy src tests scripts
+      run: mypy --strict src tests scripts
 
     - name: Check Doc Coverage (Interrogate)
       run: interrogate -vv -f 100 -M -i -c pyproject.toml src scripts tests
 
     - name: Test & Branch Coverage
       run: |
-        pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=100
+        pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=term-missing --cov-report=xml --cov-report=json:coverage.json --cov-fail-under=100
 
     - name: Verify Grounding
       run: python scripts/verify_grounding.py --strict --snapshots-dir ../ml-ecosystem-snapshots

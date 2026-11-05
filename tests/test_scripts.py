@@ -1862,12 +1862,16 @@ def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
         fw_dir.mkdir(parents=True, exist_ok=True)
         (fw_dir / "stablehlo_exhaustive.json").write_text("{}", encoding="utf-8")
         assert verify_stablehlo_grounding(tmp_path) == []
-        (fw_dir / "stablehlo_exhaustive.json").unlink()
 
         # 3. Installed package fallback when path contains ml-ecosystem-snapshots
         eco_snap_dir = tmp_path / "ml-ecosystem-snapshots" / "snapshots"
         eco_snap_dir.mkdir(parents=True, exist_ok=True)
-        assert verify_stablehlo_grounding(eco_snap_dir) == []
+        with patch(
+            "ml_ecosystem_snapshots.frameworks.__file__",
+            str(fw_dir / "__init__.py"),
+        ):
+            assert verify_stablehlo_grounding(eco_snap_dir) == []
+        (fw_dir / "stablehlo_exhaustive.json").unlink()
         with patch.dict("sys.modules", {"ml_ecosystem_snapshots.frameworks": None}):
             assert verify_stablehlo_grounding(eco_snap_dir) == []
         with patch(
@@ -1931,7 +1935,12 @@ def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
 
 
 def test_lint_typing_exhaustive(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Test scripts/lint_typing.py across clean and violating Python constructs."""
+    """Test scripts/lint_typing.py across clean and violating Python constructs.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
     from scripts.lint_typing import check_source, collect_python_files, main
 
     clean_src = (
