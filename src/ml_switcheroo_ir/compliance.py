@@ -78,10 +78,10 @@ def collect_files(targets: list[str]) -> list[str]:
     """Collect Python and JSON files from a list of target paths.
 
     Args:
-        targets: List of file or directory paths.
+        targets (list[str]): List of file or directory paths.
 
     Returns:
-        List of absolute file paths to process.
+        list[str]: List of absolute file paths to process.
     """
     collected_files = []
     for target in targets:
@@ -98,7 +98,8 @@ def collect_files(targets: list[str]) -> list[str]:
                     dirs.remove("node_modules")
                 if ".venv" in dirs:
                     dirs.remove(".venv")
-                for file in files:
+                dirs.sort()
+                for file in sorted(files):
                     if (file.endswith((".py", ".json"))) and not file.startswith("test_") and file != "__init__.py":
                         collected_files.append(os.path.join(root, file))
     return collected_files

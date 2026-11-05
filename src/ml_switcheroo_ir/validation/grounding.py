@@ -337,7 +337,8 @@ class GroundingValidator(Validator):
         Args:
             dirpath (str): Path to root directory.
         """
-        for root, _, files in os.walk(dirpath):
+        for root, dirs, files in os.walk(dirpath):
+            dirs.sort()
             for fname in sorted(files):
                 if fname.endswith((".json", ".json.gz")):
                     self._load_file(os.path.join(root, fname))

@@ -144,6 +144,14 @@ class WrongArgBackend(CompilerBackend):
     assert "FrameworkAdapter Compliance:" in captured_ws.out
     assert "DIALECT Compliance" in captured_ws.out
 
+    # Explicitly test both file orderings (high-then-low and low-then-high)
+    # so best_ir_score / best_fw_score comparison True and False branches are
+    # deterministically exercised independent of filesystem directory order.
+    cli_main(["compliance", str(workspace / "branches.py"), str(workspace / "branches2.py")])
+    capsys.readouterr()
+    cli_main(["compliance", str(workspace / "branches2.py"), str(workspace / "branches.py")])
+    capsys.readouterr()
+
     cli_main(["compliance", str(workspace / "dummy.txt")])
     captured_txt = capsys.readouterr()
     assert "No Python or JSON files found in the specified targets." in captured_txt.out
