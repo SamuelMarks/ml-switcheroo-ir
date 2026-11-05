@@ -626,14 +626,110 @@ def test_usage_hardware_isa_validation() -> None:
     assert len(hazards) == 1
 
 
+def test_usage_symbolic_shapes_and_sentinels() -> None:
+    """Test USAGE.md Symbolic Shapes, Constraint Solving & ShapeTracker and Autodiff Sentinels."""
+    from ml_switcheroo_ir import (
+        NoTangent,
+        ShapeTracker,
+        SymbolicConstraintTracker,
+        SymbolicSolver,
+        SymConst,
+        SymInt,
+        SymVar,
+        TensorSpec,
+        ZeroTangent,
+        broadcast_shapes,
+        matmul_shape,
+    )
+
+    B = SymInt(SymVar("B"))
+    seq_len = SymInt(SymVar("S"))
+    hidden = (seq_len * 4) // 2
+    assert str(hidden.simplify()) == "(2 * S)"
+
+    out_bcast = broadcast_shapes((B.node, 1, 64), (1, seq_len.node, 64))
+    assert out_bcast == (B.node, seq_len.node, 64)
+
+    out_mm = matmul_shape((B.node, seq_len.node, 64), (64, 128))
+    assert out_mm == (B.node, seq_len.node, 128)
+
+    assert SymbolicSolver.is_consistent("S + S", "2 * S")
+    constraint_tracker = SymbolicConstraintTracker()
+    constraint_tracker.record_equality(seq_len.node, 128)
+    assert constraint_tracker.substitute(seq_len.node) == SymConst(128)
+
+    specs = [
+        TensorSpec(shape=(B.node, 1, 64), dtype=DType.float32),
+        TensorSpec(shape=(1, seq_len.node, 64), dtype=DType.float32),
+    ]
+    elem_shape = ShapeTracker.infer_elementwise(specs)
+    assert elem_shape == (B.node, seq_len.node, 64)
+
+    zero_grad = ZeroTangent(id="dz_x", shape=(4, 128), dtype=DType.float32)
+    no_grad = NoTangent(id="dz_indices")
+    bwd_graph = LogicalGraph(
+        name="BackwardPass",
+        nodes={"dz_x": zero_grad, "dz_indices": no_grad},
+        outputs=["dz_x"],
+    )
+    assert bwd_graph["dz_x"].domain == "ml.switcheroo.ad"
+    assert bwd_graph["dz_indices"].domain == "ml.switcheroo.ad"
+
+
+def test_usage_distributed_pipeline_and_webrtc_topologies() -> None:
+    """Test USAGE.md Distributed Sharding, Pipeline & WebRTC Topologies."""
+    from ml_switcheroo_ir import (
+        DependencyConfig,
+        MeshMappingConfig,
+        MicrobatchSplittingConfig,
+        PipelineScheduleConfig,
+        PipelineTopologyConfig,
+        SchedulePhaseConfig,
+        StageCommunicationConfig,
+        WebRTCPeerConfig,
+        WebRTCSignalingTopology,
+    )
+
+    webrtc = WebRTCSignalingTopology(
+        signaling_url="ws://localhost:8080",
+        peers=[WebRTCPeerConfig(peer_id="peer_0", device_capability="webgpu")],
+    )
+    mesh = LogicalMesh(shape={"data": 4, "model": 2}, webrtc_topology=webrtc)
+
+    pipeline = PipelineTopologyConfig(
+        microbatch_splitting=MicrobatchSplittingConfig(strategy="uniform", num_microbatches=4),
+        mesh_mapping=MeshMappingConfig(devices_per_stage=2),
+        stage_communication=StageCommunicationConfig(protocol="p2p"),
+        dependencies=[DependencyConfig(source_stage="stage0", target_stage="stage1", offset_mb=0)],
+        schedule=PipelineScheduleConfig(phases=[SchedulePhaseConfig(type="1F1B", operations=["fwd", "bwd"], count_expression="4")]),
+    )
+
+    sharded_node = LogicalNode(
+        id="weights",
+        op_type="Constant",
+        domain="ai.onnx",
+        attributes={"value": [1.0, 2.0]},
+        sharding=PartitionSpec(axes=("data", None)),
+    )
+
+    graph = LogicalGraph(
+        nodes={"weights": sharded_node},
+        mesh=mesh,
+        pipeline_topology=pipeline,
+    )
+    assert graph.mesh is not None and graph.mesh.webrtc_topology is not None
+    assert graph.pipeline_topology is not None
+
+
 def test_usage_schema_export_and_typescript(tmp_path: Path) -> None:
-    """Test USAGE.md Section 1.14: Programmatic Schema Export & TypeScript Generation.
+    """Test USAGE.md Section 1.14: Programmatic Schema Export, TypeScript & Python Code Generation.
 
     Args:
         tmp_path (Path): Pytest temporary directory fixture.
     """
     from ml_switcheroo_ir import (
         export_schemas,
+        export_to_python,
         generate_typescript_definitions,
         get_json_schema,
     )
@@ -644,9 +740,15 @@ def test_usage_schema_export_and_typescript(tmp_path: Path) -> None:
     ts_code = generate_typescript_definitions()
     assert "export interface LogicalGraph" in ts_code
 
+    n_in = LogicalNode(id="x", op_type="Input")
+    graph = LogicalGraph(name="TestModel", nodes={"x": n_in}, outputs=["x"])
+    py_code = export_to_python(graph, function_name="build_model", standalone=True)
+    assert "def build_model() -> sw_ir.LogicalGraph:" in py_code
+
     out_dir = str(tmp_path)
-    exported = export_schemas(out_dir=out_dir)
+    exported = export_schemas(out_dir=out_dir, include_typescript=True)
     assert "LogicalGraph" in exported
+    assert "TypeScript" in exported
 
 
 def test_usage_recipes_d_and_e() -> None:

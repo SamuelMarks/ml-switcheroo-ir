@@ -11,7 +11,9 @@ This guide details programmatic graph manipulation, multi-dialect schema validat
 1. [Programmatic Python API](#1-programmatic-python-api)
    - [Constructing Graphs, Nodes & Nested Subgraphs](#constructing-graphs-nodes--nested-subgraphs)
    - [Multi-Output Nodes & SSA Value Tracking](#multi-output-nodes--ssa-value-tracking)
-   - [Distributed Sharding & Device Meshes](#distributed-sharding--device-meshes)
+   - [Symbolic Shapes, Constraint Solving & ShapeTracker](#symbolic-shapes-constraint-solving--shapetracker)
+   - [Autodiff Sentinels (`ZeroTangent`, `NoTangent`)](#autodiff-sentinels-zerotangent-notangent)
+   - [Distributed Sharding, Pipeline & WebRTC Topologies](#distributed-sharding-pipeline--webrtc-topologies)
    - [SPMD Sharding Propagation & Pipeline Validation](#spmd-sharding-propagation--pipeline-validation)
    - [Analytical Collective Communication Cost Estimation](#analytical-collective-communication-cost-estimation)
    - [Topological Sorting & Cycle Detection](#topological-sorting--cycle-detection)
@@ -22,7 +24,7 @@ This guide details programmatic graph manipulation, multi-dialect schema validat
    - [Extending Custom Operator Schemas](#extending-custom-operator-schemas)
    - [Validating Graphs](#validating-graphs)
    - [Auditing Graphs with `ml-ecosystem-snapshots`](#auditing-graphs-with-ml-ecosystem-snapshots)
-   - [Programmatic Schema Export & TypeScript Generation](#programmatic-schema-export--typescript-generation)
+   - [Programmatic Schema Export, TypeScript & Python Code Generation](#programmatic-schema-export-typescript--python-code-generation)
 2. [Interface Protocols for Compilers & Frontends](#2-interface-protocols-for-compilers--frontends)
    - [Implementing `GraphFrontend`](#implementing-graphfrontend)
    - [Implementing `CompilerBackend`](#implementing-compilerbackend)
@@ -142,17 +144,111 @@ assert producer is not None and producer.id == "split1"
 downstream = graph.get_outputs("split1")
 ```
 
-### Distributed Sharding & Device Meshes
+### Symbolic Shapes, Constraint Solving & ShapeTracker
 
-For SPMD distributed execution (compatible with JAX/XLA device meshes):
+Model dynamic dimensions, algebraic expressions, polynomial canonicalization, and symbolic shape inference using `ml_switcheroo_ir.shapes`:
 
 ```python
-from ml_switcheroo_ir import LogicalGraph, LogicalMesh, LogicalNode, PartitionSpec
+from ml_switcheroo_ir import (
+    DType,
+    ShapeTracker,
+    SymbolicConstraintTracker,
+    SymbolicSolver,
+    SymConst,
+    SymInt,
+    SymVar,
+    TensorSpec,
+    broadcast_shapes,
+    matmul_shape,
+)
 
-# Define a 2D device mesh (4 data parallel devices x 2 tensor parallel devices)
-mesh = LogicalMesh(shape={"data": 4, "model": 2})
+# 1. Symbolic dimension arithmetic & canonicalization
+B = SymInt(SymVar("B"))
+seq_len = SymInt(SymVar("S"))
+hidden = (seq_len * 4) // 2
+assert str(hidden.simplify()) == "(2 * S)"
 
-# Shard dimension 0 along "data" and replicate dimension 1
+# 2. Symbolic broadcasting & matrix multiplication shapes
+out_bcast = broadcast_shapes((B.node, 1, 64), (1, seq_len.node, 64))
+assert out_bcast == (B.node, seq_len.node, 64)
+
+out_mm = matmul_shape((B.node, seq_len.node, 64), (64, 128))
+assert out_mm == (B.node, seq_len.node, 128)
+
+# 3. Verify algebraic consistency and unify constraints
+assert SymbolicSolver.is_consistent("S + S", "2 * S")
+constraint_tracker = SymbolicConstraintTracker()
+constraint_tracker.record_equality(seq_len.node, 128)
+assert constraint_tracker.substitute(seq_len.node) == SymConst(128)
+
+# 4. Infer elementwise shapes from TensorSpecs with ShapeTracker
+specs = [
+    TensorSpec(shape=(B.node, 1, 64), dtype=DType.float32),
+    TensorSpec(shape=(1, seq_len.node, 64), dtype=DType.float32),
+]
+elem_shape = ShapeTracker.infer_elementwise(specs)
+assert elem_shape == (B.node, seq_len.node, 64)
+```
+
+### Autodiff Sentinels (`ZeroTangent`, `NoTangent`)
+
+Represent cotangent boundaries in reverse-mode or forward-mode automatic differentiation graphs in the `ml.switcheroo.ad` domain:
+
+```python
+from ml_switcheroo_ir import DType, LogicalGraph, NoTangent, ZeroTangent
+
+# ZeroTangent preserves explicit shape and dtype for zero-valued gradients
+zero_grad = ZeroTangent(id="dz_x", shape=(4, 128), dtype=DType.float32)
+
+# NoTangent marks non-differentiable or disconnected inputs (e.g. integer indices)
+no_grad = NoTangent(id="dz_indices")
+
+bwd_graph = LogicalGraph(
+    name="BackwardPass",
+    nodes={"dz_x": zero_grad, "dz_indices": no_grad},
+    outputs=["dz_x"],
+)
+assert bwd_graph["dz_x"].domain == "ml.switcheroo.ad"
+```
+
+### Distributed Sharding, Pipeline & WebRTC Topologies
+
+For SPMD distributed execution, multi-stage pipeline schedules, and WebRTC peer-to-peer device meshes:
+
+```python
+from ml_switcheroo_ir import (
+    DependencyConfig,
+    LogicalGraph,
+    LogicalMesh,
+    LogicalNode,
+    MeshMappingConfig,
+    MicrobatchSplittingConfig,
+    PartitionSpec,
+    PipelineScheduleConfig,
+    PipelineTopologyConfig,
+    SchedulePhaseConfig,
+    StageCommunicationConfig,
+    WebRTCPeerConfig,
+    WebRTCSignalingTopology,
+)
+
+# 1. Define a 2D device mesh with optional WebRTC signaling topology
+webrtc = WebRTCSignalingTopology(
+    signaling_url="ws://localhost:8080",
+    peers=[WebRTCPeerConfig(peer_id="peer_0", device_capability="webgpu")],
+)
+mesh = LogicalMesh(shape={"data": 4, "model": 2}, webrtc_topology=webrtc)
+
+# 2. Configure pipeline parallelism topology and 1F1B schedule
+pipeline = PipelineTopologyConfig(
+    microbatch_splitting=MicrobatchSplittingConfig(strategy="uniform", num_microbatches=4),
+    mesh_mapping=MeshMappingConfig(devices_per_stage=2),
+    stage_communication=StageCommunicationConfig(protocol="p2p"),
+    dependencies=[DependencyConfig(source_stage="stage0", target_stage="stage1", offset_mb=0)],
+    schedule=PipelineScheduleConfig(phases=[SchedulePhaseConfig(type="1F1B", operations=["fwd", "bwd"], count_expression="4")]),
+)
+
+# 3. Shard dimension 0 along "data" and replicate dimension 1
 sharded_node = LogicalNode(
     id="weights",
     op_type="Constant",
@@ -161,7 +257,11 @@ sharded_node = LogicalNode(
     sharding=PartitionSpec(axes=("data", None)),
 )
 
-graph = LogicalGraph(nodes={"weights": sharded_node}, mesh=mesh)
+graph = LogicalGraph(
+    nodes={"weights": sharded_node},
+    mesh=mesh,
+    pipeline_topology=pipeline,
+)
 ```
 
 ### SPMD Sharding Propagation & Pipeline Validation
@@ -436,27 +536,33 @@ if report.diagnostics:
         print(f"  [Hallucination] Node {err.node_id}: {err.message}")
 ```
 
-### Programmatic Schema Export & TypeScript Generation
+### Programmatic Schema Export, TypeScript & Python Code Generation
 
-Emit Draft 2020-12 conforming JSON Schemas and TypeScript interface definitions for frontend and playground integrations:
+Emit Draft 2020-12 conforming JSON Schemas, TypeScript interface definitions, and executable Python source code for frontend and playground integrations:
 
 ```python
 from ml_switcheroo_ir import (
     export_schemas,
+    export_to_python,
     generate_typescript_definitions,
     get_json_schema,
 )
 
-# 1. Fetch Draft 2020-12 JSON Schema dictionary
+# 1. Fetch Draft 2020-12 JSON Schema dictionary (supports LogicalGraph, LogicalNode,
+#    SnapshotEnvelope, ZeroTangent, NoTangent, PipelineTopologyConfig, WebRTCSignalingTopology, or "all")
 schema = get_json_schema("LogicalGraph")
 assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
 
-# 2. Generate TypeScript interfaces mirroring LogicalGraph and LogicalNode
+# 2. Generate TypeScript interfaces mirroring LogicalGraph, LogicalNode, SymNode, and topologies
 ts_code = generate_typescript_definitions()
 assert "export interface LogicalGraph" in ts_code
 
-# 3. Export all schemas to disk
-export_schemas(out_dir="dist/schemas")
+# 3. Generate standalone Python source code reconstructing a LogicalGraph
+py_code = export_to_python(graph, function_name="build_model", standalone=True)
+assert "def build_model() -> sw_ir.LogicalGraph:" in py_code
+
+# 4. Export all 7 JSON schemas (and optional TypeScript definitions) to disk
+export_schemas(out_dir="dist/schemas", include_typescript=True)
 ```
 
 ---
@@ -495,7 +601,7 @@ Synthesis plugins (in `ml-switcheroo-compiler` or target code generators) consum
 from ml_switcheroo_ir import CompilerBackend, LogicalGraph
 
 
-class WebGPUBackend(CompilerBackend):
+class WebGPUBackend(CompilerBackend[str]):
     """Compiles LogicalGraph into WGSL shader bindings."""
 
     def compile(self, graph: LogicalGraph) -> str:
@@ -566,10 +672,10 @@ Target                  Compliance %    Reqs Met    Status
 ----------------------  --------------  ----------  --------
 my_framework (Dir)      100%            4/4         PASS
 
-DIALECT Compliance (ONNX Superset, 205 total ops):
+DIALECT Compliance (ONNX Superset, 221 total ops):
 Target                  Compliance %    Ops Implemented    Status      Missing Ops
 ----------------------  --------------  -----------------  --------  -------------
-my_framework (Dir)      56.6%           116/205            FAIL                 89
+my_framework (Dir)      56.6%           125/221            FAIL                 96
 ```
 
 #### Generating Missing-Symbol Checklists (`-v` / `-m`)
@@ -663,9 +769,12 @@ ml-switcheroo-ir dump-snapshot --output schemas_snapshot.json
 
 ### 8. Exporting JSON Schemas & TypeScript (`export-schema`)
 
-Export canonical JSON Schema definitions and TypeScript interfaces:
+Export canonical JSON Schema definitions (`LogicalGraph`, `LogicalNode`, `SnapshotEnvelope`, `ZeroTangent`, `NoTangent`, `PipelineTopologyConfig`, `WebRTCSignalingTopology`, or `all`) and TypeScript interfaces:
 
 ```bash
+# Export a specific JSON schema target to stdout
+ml-switcheroo-ir export-schema --target LogicalGraph
+
 # Export all JSON schemas to a directory
 ml-switcheroo-ir export-schema --out-dir schemas/
 

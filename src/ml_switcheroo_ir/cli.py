@@ -565,7 +565,16 @@ def main(args: list[str] | None = None) -> None:
         "--target",
         type=str,
         default="all",
-        choices=["all", "LogicalGraph", "LogicalNode", "SnapshotEnvelope"],
+        choices=[
+            "all",
+            "LogicalGraph",
+            "LogicalNode",
+            "SnapshotEnvelope",
+            "ZeroTangent",
+            "NoTangent",
+            "PipelineTopologyConfig",
+            "WebRTCSignalingTopology",
+        ],
         help="Target schema to export (default: all)",
     )
     export_parser.add_argument(
