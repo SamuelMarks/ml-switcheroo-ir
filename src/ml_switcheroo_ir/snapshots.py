@@ -35,15 +35,11 @@ def get_default_snapshots_dir() -> str:
             "snapshots",
         )
     )
-    if os.path.isdir(sibling_eco) and any(
-        f.endswith((".json", ".json.gz")) for f in os.listdir(sibling_eco)
-    ):
+    if os.path.isdir(sibling_eco) and any(f.endswith((".json", ".json.gz")) for f in os.listdir(sibling_eco)):
         return sibling_eco
 
     user_cache_eco = os.path.expanduser("~/.cache/ml_ecosystem_snapshots")
-    if os.path.isdir(user_cache_eco) and any(
-        f.endswith((".json", ".json.gz")) for f in os.listdir(user_cache_eco)
-    ):
+    if os.path.isdir(user_cache_eco) and any(f.endswith((".json", ".json.gz")) for f in os.listdir(user_cache_eco)):
         return os.path.abspath(user_cache_eco)
 
     try:
@@ -52,9 +48,7 @@ def get_default_snapshots_dir() -> str:
         spec = importlib.util.find_spec("ml_ecosystem_snapshots")
         if spec and spec.origin:
             pkg_dir = os.path.join(os.path.dirname(spec.origin), "snapshots")
-            if os.path.isdir(pkg_dir) and any(
-                f.endswith((".json", ".json.gz")) for f in os.listdir(pkg_dir)
-            ):
+            if os.path.isdir(pkg_dir) and any(f.endswith((".json", ".json.gz")) for f in os.listdir(pkg_dir)):
                 return os.path.abspath(pkg_dir)
     except (ImportError, AttributeError, ValueError):
         pass
@@ -69,9 +63,7 @@ def get_default_snapshots_dir() -> str:
             "snapshots",
         )
     )
-    if os.path.isdir(fixtures_dir) and any(
-        f.endswith((".json", ".json.gz")) for f in os.listdir(fixtures_dir)
-    ):
+    if os.path.isdir(fixtures_dir) and any(f.endswith((".json", ".json.gz")) for f in os.listdir(fixtures_dir)):
         return fixtures_dir
 
     return sibling_eco
@@ -100,9 +92,7 @@ def _has_snapshot_files(directory: Path) -> bool:
     Returns:
         bool: True if at least one .json or .json.gz file is present.
     """
-    return directory.is_dir() and any(
-        f.name.endswith((".json", ".json.gz")) for f in directory.iterdir()
-    )
+    return directory.is_dir() and any(f.name.endswith((".json", ".json.gz")) for f in directory.iterdir())
 
 
 def resolve_snapshots_path(override_path: Path | str) -> Path | None:
@@ -119,20 +109,15 @@ def resolve_snapshots_path(override_path: Path | str) -> Path | None:
         nested_eco = p / "src" / "ml_ecosystem_snapshots" / "snapshots"
         if _has_snapshot_files(nested_eco):
             return nested_eco
-        if nested_eco.is_dir():
-            if (
-                p.parent.resolve()
-                == Path(__file__).resolve().parent.parent.parent.parent
-            ):
+        if nested_eco.is_dir() or (p / "src" / "ml_ecosystem_snapshots").is_dir():
+            if p.name == "ml-ecosystem-snapshots":
                 return Path(DEFAULT_SNAPSHOT_DIR).resolve()
             return nested_eco
         return p
     return None
 
 
-def find_schema_file(
-    filename: str, override_path: Path | str | None = None
-) -> Path | None:
+def find_schema_file(filename: str, override_path: Path | str | None = None) -> Path | None:
     """Resolve the location of a schema or snapshot JSON file.
 
     Args:

@@ -55,9 +55,7 @@ def test_grounding_validator_edge_branches(tmp_path: Path) -> None:
         tmp_path (Path): Pytest temporary directory fixture.
     """
     # Non-existent file path
-    gv_bad_path = GroundingValidator(
-        snapshot_manifest=str(tmp_path / "non_existent.json")
-    )
+    gv_bad_path = GroundingValidator(snapshot_manifest=str(tmp_path / "non_existent.json"))
     assert gv_bad_path.grounded_symbols == {}
 
     # None manifest
@@ -67,13 +65,9 @@ def test_grounding_validator_edge_branches(tmp_path: Path) -> None:
     # Default if none when directory exists
     default_dir = tmp_path / "default_snaps"
     default_dir.mkdir()
-    (default_dir / "sample.json").write_text(
-        json.dumps({"test_op": {"name": "test_op"}}), encoding="utf-8"
-    )
+    (default_dir / "sample.json").write_text(json.dumps({"test_op": {"name": "test_op"}}), encoding="utf-8")
     with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(default_dir)):
-        gv_default = GroundingValidator(
-            snapshot_manifest=None, use_default_if_none=True
-        )
+        gv_default = GroundingValidator(snapshot_manifest=None, use_default_if_none=True)
         assert len(gv_default.grounded_symbols) > 0
 
     # Default if none when directory does not exist
@@ -81,9 +75,7 @@ def test_grounding_validator_edge_branches(tmp_path: Path) -> None:
         "ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR",
         str(tmp_path / "non_existent_snaps"),
     ):
-        gv_no_default = GroundingValidator(
-            snapshot_manifest=None, use_default_if_none=True
-        )
+        gv_no_default = GroundingValidator(snapshot_manifest=None, use_default_if_none=True)
         assert len(gv_no_default.grounded_symbols) == 0
 
     # Manifest with flat dict where value is non-dict
@@ -227,6 +219,7 @@ def test_grounding_validator_directory_and_audit_graph(tmp_path: Path) -> None:
     """
     import gzip
     import json
+
     from ml_switcheroo_ir.validator import audit_graph_grounding
 
     snap_dir = tmp_path / "snapshots_dir"
@@ -267,9 +260,7 @@ def test_grounding_validator_directory_and_audit_graph(tmp_path: Path) -> None:
     assert "dial.op_plain" in gv_coll.grounded_symbols
     assert "custom_target" in gv_coll.grounded_symbols
 
-    test_graph = LogicalGraph(
-        nodes={"p1": LogicalNode(id="p1", op_type="op_plain", domain="dial")}
-    )
+    test_graph = LogicalGraph(nodes={"p1": LogicalNode(id="p1", op_type="op_plain", domain="dial")})
     rep_dir = audit_graph_grounding(test_graph, snapshots_path=str(snap_dir))
     assert rep_dir.grounded_count == 1
 
@@ -328,26 +319,18 @@ def test_grounding_validator_fuzzy_suggestions() -> None:
     node_fuzzy_global = LogicalNode(id="n3", op_type="addff", domain="other")
     errors_fuzzy_global = gv.validate_grounding(node_fuzzy_global)
     assert len(errors_fuzzy_global) == 1
-    assert (
-        "Did you mean 'addf'?" in errors_fuzzy_global[0].message
-        or "Did you mean 'arith.addf'?" in errors_fuzzy_global[0].message
-    )
+    assert "Did you mean 'addf'?" in errors_fuzzy_global[0].message or "Did you mean 'arith.addf'?" in errors_fuzzy_global[0].message
     assert errors_fuzzy_global[0].suggested_fix in ("addf", "arith.addf")
 
     # 3b. Empty domain fuzzy match
     node_fuzzy_empty_dom = LogicalNode(id="n3b", op_type="addff", domain="")
     errors_fuzzy_empty = gv.validate_grounding(node_fuzzy_empty_dom)
     assert len(errors_fuzzy_empty) == 1
-    assert (
-        "Did you mean 'addf'?" in errors_fuzzy_empty[0].message
-        or "Did you mean 'arith.addf'?" in errors_fuzzy_empty[0].message
-    )
+    assert "Did you mean 'addf'?" in errors_fuzzy_empty[0].message or "Did you mean 'arith.addf'?" in errors_fuzzy_empty[0].message
     assert errors_fuzzy_empty[0].suggested_fix in ("addf", "arith.addf")
 
     # 4. Far distance hallucination (> 3 edit distance): no suggestion
-    node_far = LogicalNode(
-        id="n4", op_type="completely_unknown_super_long_op", domain="other"
-    )
+    node_far = LogicalNode(id="n4", op_type="completely_unknown_super_long_op", domain="other")
     errors_far = gv.validate_grounding(node_far)
     assert len(errors_far) == 1
     assert "Did you mean" not in errors_far[0].message
@@ -538,10 +521,7 @@ def test_snapshots_dir_resolution_env_and_siblings(tmp_path: Path) -> None:
         with (
             patch(
                 "os.path.isdir",
-                side_effect=lambda d: (
-                    "ml-ecosystem-snapshots" in str(d)
-                    and "ml_ecosystem_snapshots" in str(d)
-                ),
+                side_effect=lambda d: "ml-ecosystem-snapshots" in str(d) and "ml_ecosystem_snapshots" in str(d),
             ),
             patch("os.listdir", return_value=["snapshot.json"]),
         ):
@@ -552,10 +532,7 @@ def test_snapshots_dir_resolution_env_and_siblings(tmp_path: Path) -> None:
         patch("importlib.util.find_spec", return_value=None),
         patch(
             "os.path.isdir",
-            side_effect=lambda d: (
-                ".cache/ml_ecosystem_snapshots" in str(d)
-                or (".cache" in str(d) and "ml_ecosystem_snapshots" in str(d))
-            ),
+            side_effect=lambda d: ".cache/ml_ecosystem_snapshots" in str(d) or (".cache" in str(d) and "ml_ecosystem_snapshots" in str(d)),
         ),
         patch("os.listdir", return_value=["snapshot.json"]),
     ):
@@ -688,9 +665,7 @@ def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> N
     gv_mock = GroundingValidator()
     gv_mock._engine = fake_engine
 
-    node = LogicalNode(
-        id="n1", op_type="fake_op", domain="custom_target", attributes={"x": 1}
-    )
+    node = LogicalNode(id="n1", op_type="fake_op", domain="custom_target", attributes={"x": 1})
     errs = gv_mock.validate_grounding(node)
     assert not errs
 
@@ -703,9 +678,7 @@ def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> N
 
     # Test suggest_closest_symbol returning None from engine
     fake_engine.suggest_closest_symbol.return_value = None
-    assert (
-        gv_mock._find_best_symbol_match("completely_unknown", "custom_target") is None
-    )
+    assert gv_mock._find_best_symbol_match("completely_unknown", "custom_target") is None
 
     # Test engine without _discover_target_files attribute
     class _BrokenEngine:
@@ -723,9 +696,7 @@ def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> N
             """
             raise RuntimeError(f"broken get_symbol for {target}.{symbol}")
 
-        def suggest_closest_symbol(
-            self, target: str, symbol: str, max_distance: int = 3
-        ) -> str | None:
+        def suggest_closest_symbol(self, target: str, symbol: str, max_distance: int = 3) -> str | None:
             """Raise RuntimeError to exercise fallback handling.
 
             Args:

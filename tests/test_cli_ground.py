@@ -11,9 +11,7 @@ from ml_switcheroo_ir import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.cli import main as cli_main
 
 
-def test_cli_ground_fully_grounded(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_ground_fully_grounded(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test CLI ground command on fully grounded graph.
 
     Args:
@@ -30,9 +28,7 @@ def test_cli_ground_fully_grounded(
     }
     snapshot_file.write_text(json.dumps(snapshot_data), encoding="utf-8")
 
-    graph = LogicalGraph(
-        nodes={"n1": LogicalNode(id="n1", op_type="relu", domain="torch")}
-    )
+    graph = LogicalGraph(nodes={"n1": LogicalNode(id="n1", op_type="relu", domain="torch")})
     graph_file = tmp_path / "graph.json"
     graph_file.write_text(graph.to_json(), encoding="utf-8")
 
@@ -45,9 +41,7 @@ def test_cli_ground_fully_grounded(
     assert "Graph is fully grounded against framework snapshots." in captured.out
 
 
-def test_cli_ground_with_diagnostics(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_ground_with_diagnostics(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test CLI ground command with ungrounded nodes reporting errors.
 
     Args:
@@ -82,9 +76,7 @@ def test_cli_ground_with_diagnostics(
     assert "Ungrounded symbol 'hallucinated_layer'" in captured.out
 
 
-def test_cli_ground_directory_path(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_ground_directory_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test CLI ground command when --snapshots-dir points to a directory of snapshots.
 
     Args:
@@ -93,13 +85,9 @@ def test_cli_ground_directory_path(
     """
     snap_dir = tmp_path / "snaps"
     snap_dir.mkdir()
-    (snap_dir / "s1.json").write_text(
-        json.dumps([{"name": "addf", "api_path": "arith.addf"}]), encoding="utf-8"
-    )
+    (snap_dir / "s1.json").write_text(json.dumps([{"name": "addf", "api_path": "arith.addf"}]), encoding="utf-8")
 
-    graph = LogicalGraph(
-        nodes={"n1": LogicalNode(id="n1", op_type="addf", domain="arith")}
-    )
+    graph = LogicalGraph(nodes={"n1": LogicalNode(id="n1", op_type="addf", domain="arith")})
     graph_file = tmp_path / "graph.json"
     graph_file.write_text(graph.to_json(), encoding="utf-8")
 
@@ -112,9 +100,7 @@ def test_cli_ground_directory_path(
     assert "Graph is fully grounded against framework snapshots." in captured.out
 
 
-def test_cli_ground_default_snapshots_dir(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_ground_default_snapshots_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test CLI ground command without --snapshots-dir using default snapshots directory.
 
     Args:
@@ -125,13 +111,9 @@ def test_cli_ground_default_snapshots_dir(
 
     snap_dir = tmp_path / "default_snaps"
     snap_dir.mkdir()
-    (snap_dir / "s1.json").write_text(
-        json.dumps([{"name": "addf", "api_path": "arith.addf"}]), encoding="utf-8"
-    )
+    (snap_dir / "s1.json").write_text(json.dumps([{"name": "addf", "api_path": "arith.addf"}]), encoding="utf-8")
 
-    graph = LogicalGraph(
-        nodes={"n1": LogicalNode(id="n1", op_type="addf", domain="arith")}
-    )
+    graph = LogicalGraph(nodes={"n1": LogicalNode(id="n1", op_type="addf", domain="arith")})
     graph_file = tmp_path / "graph.json"
     graph_file.write_text(graph.to_json(), encoding="utf-8")
 

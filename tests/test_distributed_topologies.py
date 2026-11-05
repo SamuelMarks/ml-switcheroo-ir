@@ -76,15 +76,32 @@ def test_pipeline_topology_models_and_graph_integration() -> None:
         inputs=["n1"],
         outputs=["n1"],
     )
-    assert graph.pipeline_topology is None
+
+    def _get_pipe_topo(g: LogicalGraph) -> PipelineTopologyConfig | None:
+        """Return pipeline_topology from a LogicalGraph.
+
+        Args:
+            g (LogicalGraph): Graph instance.
+
+        Returns:
+            PipelineTopologyConfig | None: Pipeline topology if set.
+        """
+        return g.pipeline_topology
+
+    assert _get_pipe_topo(graph) is None
     graph.set_pipeline_topology(pipe_topo)
-    assert graph.pipeline_topology is not None
-    assert graph.pipeline_topology.stage_communication.protocol == "nccl"
+    active_topo = _get_pipe_topo(graph)
+    assert active_topo is not None
+    assert active_topo.stage_communication.protocol == "nccl"
 
     # Serialization roundtrip
     g_dict = graph.to_dict()
     assert "pipeline_topology" in g_dict
-    assert g_dict["pipeline_topology"]["stage_communication"]["protocol"] == "nccl"
+    raw_pipe = g_dict["pipeline_topology"]
+    assert isinstance(raw_pipe, dict)
+    raw_comm = raw_pipe["stage_communication"]
+    assert isinstance(raw_comm, dict)
+    assert raw_comm["protocol"] == "nccl"
 
     g_restored = LogicalGraph.from_dict(g_dict)
     assert g_restored.pipeline_topology is not None

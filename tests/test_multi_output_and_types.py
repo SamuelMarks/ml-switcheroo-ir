@@ -248,9 +248,7 @@ def test_validator_multi_output_edge_validation() -> None:
     errors_valid = validator.validate_edges(graph_valid)
     assert errors_valid == []
 
-    graph_invalid = LogicalGraph(
-        nodes={"split1": split_node, "c_invalid": consumer_invalid}
-    )
+    graph_invalid = LogicalGraph(nodes={"split1": split_node, "c_invalid": consumer_invalid})
     errors_invalid = validator.validate_edges(graph_invalid)
     assert len(errors_invalid) == 1
     assert errors_invalid[0].node_id == "c_invalid"
@@ -548,8 +546,13 @@ def test_tensor_shape_and_node_edge_coverage() -> None:
     node_prop.shape = 42
     assert list(node_prop.shape_metadata) == [42]
 
-    node_prop.shape = None
-    assert node_prop.shape_metadata is None
+    node_clear = LogicalNode(id="np_clear", op_type="Op", shape_metadata=(4, 5))
+    node_clear.shape = None
+    assert node_clear.shape_metadata is None
+
+
+def test_node_invalid_shape_metadata_and_output_indexing() -> None:
+    """Test LogicalNode invalid shape_metadata errors and output indexing helpers."""
 
     # Invalid shape object rejection
     class MockMetaInvalid:
@@ -558,13 +561,13 @@ def test_tensor_shape_and_node_edge_coverage() -> None:
         shape = "static_str"
 
     with pytest.raises(TypeError, match="not a valid DimensionType"):
-        LogicalNode(id="nis", op_type="Op", shape_metadata=MockMetaInvalid())
+        LogicalNode.model_validate({"id": "nis", "op_type": "Op", "shape_metadata": MockMetaInvalid()})
 
     with pytest.raises(TypeError, match="Invalid shape_metadata"):
         LogicalNode(id="n_str", op_type="Custom", shape_metadata="not_a_seq")
 
     with pytest.raises(TypeError, match="Invalid shape_metadata"):
-        LogicalNode(id="n_dict", op_type="Custom", shape_metadata={"shape": (2, 2)})
+        LogicalNode.model_validate({"id": "n_dict", "op_type": "Custom", "shape_metadata": {"shape": (2, 2)}})
 
     # NodeDict pickle serialization roundtrip
     g = LogicalGraph(

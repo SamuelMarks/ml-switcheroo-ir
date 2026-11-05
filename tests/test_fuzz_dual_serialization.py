@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import typing
-
 import hypothesis.strategies as st
 from hypothesis import given, settings
 
@@ -47,9 +45,7 @@ def arbitrary_dag(draw: st.DrawFn) -> LogicalGraph:
             inputs: list[str] = []
         else:
             prev_ids = [n.id for n in nodes]
-            inputs = draw(
-                st.lists(st.sampled_from(prev_ids), max_size=min(2, i), unique=True)
-            )
+            inputs = draw(st.lists(st.sampled_from(prev_ids), max_size=min(2, i), unique=True))
 
         attr_val = draw(
             st.one_of(
@@ -137,13 +133,10 @@ def test_fuzz_pythonic_cst_eval(graph: LogicalGraph) -> None:
         graph (LogicalGraph): Randomly generated DAG.
     """
     from ml_switcheroo_ir.export import export_to_python
+    from tests.test_export_python import _eval_exported_code
 
     py_code = export_to_python(graph, function_name="build_fuzzed_graph")
-    scope: dict[str, typing.Callable[[], LogicalGraph]] = {}
-    exec(py_code, scope)  # noqa: S102
-    builder_fn = scope["build_fuzzed_graph"]
-    assert callable(builder_fn)
-    reconstructed_graph = builder_fn()
+    reconstructed_graph = _eval_exported_code(py_code, "build_fuzzed_graph")
     assert isinstance(reconstructed_graph, LogicalGraph)
 
     assert reconstructed_graph.name == graph.name

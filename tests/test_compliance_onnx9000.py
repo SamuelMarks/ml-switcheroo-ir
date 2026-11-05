@@ -30,9 +30,7 @@ def test_cli_compliance_empty_targets(capsys: pytest.CaptureFixture[str]) -> Non
     assert "Error: No targets provided." in captured.out
 
 
-def test_cli_compliance_invalid_json(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_invalid_json(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify compliance check gracefully ignores malformed JSON files.
 
     Args:
@@ -45,9 +43,7 @@ def test_cli_compliance_invalid_json(
     # should not raise, just ignore
 
 
-def test_cli_compliance_onnx9000_adapter_and_decorator(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_onnx9000_adapter_and_decorator(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify compliance detection of JaxprImporter and @register_op decorators.
 
     Args:
@@ -74,9 +70,7 @@ def _map_abs(): pass
     assert "2/" in captured.out  # Add and Abs
 
 
-def test_cli_compliance_dynamic_defs_adjacent(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_dynamic_defs_adjacent(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify load_definitions resolves JSON definitions from an adjacent definitions/ folder.
 
     Args:
@@ -99,9 +93,7 @@ class MyAdapter:
     assert "1/" in captured.out  # Add is in json
 
 
-def test_cli_compliance_multiple_targets(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_multiple_targets(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify compliance report aggregates multiple file targets under a Multiple Targets label.
 
     Args:

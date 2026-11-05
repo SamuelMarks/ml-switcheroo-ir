@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import json
 import logging
-from pathlib import Path
 import re
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import pydantic
 
@@ -50,12 +50,12 @@ def _parse_onnx_proto_default(raw: AttributeValue) -> AttributeValue:
 
 
 def _parse_onnx_fallback_ops(
-    raw_ops: Sequence[Mapping[str, JsonValue]],
+    raw_ops: Sequence[Mapping[str, JsonValue | Sequence[pydantic.BaseModel | dict[str, JsonValue]]]],
 ) -> dict[str, OpSchema]:
     """Convert raw upstream ONNX snapshot operator entries into OpSchema instances.
 
     Args:
-        raw_ops (Sequence[Mapping[str, JsonValue]]): Raw operator records from _load_onnx_ops().
+        raw_ops (Sequence[Mapping[str, JsonValue | Sequence[pydantic.BaseModel | dict[str, JsonValue]]]]): Raw operator records from _load_onnx_ops().
 
     Returns:
         dict[str, OpSchema]: Mapping of operator names to OpSchema definitions.
@@ -69,12 +69,8 @@ def _parse_onnx_fallback_ops(
         raw_attrs = op_data.get("attributes", [])
         if isinstance(raw_attrs, list):
             for a_raw in raw_attrs:
-                a_dict = (
-                    a_raw.model_dump()
-                    if isinstance(a_raw, pydantic.BaseModel)
-                    else a_raw
-                )
-                if isinstance(a_dict, dict) and "name" in a_dict:
+                a_dict = a_raw.model_dump() if isinstance(a_raw, pydantic.BaseModel) else (a_raw if isinstance(a_raw, dict) else {})
+                if "name" in a_dict:
                     a_name = str(a_dict["name"])
                     parsed_default = _parse_onnx_proto_default(a_dict.get("default"))
                     attributes[a_name] = OpAttribute(
@@ -85,17 +81,9 @@ def _parse_onnx_fallback_ops(
                     )
         elif isinstance(raw_attrs, dict):
             for a_name, a_val in raw_attrs.items():
-                val_type = (
-                    a_val.get("type", "Any") if isinstance(a_val, dict) else "Any"
-                )
-                val_req = (
-                    a_val.get("required", False) if isinstance(a_val, dict) else False
-                )
-                val_def = (
-                    _parse_onnx_proto_default(a_val.get("default"))
-                    if isinstance(a_val, dict)
-                    else None
-                )
+                val_type = a_val.get("type", "Any") if isinstance(a_val, dict) else "Any"
+                val_req = a_val.get("required", False) if isinstance(a_val, dict) else False
+                val_def = _parse_onnx_proto_default(a_val.get("default")) if isinstance(a_val, dict) else None
                 attributes[str(a_name)] = OpAttribute(
                     name=str(a_name),
                     type=str(val_type),
@@ -106,19 +94,9 @@ def _parse_onnx_fallback_ops(
         ver = int(raw_ver) if isinstance(raw_ver, (int, str)) else 1
         raw_sv = op_data.get("schema_version")
         raw_inputs = op_data.get("inputs", [])
-        inputs_list = (
-            [str(i) for i in raw_inputs]
-            if isinstance(raw_inputs, Sequence)
-            and not isinstance(raw_inputs, (str, bytes))
-            else []
-        )
+        inputs_list = [str(i) for i in raw_inputs] if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, (str, bytes)) else []
         raw_outputs = op_data.get("outputs", [])
-        outputs_list = (
-            [str(o) for o in raw_outputs]
-            if isinstance(raw_outputs, Sequence)
-            and not isinstance(raw_outputs, (str, bytes))
-            else []
-        )
+        outputs_list = [str(o) for o in raw_outputs] if isinstance(raw_outputs, Sequence) and not isinstance(raw_outputs, (str, bytes)) else []
         loaded[name] = OpSchema(
             name=name,
             domain=str(op_data.get("domain") or "ai.onnx"),
@@ -154,7 +132,7 @@ def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema
         loaded: dict[str, OpSchema] = {}
 
         if target is not None and target.exists():
-            with open(target, "r", encoding="utf-8") as f:
+            with open(target, encoding="utf-8") as f:
                 data = json.load(f)
 
             for op_name, op_data in data.items():

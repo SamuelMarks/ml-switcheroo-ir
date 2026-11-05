@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping, Sequence
 import json
 import os
 import re
 import sys
 import typing
-import typing_extensions
+from collections.abc import Mapping, Sequence
 
 import pydantic
+import typing_extensions
 
 from ml_switcheroo_ir.types import JsonValue
 
@@ -103,10 +103,7 @@ def cross_validate_with_onnx_defs(
         onnx_schemas: Sequence[OnnxSchemaProtocol] = onnx.defs.get_all_schemas()
         schema_map: dict[str, OnnxSchemaProtocol] = {}
         for s in onnx_schemas:
-            if (
-                s.name not in schema_map
-                or s.since_version > schema_map[s.name].since_version
-            ):
+            if s.name not in schema_map or s.since_version > schema_map[s.name].since_version:
                 schema_map[s.name] = s
 
         for op_name, op_data in list(ops.items()):
@@ -115,13 +112,7 @@ def cross_validate_with_onnx_defs(
                 s = schema_map[bare_name]
                 canonical_attrs = set(s.attributes.keys())
                 raw_attrs = op_data.get("attributes")
-                op_data["attributes"] = {
-                    k: v
-                    for k, v in (
-                        raw_attrs.items() if isinstance(raw_attrs, dict) else ()
-                    )
-                    if k in canonical_attrs
-                }
+                op_data["attributes"] = {k: v for k, v in (raw_attrs.items() if isinstance(raw_attrs, dict) else ()) if k in canonical_attrs}
                 op_data["inputs"] = [inp.name for inp in s.inputs]
                 op_data["outputs"] = [out.name for out in s.outputs]
                 if s.domain:
@@ -132,9 +123,93 @@ def cross_validate_with_onnx_defs(
     return ops
 
 
-def parse_onnx_docs(
-    md_file: str, cross_validate: bool = False
-) -> dict[str, dict[str, OnnxOpEntryValue]]:
+_RAW_ATTR_TYPE_MAP: dict[str, str] = {
+    "int": "int",
+    "float": "float",
+    "string": "str",
+    "list of ints": "List[int]",
+    "list of floats": "List[float]",
+    "list of strings": "List[str]",
+    "tensor": "Any",
+    "graph": "Any",
+    "type": "str",
+}
+
+
+def _parse_onnx_default_val(rest: str) -> JsonValue:
+    """Parse an ONNX markdown attribute default value description.
+
+    Args:
+        rest (str): Attribute description text after the colon.
+
+    Returns:
+        JsonValue: Parsed default value or None.
+    """
+    default_match = re.search(r"\(default is (.*?)\)", rest)
+    if not default_match:
+        return None
+    default_str = default_match.group(1).strip()
+    if default_str == "NOTSET":
+        return "NOTSET"
+    if default_str in ["[]", "()"]:
+        return []
+    try:
+        parsed: JsonValue = ast.literal_eval(default_str)
+        return parsed
+    except (ValueError, SyntaxError):
+        return default_str.strip("'\"")
+
+
+def _parse_onnx_attributes_section(
+    attr_section: str | None,
+) -> dict[str, dict[str, JsonValue]]:
+    """Parse the Attributes section of an ONNX operator markdown block.
+
+    Args:
+        attr_section (str | None): Extracted attributes HTML/markdown section.
+
+    Returns:
+        dict[str, dict[str, JsonValue]]: Mapping of attribute names to serialized specs.
+    """
+    attributes: dict[str, dict[str, JsonValue]] = {}
+    if not attr_section:
+        return attributes
+    for dt in re.findall(r"<dt>(.*?)</dt>", attr_section, flags=re.DOTALL):
+        tt_match = re.search(r"<tt>(.*?)</tt>\s*:\s*(.*?)$", dt)
+        if not tt_match:
+            continue
+        attr_name = tt_match.group(1).strip()
+        rest = tt_match.group(2).strip()
+        raw_type = re.sub(r"\(.*?\)", "", rest).strip()
+        attr_model = OnnxAttrSpecModel(
+            type=_RAW_ATTR_TYPE_MAP.get(raw_type, "Any"),
+            required="(required)" in rest,
+            default=_parse_onnx_default_val(rest),
+        )
+        attributes[attr_name] = attr_model.model_dump()
+    return attributes
+
+
+def _parse_onnx_io_section(section_text: str | None) -> list[str]:
+    """Parse an Inputs or Outputs section of an ONNX operator markdown block.
+
+    Args:
+        section_text (str | None): Extracted inputs or outputs HTML/markdown section.
+
+    Returns:
+        list[str]: Ordered list of parameter names.
+    """
+    if not section_text:
+        return []
+    names: list[str] = []
+    for dt in re.findall(r"<dt>(.*?)</dt>", section_text, flags=re.DOTALL):
+        tt_match = re.search(r"<tt>(.*?)</tt>", dt)
+        if tt_match:
+            names.append(tt_match.group(1).strip())
+    return names
+
+
+def parse_onnx_docs(md_file: str, cross_validate: bool = False) -> dict[str, dict[str, OnnxOpEntryValue]]:
     """Parse ONNX Operators.md markdown documentation to extract op schemas.
 
     Args:
@@ -144,12 +219,9 @@ def parse_onnx_docs(
     Returns:
         dict[str, dict[str, OnnxOpEntryValue]]: Dictionary mapping operator names to operator schema definitions.
     """
-    with open(md_file, "r", encoding="utf-8") as f:
+    with open(md_file, encoding="utf-8") as f:
         content = f.read()
 
-    # Split the file by operators. The header for an operator is usually like:
-    # ### <a name="Name"></a><a name="name">**Name**</a>
-    # or with sub experimental tag: ### <sub>experimental</sub> <a name="...">
     op_blocks = re.split(
         r'^###\s+(?:<sub>.*?</sub>\s+)?<a\s+name="[^"]+"></a>',
         content,
@@ -158,108 +230,22 @@ def parse_onnx_docs(
 
     ops: dict[str, dict[str, OnnxOpEntryValue]] = {}
 
-    for block in op_blocks[1:]:  # skip first block which is preamble
-        name_match = re.search(r'^<a\s+name="[^"]+">\*\*(.*?)\*\*</a>', block)
+    for block in op_blocks[1:]:
+        name_match = re.search(r'^<a\s+name="[^"]+">\*\*(.*?)\*\*</a>', block) or re.search(r"^\*\*(.*?)\*\*", block)
         if not name_match:
-            name_match = re.search(r"^\*\*(.*?)\*\*", block)
-            if not name_match:
-                continue
+            continue
 
         op_name = name_match.group(1).strip()
-
-        # Version
-        version = 1
         ver_match = re.search(r"has been available since version (\d+)", block)
-        if ver_match:
-            version = int(ver_match.group(1))
-
-        # Attributes
-        attr_section = extract_section(block, "Attributes")
-        attributes: dict[str, dict[str, JsonValue]] = {}
-        if attr_section:
-            dts = re.findall(r"<dt>(.*?)</dt>", attr_section, flags=re.DOTALL)
-            for dt in dts:
-                tt_match = re.search(r"<tt>(.*?)</tt>\s*:\s*(.*?)$", dt)
-                if not tt_match:
-                    continue
-                attr_name = tt_match.group(1).strip()
-                rest = tt_match.group(2).strip()
-
-                required = "(required)" in rest
-
-                default_val: JsonValue = None
-                default_match = re.search(r"\(default is (.*?)\)", rest)
-                if default_match:
-                    default_str = default_match.group(1).strip()
-                    if default_str == "NOTSET":
-                        default_val = "NOTSET"
-                    elif default_str in ["[]", "()"]:
-                        default_val = []
-                    else:
-                        try:
-                            default_val = ast.literal_eval(default_str)
-                        except (ValueError, SyntaxError):
-                            default_val = default_str.strip("'\"")
-
-                raw_type = re.sub(r"\(.*?\)", "", rest).strip()
-
-                py_type = "Any"
-                if raw_type == "int":
-                    py_type = "int"
-                elif raw_type == "float":
-                    py_type = "float"
-                elif raw_type == "string":
-                    py_type = "str"
-                elif raw_type == "list of ints":
-                    py_type = "List[int]"
-                elif raw_type == "list of floats":
-                    py_type = "List[float]"
-                elif raw_type == "list of strings":
-                    py_type = "List[str]"
-                elif raw_type in ("tensor", "graph"):
-                    py_type = "Any"
-                elif raw_type == "type":
-                    py_type = "str"
-                else:
-                    py_type = "Any"
-
-                attr_model = OnnxAttrSpecModel(
-                    type=py_type,
-                    required=required,
-                    default=default_val,
-                )
-                attributes[attr_name] = attr_model.model_dump()
-
-        # Inputs
-        input_section = extract_section(block, "Inputs")
-        inputs: list[str] = []
-        if input_section:
-            dts = re.findall(r"<dt>(.*?)</dt>", input_section, flags=re.DOTALL)
-            for dt in dts:
-                tt_match = re.search(r"<tt>(.*?)</tt>", dt)
-                if tt_match:
-                    inputs.append(tt_match.group(1).strip())
-
-        # Outputs
-        output_section = extract_section(block, "Outputs")
-        outputs: list[str] = []
-        if output_section:
-            dts = re.findall(r"<dt>(.*?)</dt>", output_section, flags=re.DOTALL)
-            for dt in dts:
-                tt_match = re.search(r"<tt>(.*?)</tt>", dt)
-                if tt_match:
-                    outputs.append(tt_match.group(1).strip())
-
-        domain = "ai.onnx"
-        if op_name.startswith("ai.onnx."):
-            domain = op_name.rsplit(".", 1)[0]
+        version = int(ver_match.group(1)) if ver_match else 1
+        domain = op_name.rsplit(".", 1)[0] if op_name.startswith("ai.onnx.") else "ai.onnx"
 
         op_model = OnnxOpSpecModel(
             domain=domain,
             version=version,
-            attributes=attributes,
-            inputs=inputs,
-            outputs=outputs,
+            attributes=_parse_onnx_attributes_section(extract_section(block, "Attributes")),
+            inputs=_parse_onnx_io_section(extract_section(block, "Inputs")),
+            outputs=_parse_onnx_io_section(extract_section(block, "Outputs")),
         )
         ops[op_name] = op_model.model_dump()
 
@@ -378,24 +364,8 @@ def main(
     else:
         target_md = "docs/Operators.md"
 
-    target_json = (
-        json_path
-        if json_path is not None
-        else (
-            sys.argv[2]
-            if len(sys.argv) > 2 and not sys.argv[2].startswith("--")
-            else "src/ml_switcheroo_ir/schema/onnx_ops.json"
-        )
-    )
-    target_reg = (
-        registry_path
-        if registry_path is not None
-        else (
-            sys.argv[3]
-            if len(sys.argv) > 3 and not sys.argv[3].startswith("--")
-            else "src/ml_switcheroo_ir/schema/onnx_registry.py"
-        )
-    )
+    target_json = json_path if json_path is not None else (sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else "src/ml_switcheroo_ir/schema/onnx_ops.json")
+    target_reg = registry_path if registry_path is not None else (sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else "src/ml_switcheroo_ir/schema/onnx_registry.py")
 
     ops = parse_onnx_docs(target_md, cross_validate=True)
 

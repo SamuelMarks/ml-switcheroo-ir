@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from ml_switcheroo_ir.schema.base import (
@@ -40,12 +40,7 @@ def parse_stablehlo_exhaustive_operations(
             continue
         attrs: list[CustomAttributeSchema] = []
         raw_attrs = op_data.get("attributes", [])
-        for a in (
-            raw_attrs
-            if isinstance(raw_attrs, Sequence)
-            and not isinstance(raw_attrs, (str, bytes))
-            else []
-        ):
+        for a in raw_attrs if isinstance(raw_attrs, Sequence) and not isinstance(raw_attrs, (str, bytes)) else []:
             if not (isinstance(a, dict) and "name" in a):
                 continue
             attr_name = str(a.get("name", ""))
@@ -70,19 +65,9 @@ def parse_stablehlo_exhaustive_operations(
                 )
             )
         raw_operands = op_data.get("operands", [])
-        inputs = (
-            [str(inp.get("name", "")) for inp in raw_operands if isinstance(inp, dict)]
-            if isinstance(raw_operands, Sequence)
-            and not isinstance(raw_operands, (str, bytes))
-            else []
-        )
+        inputs = [str(inp.get("name", "")) for inp in raw_operands if isinstance(inp, dict)] if isinstance(raw_operands, Sequence) and not isinstance(raw_operands, (str, bytes)) else []
         raw_results = op_data.get("results", [])
-        outputs = (
-            [str(out.get("name", "")) for out in raw_results if isinstance(out, dict)]
-            if isinstance(raw_results, Sequence)
-            and not isinstance(raw_results, (str, bytes))
-            else []
-        )
+        outputs = [str(out.get("name", "")) for out in raw_results if isinstance(out, dict)] if isinstance(raw_results, Sequence) and not isinstance(raw_results, (str, bytes)) else []
         schema = CustomOpSchema(
             name=name,
             domain="stablehlo",
@@ -122,13 +107,9 @@ def _load_stablehlo_schemas(json_path: Path | str | None = None) -> None:
 
                 exhaustive_path = Path(fw_file).parent / "stablehlo_exhaustive.json"
                 if exhaustive_path.exists():
-                    with open(exhaustive_path, "r", encoding="utf-8") as f:
+                    with open(exhaustive_path, encoding="utf-8") as f:
                         data = json.load(f)
-                    STABLEHLO_REGISTRY.update(
-                        parse_stablehlo_exhaustive_operations(
-                            data.get("operations", [])
-                        )
-                    )
+                    STABLEHLO_REGISTRY.update(parse_stablehlo_exhaustive_operations(data.get("operations", [])))
             except (ImportError, AttributeError, ValueError, OSError) as exc:
                 _logger.debug("Fallback StableHLO schema loading skipped: %s", exc)
 

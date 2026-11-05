@@ -6,16 +6,16 @@ Provides basic utilities to interact with LogicalGraph representations.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
-import inspect
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from collections.abc import Mapping
+from pathlib import Path
 
 from ml_switcheroo_ir import (
-    CompilerBackend,
     LogicalGraph,
     topological_sort,
 )
@@ -44,6 +44,63 @@ def _parse_graph_from_json(json_str: str) -> LogicalGraph:
     return LogicalGraph.from_json(json_str)
 
 
+def _print_backend_verification_report(checks: Mapping[str, bool]) -> None:
+    """Print the backend verification report to standard output.
+
+    Args:
+        checks (Mapping[str, bool]): Mapping of check names to pass/fail booleans.
+    """
+    passed = sum(1 for v in checks.values() if v)
+    total = len(checks)
+    percentage = (passed / total) * 100
+    print("\nVerification Report:")
+    for name, status in checks.items():
+        mark = "PASS" if status else "FAIL"
+        print(f" [{mark}] {name}")
+    print(f"\nCompliance: {percentage:.0f}% ({passed}/{total} requirements met)")
+
+
+def _inspect_backend_class_ast(file_path: str, class_name: str, checks: dict[str, bool]) -> bool:
+    """Inspect a Python module AST for CompilerBackend class compliance.
+
+    Args:
+        file_path (str): Path to the Python file.
+        class_name (str): Target backend class name.
+        checks (dict[str, bool]): Mutable verification check results dictionary.
+
+    Returns:
+        bool: True if the symbol was found in the module, False otherwise.
+    """
+    tree = ast.parse(Path(file_path).read_text(encoding="utf-8"), filename=file_path)
+    target_cls: ast.ClassDef | None = None
+    symbol_found = False
+    for stmt in tree.body:
+        if isinstance(stmt, ast.ClassDef) and stmt.name == class_name:
+            target_cls = stmt
+            symbol_found = True
+            break
+        if isinstance(stmt, ast.Assign) and any(isinstance(t, ast.Name) and t.id == class_name for t in stmt.targets):
+            symbol_found = True
+            break
+
+    if not symbol_found:
+        return False
+
+    checks["Class found"] = True
+    if target_cls is None:
+        return True
+
+    if any(isinstance(b, ast.Name) and b.id == "CompilerBackend" for b in target_cls.bases):
+        checks["Inherits CompilerBackend"] = True
+
+    for body_stmt in target_cls.body:
+        if isinstance(body_stmt, ast.FunctionDef) and body_stmt.name == "compile":
+            checks["Has compile() method"] = True
+            if any(arg.arg == "graph" for arg in body_stmt.args.args):
+                checks["compile() signature takes 'graph'"] = True
+    return True
+
+
 def _verify_backend(file_path: str, class_name: str) -> None:
     """Verify that a specified class implements the CompilerBackend interface.
 
@@ -60,26 +117,15 @@ def _verify_backend(file_path: str, class_name: str) -> None:
         "compile() signature takes 'graph'": False,
     }
 
-    def print_report() -> None:
-        """Print the verification report to standard output."""
-        passed = sum(1 for v in checks.values() if v)
-        total = len(checks)
-        percentage = (passed / total) * 100
-        print("\nVerification Report:")
-        for name, status in checks.items():
-            mark = "PASS" if status else "FAIL"
-            print(f" [{mark}] {name}")
-        print(f"\nCompliance: {percentage:.0f}% ({passed}/{total} requirements met)")
-
     if not os.path.exists(file_path):
         print(f"Error: File {file_path} not found.")
-        print_report()
+        _print_backend_verification_report(checks)
         return
 
     spec = importlib.util.spec_from_file_location("dynamic_backend", file_path)
     if spec is None or spec.loader is None:
         print(f"Error: Could not load module from {file_path}")
-        print_report()
+        _print_backend_verification_report(checks)
         return
 
     module = importlib.util.module_from_spec(spec)
@@ -96,32 +142,15 @@ def _verify_backend(file_path: str, class_name: str) -> None:
         RuntimeError,
     ) as e:
         print(f"Error executing module: {e}")
-        print_report()
+        _print_backend_verification_report(checks)
         return
 
-    mod_dict = module.__dict__
-    if class_name not in mod_dict:
+    if not _inspect_backend_class_ast(file_path, class_name, checks):
         print(f"Error: Class {class_name} not found in {file_path}")
-        print_report()
+        _print_backend_verification_report(checks)
         return
 
-    cls = mod_dict[class_name]
-    checks["Class found"] = True
-
-    try:
-        if issubclass(cls, CompilerBackend):
-            checks["Inherits CompilerBackend"] = True
-    except TypeError:
-        pass
-
-    compile_fn = cls.__dict__.get("compile") if isinstance(cls, type) else None
-    if callable(compile_fn):
-        checks["Has compile() method"] = True
-        sig = inspect.signature(compile_fn)
-        if "graph" in sig.parameters:
-            checks["compile() signature takes 'graph'"] = True
-
-    print_report()
+    _print_backend_verification_report(checks)
 
 
 def _handle_toposort(parsed_args: argparse.Namespace) -> None:
@@ -177,11 +206,7 @@ def _handle_validate(parsed_args: argparse.Namespace) -> None:
     for node_id, errs in grouped_errors.items():
         print(f"Node {node_id}:")
         for err in errs:
-            level_str = (
-                "ERROR"
-                if err.level == ValidationLevel.ERROR or parsed_args.strict
-                else "WARNING"
-            )
+            level_str = "ERROR" if err.level == ValidationLevel.ERROR or parsed_args.strict else "WARNING"
             print(f"  [{level_str}] {err.attribute}: {err.message}")
 
     sys.exit(1 if has_errors else 0)
@@ -369,12 +394,7 @@ def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
         attrs_dict: dict[str, JsonValue] = {
             attr_name: {
                 "type": attr.type,
-                "default": (
-                    attr.default
-                    if isinstance(attr.default, (str, int, float, bool))
-                    or attr.default is None
-                    else str(attr.default)
-                ),
+                "default": (attr.default if isinstance(attr.default, (str, int, float, bool)) or attr.default is None else str(attr.default)),
                 "required": attr.required,
             }
             for attr_name, attr in schema.attributes.items()
@@ -424,16 +444,11 @@ def _handle_ground(parsed_args: argparse.Namespace) -> None:
     graph = _parse_graph_from_json(json_data)
     report = audit_graph_grounding(graph, snapshots_path=parsed_args.snapshots_dir)
 
-    print(
-        f"Grounding Audit: {report.grounded_count}/{report.total_nodes} nodes grounded. "
-        f"Hallucination score: {report.hallucination_score:.1%}"
-    )
+    print(f"Grounding Audit: {report.grounded_count}/{report.total_nodes} nodes grounded. Hallucination score: {report.hallucination_score:.1%}")
 
     if report.diagnostics:
         for err in report.diagnostics:
-            print(
-                f"  [{err.level.value}] Node {err.node_id} ({err.attribute}): {err.message}"
-            )
+            print(f"  [{err.level.value}] Node {err.node_id} ({err.attribute}): {err.message}")
         sys.exit(1)
     print("Graph is fully grounded against framework snapshots.")
     sys.exit(0)
@@ -452,9 +467,7 @@ def _handle_export_schema(parsed_args: argparse.Namespace) -> None:
     )
 
     if parsed_args.out_dir:
-        exported = export_schemas(
-            parsed_args.out_dir, include_typescript=parsed_args.typescript
-        )
+        exported = export_schemas(parsed_args.out_dir, include_typescript=parsed_args.typescript)
         print(f"Exported {len(exported)} schemas to {parsed_args.out_dir}:")
         for k, v in exported.items():
             print(f" - {k}: {v}")
@@ -481,56 +494,30 @@ def main(args: list[str] | None = None) -> None:
     if args is None:
         args = sys.argv[1:]
 
-    parser = argparse.ArgumentParser(
-        description="ml-switcheroo-ir CLI - Utility for IR manipulation"
-    )
+    parser = argparse.ArgumentParser(description="ml-switcheroo-ir CLI - Utility for IR manipulation")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    sort_parser = subparsers.add_parser(
-        "toposort", help="Topologically sort a graph from JSON"
-    )
-    sort_parser.add_argument(
-        "infile", type=argparse.FileType("r"), help="Input JSON file"
-    )
+    sort_parser = subparsers.add_parser("toposort", help="Topologically sort a graph from JSON")
+    sort_parser.add_argument("infile", type=argparse.FileType("r"), help="Input JSON file")
 
-    verify_parser = subparsers.add_parser(
-        "verify-backend", help="Verify a backend implementation against IR interfaces"
-    )
-    verify_parser.add_argument(
-        "file_path", type=str, help="Path to the python file containing the backend"
-    )
-    verify_parser.add_argument(
-        "class_name", type=str, help="Name of the class to verify"
-    )
+    verify_parser = subparsers.add_parser("verify-backend", help="Verify a backend implementation against IR interfaces")
+    verify_parser.add_argument("file_path", type=str, help="Path to the python file containing the backend")
+    verify_parser.add_argument("class_name", type=str, help="Name of the class to verify")
 
-    validate_parser = subparsers.add_parser(
-        "validate", help="Validate a graph against the operator schema"
-    )
-    validate_parser.add_argument(
-        "infile", type=argparse.FileType("r"), help="Input JSON file"
-    )
-    validate_parser.add_argument(
-        "--strict", action="store_true", help="Treat warnings as errors"
-    )
-    validate_parser.add_argument(
-        "--custom-ops", type=str, help="Path to a custom ops JSON file"
-    )
+    validate_parser = subparsers.add_parser("validate", help="Validate a graph against the operator schema")
+    validate_parser.add_argument("infile", type=argparse.FileType("r"), help="Input JSON file")
+    validate_parser.add_argument("--strict", action="store_true", help="Treat warnings as errors")
+    validate_parser.add_argument("--custom-ops", type=str, help="Path to a custom ops JSON file")
 
-    list_ops_parser = subparsers.add_parser(
-        "list-ops", help="List registered operators"
-    )
+    list_ops_parser = subparsers.add_parser("list-ops", help="List registered operators")
     list_ops_parser.add_argument("--domain", type=str, help="Filter by domain")
-    list_ops_parser.add_argument(
-        "--search", type=str, help="Regex search operator names"
-    )
+    list_ops_parser.add_argument("--search", type=str, help="Regex search operator names")
 
     compliance_parser = subparsers.add_parser(
         "compliance",
         help="Check compliance of Python code against ml-switcheroo-ir IR or DIALECT",
     )
-    compliance_parser.add_argument(
-        "target", type=str, nargs="+", help="Python file(s) or directory to check"
-    )
+    compliance_parser.add_argument("target", type=str, nargs="+", help="Python file(s) or directory to check")
     compliance_parser.add_argument(
         "-m",
         "--mapping",
@@ -560,9 +547,7 @@ def main(args: list[str] | None = None) -> None:
         "ground",
         help="Ground and audit a graph against ground-truth framework snapshots",
     )
-    ground_parser.add_argument(
-        "infile", type=argparse.FileType("r"), help="Input model graph JSON file"
-    )
+    ground_parser.add_argument("infile", type=argparse.FileType("r"), help="Input model graph JSON file")
     ground_parser.add_argument(
         "--snapshots-dir",
         "--snapshots",

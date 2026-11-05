@@ -34,9 +34,7 @@ def test_logical_node_empty_id_or_op_type() -> None:
     """Test LogicalNode constructor raises ValueError when id or op_type is empty."""
     with pytest.raises(ValueError, match="LogicalNode 'id' must be a non-empty string"):
         LogicalNode(id="", op_type="Relu")
-    with pytest.raises(
-        ValueError, match="LogicalNode 'op_type' must be a non-empty string"
-    ):
+    with pytest.raises(ValueError, match="LogicalNode 'op_type' must be a non-empty string"):
         LogicalNode(id="n1", op_type="")
 
 
@@ -104,9 +102,7 @@ def test_logical_graph_outputs_deduction_and_override() -> None:
     """Test deduction of graph outputs and explicit override."""
     n1 = LogicalNode(id="n1", op_type="Input")
     n2 = LogicalNode(id="n2", op_type="Relu", inputs=["n1"])
-    graph_explicit = LogicalGraph(
-        name="ExplicitOutputs", nodes={"n1": n1, "n2": n2}, outputs=["custom_out"]
-    )
+    graph_explicit = LogicalGraph(name="ExplicitOutputs", nodes={"n1": n1, "n2": n2}, outputs=["custom_out"])
     assert graph_explicit.outputs == ["custom_out"]
 
     graph_empty = LogicalGraph()
@@ -179,7 +175,7 @@ def test_logical_node_rejects_invalid_shape_metadata() -> None:
             {
                 "id": "n5",
                 "op_type": "Custom",
-                "shape_metadata": object(),
+                "shape_metadata": 3.14,
             }
         )
 
@@ -189,9 +185,7 @@ def test_logical_node_rejects_invalid_shape_metadata() -> None:
 
 def test_logical_node_shape_from_tensor_shape_and_iterables() -> None:
     """Test LogicalNode initialization with TensorShape, tuples, lists, and ranges."""
-    node1 = LogicalNode(
-        id="n1", op_type="Conv", shape_metadata=TensorShape((3, 224, 224))
-    )
+    node1 = LogicalNode(id="n1", op_type="Conv", shape_metadata=TensorShape((3, 224, 224)))
     assert node1.shape_metadata == (3, 224, 224)
 
     node2 = LogicalNode(id="n2", op_type="Linear", shape_metadata=(1, 10))
@@ -233,11 +227,7 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
     """Test chunked incremental streaming JSON parser with small chunk boundaries and error paths."""
     from ml_switcheroo_ir.graph import _decode_next_json_value, _stream_parse_graph
 
-    raw_dict_nodes = (
-        '{"name": "ChunkedModel", "nodes": {"n1": {"id": "n1", "op_type": "Relu"}, '
-        '"n2": {"id": "n2", "op_type": "Add", "inputs": []}}, '
-        '"edges": [{"source": "n1", "target": "n2"}], "outputs": ["n2"]}'
-    )
+    raw_dict_nodes = '{"name": "ChunkedModel", "nodes": {"n1": {"id": "n1", "op_type": "Relu"}, "n2": {"id": "n2", "op_type": "Add", "inputs": []}}, "edges": [{"source": "n1", "target": "n2"}], "outputs": ["n2"]}'
     g1 = _stream_parse_graph(io.StringIO(raw_dict_nodes), LogicalGraph, chunk_size=8)
     assert g1.name == "ChunkedModel"
     assert list(g1.nodes.keys()) == ["n1", "n2"]
@@ -251,9 +241,7 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
     with pytest.raises(json.JSONDecodeError, match="Expected top-level JSON object"):
         _stream_parse_graph(io.StringIO("   [1, 2]"), LogicalGraph, chunk_size=4)
 
-    with pytest.raises(
-        json.JSONDecodeError, match="Unterminated top-level JSON object"
-    ):
+    with pytest.raises(json.JSONDecodeError, match="Unterminated top-level JSON object"):
         _stream_parse_graph(io.StringIO('{"name": "X"'), LogicalGraph, chunk_size=4)
 
     with pytest.raises(json.JSONDecodeError, match=r"Expected '\{' for nodes section"):

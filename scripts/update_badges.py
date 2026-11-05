@@ -83,7 +83,7 @@ def get_coverage_metrics(
             [sys.executable, "-m", "coverage", "json", "-o", actual_path],
             check=False,
         )
-        with open(actual_path, "r", encoding="utf-8") as f:
+        with open(actual_path, encoding="utf-8") as f:
             data = json.load(f)
             totals = data.get("totals", {})
             overall = float(totals.get("percent_covered", 0.0))
@@ -93,9 +93,7 @@ def get_coverage_metrics(
 
             num_branches = totals.get("num_branches", 0)
             cov_branches = totals.get("covered_branches", 0)
-            branch_cov = (
-                (cov_branches / num_branches * 100.0) if num_branches > 0 else 100.0
-            )
+            branch_cov = (cov_branches / num_branches * 100.0) if num_branches > 0 else 100.0
             return overall, stmt_cov, branch_cov
     except (
         subprocess.SubprocessError,
@@ -167,9 +165,7 @@ def get_doc_coverage() -> float:
         TypeError,
         RuntimeError,
     ) as err:
-        raise ValueError(
-            "Failed to determine documentation coverage from interrogate."
-        ) from err
+        raise ValueError("Failed to determine documentation coverage from interrogate.") from err
     raise ValueError("Failed to determine documentation coverage from interrogate.")
 
 
@@ -201,23 +197,17 @@ def enforce_coverage_shields(readme_path: str = "README.md") -> None:
     if not os.path.exists(readme_path):
         raise FileNotFoundError(f"Target markdown file not found: {readme_path}")
 
-    with open(readme_path, "r", encoding="utf-8") as f:
+    with open(readme_path, encoding="utf-8") as f:
         content = f.read()
 
     test_count, doc_count, branch_count = count_shields(content)
 
     if branch_count > 0:
-        raise ValueError(
-            f"Enforcement failed: Expected 0 branch coverage shields, found {branch_count}"
-        )
+        raise ValueError(f"Enforcement failed: Expected 0 branch coverage shields, found {branch_count}")
     if test_count != 1:
-        raise ValueError(
-            f"Enforcement failed: Expected exactly 1 test coverage shield, found {test_count}"
-        )
+        raise ValueError(f"Enforcement failed: Expected exactly 1 test coverage shield, found {test_count}")
     if doc_count != 1:
-        raise ValueError(
-            f"Enforcement failed: Expected exactly 1 doc coverage shield, found {doc_count}"
-        )
+        raise ValueError(f"Enforcement failed: Expected exactly 1 doc coverage shield, found {doc_count}")
     if re.search(r"coverage-0(?:\.0+)?%25", content, flags=re.IGNORECASE):
         raise ValueError("Enforcement failed: Coverage shield cannot be 0%")
 
@@ -241,9 +231,77 @@ def parse_args(args: list[str]) -> tuple[bool, str]:
     return enforce_only, target_readme
 
 
-def update_readme(
-    readme_path: str | None = None, coverage_json_path: str | None = None
-) -> None:
+def _apply_badge_replacements(content: str, test_badge: str, doc_badge: str) -> str:
+    """Update or insert test and doc coverage badges in README markdown content.
+
+    Args:
+        content: Original README markdown text.
+        test_badge: Rendered Test Coverage markdown badge.
+        doc_badge: Rendered Doc Coverage markdown badge.
+
+    Returns:
+        Updated README markdown text.
+    """
+    content = re.sub(
+        r"[ \t]*\[?\!\[Branch\s+Coverage\]\(https://img\.shields\.io/badge/(?:branch_)?coverage-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?\n?",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    )
+
+    if TEST_BADGE_RE.search(content):
+        content = TEST_BADGE_RE.sub("__TEST_BADGE_PLACEHOLDER__", content, count=1)
+        content = re.sub(
+            r"[ \t]*" + TEST_BADGE_RE.pattern + r"\n?",
+            "",
+            content,
+            flags=re.IGNORECASE,
+        )
+        content = content.replace("__TEST_BADGE_PLACEHOLDER__", test_badge)
+    elif DOC_BADGE_RE.search(content):
+        content = re.sub(
+            r"([ \t]*\[?\!\[Doc\s+Coverage\])",
+            rf"{test_badge}\n\g<1>",
+            content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    elif re.search(r"(#[^\n]*\n+)", content):
+        content = re.sub(
+            r"(#[^\n]*\n+)",
+            rf"\g<1>{test_badge}\n",
+            content,
+            count=1,
+        )
+    else:
+        content = f"{test_badge}\n{content}"
+
+    if DOC_BADGE_RE.search(content):
+        content = DOC_BADGE_RE.sub("__DOC_BADGE_PLACEHOLDER__", content, count=1)
+        content = re.sub(
+            r"[ \t]*" + DOC_BADGE_RE.pattern + r"\n?",
+            "",
+            content,
+            flags=re.IGNORECASE,
+        )
+        content = content.replace("__DOC_BADGE_PLACEHOLDER__", doc_badge)
+    else:
+        content = re.sub(
+            r"(\[\!\[(?:Test\s+)?Coverage\].*?\n)",
+            rf"\g<1>{doc_badge}\n",
+            content,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+
+    return re.sub(
+        r"(\[!\[(?:Test\s+)?Coverage\].*?\n)\s*(\[!\[Doc\s+Coverage\])",
+        r"\g<1>\g<2>",
+        content,
+    )
+
+
+def update_readme(readme_path: str | None = None, coverage_json_path: str | None = None) -> None:
     """Update test and doc coverage shields in README.md, enforcing exactly one of each.
 
     Args:
@@ -253,15 +311,7 @@ def update_readme(
     Raises:
         ValueError: If shield enforcement fails after generation.
     """
-    target_readme = (
-        readme_path
-        if readme_path is not None
-        else (
-            sys.argv[1]
-            if len(sys.argv) > 1 and not sys.argv[1].startswith("-")
-            else "README.md"
-        )
-    )
+    target_readme = readme_path if readme_path is not None else (sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "README.md")
     if not os.path.exists(target_readme):
         return
 
@@ -285,80 +335,14 @@ def update_readme(
     test_badge = f"[![Test Coverage](https://img.shields.io/badge/test_coverage-{test_str}%25-{test_color}.svg)](#)"
     doc_badge = f"[![Doc Coverage](https://img.shields.io/badge/doc_coverage-{doc_str}%25-{doc_color}.svg)](#)"
 
-    with open(target_readme, "r", encoding="utf-8") as f:
+    with open(target_readme, encoding="utf-8") as f:
         content = f.read()
 
-    # 1. Remove all branch coverage shields
-    content = re.sub(
-        r"[ \t]*\[?\!\[Branch\s+Coverage\]\(https://img\.shields\.io/badge/(?:branch_)?coverage-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?\n?",
-        "",
-        content,
-        flags=re.IGNORECASE,
-    )
+    content = _apply_badge_replacements(content, test_badge, doc_badge)
 
-    # 2. Update or insert Test Coverage shield
-    if TEST_BADGE_RE.search(content):
-        content = TEST_BADGE_RE.sub("__TEST_BADGE_PLACEHOLDER__", content, count=1)
-        content = re.sub(
-            r"[ \t]*" + TEST_BADGE_RE.pattern + r"\n?",
-            "",
-            content,
-            flags=re.IGNORECASE,
-        )
-        content = content.replace("__TEST_BADGE_PLACEHOLDER__", test_badge)
-    else:
-        if DOC_BADGE_RE.search(content):
-            content = re.sub(
-                r"([ \t]*\[?\!\[Doc\s+Coverage\])",
-                rf"{test_badge}\n\g<1>",
-                content,
-                count=1,
-                flags=re.IGNORECASE,
-            )
-        else:
-            header_match = re.search(r"(#[^\n]*\n+)", content)
-            if header_match:
-                content = re.sub(
-                    r"(#[^\n]*\n+)",
-                    rf"\g<1>{test_badge}\n",
-                    content,
-                    count=1,
-                )
-            else:
-                content = f"{test_badge}\n{content}"
-
-    # 3. Update or insert Doc Coverage shield
-    if DOC_BADGE_RE.search(content):
-        content = DOC_BADGE_RE.sub("__DOC_BADGE_PLACEHOLDER__", content, count=1)
-        content = re.sub(
-            r"[ \t]*" + DOC_BADGE_RE.pattern + r"\n?",
-            "",
-            content,
-            flags=re.IGNORECASE,
-        )
-        content = content.replace("__DOC_BADGE_PLACEHOLDER__", doc_badge)
-    else:
-        content = re.sub(
-            r"(\[\!\[(?:Test\s+)?Coverage\].*?\n)",
-            rf"\g<1>{doc_badge}\n",
-            content,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-
-    # 4. Clean up spacing between Test Coverage and Doc Coverage shields
-    content = re.sub(
-        r"(\[!\[(?:Test\s+)?Coverage\].*?\n)\s*(\[!\[Doc\s+Coverage\])",
-        r"\g<1>\g<2>",
-        content,
-    )
-
-    # 5. Enforce counts on updated content
     test_count, doc_count, branch_count = count_shields(content)
     if branch_count > 0 or test_count != 1 or doc_count != 1:
-        raise ValueError(
-            f"Enforcement failed after update: test={test_count}, doc={doc_count}, branch={branch_count}"
-        )
+        raise ValueError(f"Enforcement failed after update: test={test_count}, doc={doc_count}, branch={branch_count}")
 
     with open(target_readme, "w", encoding="utf-8") as f:
         f.write(content)

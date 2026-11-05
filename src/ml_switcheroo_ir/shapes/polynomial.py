@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import typing
+
 import typing_extensions
 
 if typing.TYPE_CHECKING:
@@ -142,9 +143,7 @@ class Polynomial:
                     merged_dict[v] = merged_dict.get(v, 0) + p
                 for v, p in m2:
                     merged_dict[v] = merged_dict.get(v, 0) + p
-                merged_mono = tuple(
-                    sorted((v, p) for v, p in merged_dict.items() if p > 0)
-                )
+                merged_mono = tuple(sorted((v, p) for v, p in merged_dict.items() if p > 0))
                 coeff = c1 * c2
                 curr = new_terms.get(merged_mono, 0) + coeff
                 if curr == 0:
@@ -152,6 +151,35 @@ class Polynomial:
                 else:
                     new_terms[merged_mono] = curr
         return Polynomial(new_terms)
+
+    @staticmethod
+    def _divide_monomial_term(
+        mono: MonomialType,
+        coeff: int,
+        div_mono: MonomialType,
+        div_coeff: int,
+    ) -> tuple[MonomialType, int] | None:
+        """Divide a single monomial term by a divisor monomial and coefficient.
+
+        Args:
+            mono (MonomialType): Dividend monomial.
+            coeff (int): Dividend coefficient.
+            div_mono (MonomialType): Divisor monomial.
+            div_coeff (int): Divisor coefficient.
+
+        Returns:
+            tuple[MonomialType, int] | None: ``(quotient_monomial, quotient_coeff)`` or None if not divisible.
+        """
+        if coeff % div_coeff != 0:
+            return None
+        mono_dict = dict(mono)
+        for var, power in div_mono:
+            if mono_dict.get(var, 0) < power:
+                return None
+            mono_dict[var] -= power
+            if mono_dict[var] == 0:
+                del mono_dict[var]
+        return tuple(sorted(mono_dict.items())), coeff // div_coeff
 
     def div_exact(self, other: Polynomial) -> Polynomial | None:
         """Attempt exact polynomial division.
@@ -166,34 +194,41 @@ class Polynomial:
             return None
         if self == other:
             return Polynomial.from_const(1)
-        if other.is_const():
-            c = other.get_const()
-            new_terms: dict[MonomialType, int] = {}
-            for mono, coeff in self.terms.items():
-                if coeff % c != 0:
-                    return None
-                new_terms[mono] = coeff // c
-            return Polynomial(new_terms)
+        if len(other.terms) != 1:
+            return None
 
-        if len(other.terms) == 1:
-            div_mono, div_coeff = next(iter(other.terms.items()))
-            new_terms_exact: dict[MonomialType, int] = {}
-            for mono, coeff in self.terms.items():
-                if coeff % div_coeff != 0:
-                    return None
-                mono_dict = dict(mono)
-                div_dict = dict(div_mono)
-                for var, power in div_dict.items():
-                    if mono_dict.get(var, 0) < power:
-                        return None
-                    mono_dict[var] -= power
-                    if mono_dict[var] == 0:
-                        del mono_dict[var]
-                quot_mono = tuple(sorted(mono_dict.items()))
-                new_terms_exact[quot_mono] = coeff // div_coeff
-            return Polynomial(new_terms_exact)
+        div_mono, div_coeff = next(iter(other.terms.items()))
+        new_terms_exact: dict[MonomialType, int] = {}
+        for mono, coeff in self.terms.items():
+            divided = self._divide_monomial_term(mono, coeff, div_mono, div_coeff)
+            if divided is None:
+                return None
+            new_terms_exact[divided[0]] = divided[1]
+        return Polynomial(new_terms_exact)
 
-        return None
+    @staticmethod
+    def _format_monomial_term(i: int, mono: MonomialType, raw_coeff: int) -> str:
+        """Format a single signed monomial term for canonical string rendering.
+
+        Args:
+            i (int): Index of the term in the sorted polynomial.
+            mono (MonomialType): Monomial variable powers.
+            raw_coeff (int): Term integer coefficient.
+
+        Returns:
+            str: Formatted signed term string.
+        """
+        if i > 0:
+            sign = " + " if raw_coeff > 0 else " - "
+        else:
+            sign = "-" if raw_coeff < 0 else ""
+        coeff = abs(raw_coeff)
+
+        if not mono:
+            return f"{sign}{coeff}"
+        var_str = "*".join(var if pow_val == 1 else f"{var}^{pow_val}" for var, pow_val in mono)
+        part = var_str if coeff == 1 else f"{coeff}*{var_str}"
+        return f"{sign}{part}"
 
     def canonical_str(self) -> str:
         """Return canonical deterministic string representation of polynomial.
@@ -204,51 +239,11 @@ class Polynomial:
         if self.is_zero():
             return "0"
 
-        def sort_key(mono: MonomialType) -> tuple[int, list[str]]:
-            """Sort key for monomial terms by descending degree and variable names.
-
-            Args:
-                mono (MonomialType): Monomial representation.
-
-            Returns:
-                tuple[int, list[str]]: Comparison sort key.
-            """
-            degree = sum(p for _, p in mono)
-            vars_sorted = [v for v, _ in mono]
-            return (-degree, vars_sorted)
-
-        sorted_monos = sorted(self.terms.keys(), key=sort_key)
-        parts: list[str] = []
-        for i, mono in enumerate(sorted_monos):
-            coeff = self.terms[mono]
-            sign = ""
-            if i > 0:
-                if coeff > 0:
-                    sign = " + "
-                else:
-                    sign = " - "
-                    coeff = abs(coeff)
-            elif coeff < 0:
-                sign = "-"
-                coeff = abs(coeff)
-
-            if len(mono) == 0:
-                part = f"{coeff}"
-            else:
-                var_factors: list[str] = []
-                for var, pow_val in mono:
-                    if pow_val == 1:
-                        var_factors.append(var)
-                    else:
-                        var_factors.append(f"{var}^{pow_val}")
-                var_str = "*".join(var_factors)
-                if coeff == 1:
-                    part = var_str
-                else:
-                    part = f"{coeff}*{var_str}"
-            parts.append(f"{sign}{part}")
-
-        return "".join(parts)
+        sorted_monos = sorted(
+            self.terms.keys(),
+            key=lambda m: (-sum(p for _, p in m), [v for v, _ in m]),
+        )
+        return "".join(self._format_monomial_term(i, mono, self.terms[mono]) for i, mono in enumerate(sorted_monos))
 
     def __eq__(self, other: object) -> bool:
         """Evaluate equality between two polynomials.
@@ -310,6 +305,30 @@ class Polynomial:
         return total
 
 
+def _build_monomial_symnode(mono: MonomialType, coeff: int) -> SymNode:
+    """Build a product SymNode for a single monomial and positive integer coefficient.
+
+    Args:
+        mono (MonomialType): Monomial variable powers.
+        coeff (int): Positive integer coefficient.
+
+    Returns:
+        SymNode: Product expression node.
+    """
+    from ml_switcheroo_ir.shapes.ast import SymBinaryOp, SymConst, SymVar
+
+    var_factors: list[SymNode] = []
+    if coeff != 1 or not mono:
+        var_factors.append(SymConst(coeff))
+    for var, power in mono:
+        var_factors.extend(SymVar(var) for _ in range(power))
+
+    term_node = var_factors[0]
+    for f in var_factors[1:]:
+        term_node = SymBinaryOp("*", term_node, f)
+    return term_node
+
+
 def _poly_to_symnode(poly: Polynomial) -> SymNode:
     """Convert a canonical Polynomial back into a simplified SymNode expression tree.
 
@@ -319,50 +338,25 @@ def _poly_to_symnode(poly: Polynomial) -> SymNode:
     Returns:
         SymNode: Equivalent structured symbolic expression tree.
     """
-    from ml_switcheroo_ir.shapes.ast import SymBinaryOp, SymConst, SymVar
+    from ml_switcheroo_ir.shapes.ast import SymBinaryOp, SymConst
 
     if poly.is_zero():
         return SymConst(0)
     if poly.is_const():
         return SymConst(poly.get_const())
 
-    def sort_key(mono: MonomialType) -> tuple[int, list[str]]:
-        """Sort key for monomial terms by descending degree and variable names.
-
-        Args:
-            mono (MonomialType): Monomial representation.
-
-        Returns:
-            tuple[int, list[str]]: Comparison sort key.
-        """
-        degree = sum(p for _, p in mono)
-        vars_sorted = [v for v, _ in mono]
-        return (-degree, vars_sorted)
-
-    sorted_monos = sorted(poly.terms.keys(), key=sort_key)
+    sorted_monos = sorted(
+        poly.terms.keys(),
+        key=lambda m: (-sum(p for _, p in m), [v for v, _ in m]),
+    )
     res_node: SymNode | None = None
 
     for mono in sorted_monos:
         raw_coeff = poly.terms[mono]
-        coeff = abs(raw_coeff)
-
-        var_factors: list[SymNode] = []
-        if coeff != 1 or len(mono) == 0:
-            var_factors.append(SymConst(coeff))
-
-        for var, power in mono:
-            for _ in range(power):
-                var_factors.append(SymVar(var))
-
-        term_node = var_factors[0]
-        for f in var_factors[1:]:
-            term_node = SymBinaryOp("*", term_node, f)
+        term_node = _build_monomial_symnode(mono, abs(raw_coeff))
 
         if res_node is None:
-            if raw_coeff < 0:
-                res_node = SymBinaryOp("-", SymConst(0), term_node)
-            else:
-                res_node = term_node
+            res_node = SymBinaryOp("-", SymConst(0), term_node) if raw_coeff < 0 else term_node
         elif raw_coeff < 0:
             res_node = SymBinaryOp("-", res_node, term_node)
         else:

@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import typing
-import typing_extensions
+from collections.abc import Mapping, Sequence
 
 import pydantic
+import typing_extensions
 
 from ml_switcheroo_ir.types import JsonValue
 
 PartitionAxisAtom: typing_extensions.TypeAlias = typing.Union[str, int, None]
-PartitionAxisInner: typing_extensions.TypeAlias = typing.Union[
-    PartitionAxisAtom, tuple[PartitionAxisAtom, ...], list[PartitionAxisAtom]
-]
-PartitionAxisElement: typing_extensions.TypeAlias = typing.Union[
-    PartitionAxisInner, tuple[PartitionAxisInner, ...], list[PartitionAxisInner]
-]
+PartitionAxisInner: typing_extensions.TypeAlias = typing.Union[PartitionAxisAtom, tuple[PartitionAxisAtom, ...], list[PartitionAxisAtom]]
+PartitionAxisElement: typing_extensions.TypeAlias = typing.Union[PartitionAxisInner, tuple[PartitionAxisInner, ...], list[PartitionAxisInner]]
 
 
 class LogicalAxis(pydantic.BaseModel):
@@ -241,9 +237,7 @@ class PipelineTopologyConfig(pydantic.BaseModel):
         }
 
     @classmethod
-    def from_dict(
-        cls, data: PipelineTopologyConfig | Mapping[str, JsonValue]
-    ) -> PipelineTopologyConfig:
+    def from_dict(cls, data: PipelineTopologyConfig | Mapping[str, JsonValue]) -> PipelineTopologyConfig:
         """Construct PipelineTopologyConfig from dictionary representation.
 
         Args:
@@ -289,9 +283,7 @@ class WebRTCSignalingTopology(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     signaling_url: str = "ws://localhost:8080"
-    ice_servers: list[str] = pydantic.Field(
-        default_factory=lambda: ["stun:stun.l.google.com:19302"]
-    )
+    ice_servers: list[str] = pydantic.Field(default_factory=lambda: ["stun:stun.l.google.com:19302"])
     high_watermark_bytes: int = 1048576
     low_watermark_bytes: int = 262144
     chunk_size_bytes: int = 65536
@@ -323,9 +315,7 @@ class WebRTCSignalingTopology(pydantic.BaseModel):
         }
 
     @classmethod
-    def from_dict(
-        cls, data: WebRTCSignalingTopology | Mapping[str, JsonValue]
-    ) -> WebRTCSignalingTopology:
+    def from_dict(cls, data: WebRTCSignalingTopology | Mapping[str, JsonValue]) -> WebRTCSignalingTopology:
         """Construct WebRTCSignalingTopology from dictionary representation.
 
         Args:

@@ -130,9 +130,7 @@ def test_streaming_zstd_roundtrip_10000_nodes(tmp_path: Path) -> None:
     assert zst_read_time < 120.0
 
 
-def test_streaming_zstd_missing_dependency(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_streaming_zstd_missing_dependency(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that missing zstandard gracefully triggers pytest.skip.
 
     Args:

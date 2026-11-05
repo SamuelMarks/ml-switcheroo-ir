@@ -391,9 +391,8 @@ def test_sym_piecewise() -> None:
 
 
 def test_sym_int_wrapper_and_operations() -> None:
-    """Test SymInt wrapper arithmetic dunders, comparisons, int casting, and canonicalization."""
+    """Test SymInt wrapper evaluation, int casting, and basic arithmetic dunders."""
     si_x = SymInt("x")
-    si_y = SymInt(SymVar("y"))
     si_5 = SymInt(5)
     si_copy = SymInt(si_x)
 
@@ -403,7 +402,6 @@ def test_sym_int_wrapper_and_operations() -> None:
     assert str(si_x) == "x"
     assert hash(si_x) == hash("x")
 
-    # Evaluation
     assert si_x.eval({"x": 20}) == 20
     assert si_x.evaluate({"x": 20}) == 20
     assert not si_x.is_constant
@@ -413,49 +411,32 @@ def test_sym_int_wrapper_and_operations() -> None:
     with pytest.raises(TypeError, match="Cannot convert dynamic SymInt"):
         int(si_x)
 
-    # Arithmetic
-    s_add = si_x + 3
-    assert s_add.eval({"x": 7}) == 10
-    s_radd = 3 + si_x
-    assert s_radd.eval({"x": 7}) == 10
+    assert (si_x + 3).eval({"x": 7}) == 10
+    assert (3 + si_x).eval({"x": 7}) == 10
+    assert (si_x - 4).eval({"x": 10}) == 6
+    assert (10 - si_x).eval({"x": 4}) == 6
+    assert (si_x * 4).eval({"x": 3}) == 12
+    assert (4 * si_x).eval({"x": 3}) == 12
 
-    s_sub = si_x - 4
-    assert s_sub.eval({"x": 10}) == 6
-    s_rsub = 10 - si_x
-    assert s_rsub.eval({"x": 4}) == 6
 
-    s_mul = si_x * 4
-    assert s_mul.eval({"x": 3}) == 12
-    s_rmul = 4 * si_x
-    assert s_rmul.eval({"x": 3}) == 12
+def test_sym_int_division_powers_and_equivalence() -> None:
+    """Test SymInt division, modulo, power, unary ops, canonicalization, and equality."""
+    si_x = SymInt("x")
+    si_y = SymInt(SymVar("y"))
 
-    s_div = si_x // 2
-    assert s_div.eval({"x": 15}) == 7
-    s_rdiv = 100 // si_x
-    assert s_rdiv.eval({"x": 10}) == 10
+    assert (si_x // 2).eval({"x": 15}) == 7
+    assert (100 // si_x).eval({"x": 10}) == 10
+    assert (si_x % 3).eval({"x": 10}) == 1
+    assert (25 % si_x).eval({"x": 6}) == 1
+    assert (si_x**2).eval({"x": 4}) == 16
+    assert (2**si_x).eval({"x": 3}) == 8
+    assert (-si_x).eval({"x": 8}) == -8
+    assert abs(si_x).eval({"x": -15}) == 15
 
-    s_mod = si_x % 3
-    assert s_mod.eval({"x": 10}) == 1
-    s_rmod = 25 % si_x
-    assert s_rmod.eval({"x": 6}) == 1
-
-    s_pow = si_x**2
-    assert s_pow.eval({"x": 4}) == 16
-    s_rpow = 2**si_x
-    assert s_rpow.eval({"x": 3}) == 8
-
-    s_neg = -si_x
-    assert s_neg.eval({"x": 8}) == -8
-
-    s_abs = abs(si_x)
-    assert s_abs.eval({"x": -15}) == 15
-
-    # Canonical and simplify
     si_expr = (si_x + 0) * 1
     assert str(si_expr.simplify()) == "x"
     assert str(si_expr.canonical()) == "x"
 
-    # Equivalence using SymbolicSolver
     assert si_x == SymInt("x")
     assert si_x != si_y
     assert (si_x + 2) == (2 + si_x)
@@ -617,15 +598,12 @@ def test_sym_node_dunders_and_pydantic_schema() -> None:
 
     assert PolyNode().eval({}) == 123
 
-    assert SymNode.__get_pydantic_core_schema__(SymNode, None) is not None
-    assert SymInt.__get_pydantic_core_schema__(SymInt, None) is not None
+    import pydantic
 
-    import sys
-
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setitem(sys.modules, "pydantic_core", None)
-        assert SymNode.__get_pydantic_core_schema__(SymNode, None) is None
-        assert SymInt.__get_pydantic_core_schema__(SymInt, None) is None
+    node_adapter = pydantic.TypeAdapter(SymNode)
+    int_adapter = pydantic.TypeAdapter(SymInt)
+    assert node_adapter.validate_python(SymVar("x")) == SymVar("x")
+    assert int_adapter.validate_python(SymInt("x")) == SymInt("x")
 
 
 def test_sym_binary_op_identities_and_minmax() -> None:
@@ -670,14 +648,8 @@ def test_sym_binary_op_identities_and_minmax() -> None:
     max3 = SymBinaryOp("max", vy, SymBinaryOp("max", vx, vy)).simplify()
     assert max3 == SymBinaryOp("max", vx, vy)
 
-    assert (
-        SymBinaryOp("//", SymBinaryOp("*", SymConst(6), vx), SymConst(2)).simplify()
-        == (SymConst(3) * vx).simplify()
-    )
-    assert (
-        SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(6)), SymConst(2)).simplify()
-        == ((vx % 2) * SymConst(3)).simplify()
-    )
+    assert SymBinaryOp("//", SymBinaryOp("*", SymConst(6), vx), SymConst(2)).simplify() == (SymConst(3) * vx).simplify()
+    assert SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(6)), SymConst(2)).simplify() == ((vx % 2) * SymConst(3)).simplify()
 
     assert (vx + vy).to_polynomial() is not None
     assert (vx - vy).to_polynomial() is not None
@@ -711,10 +683,7 @@ def test_sym_irreducible_and_piecewise_branches() -> None:
     assert (si_x != 10) is True
     assert (si_x == [1, 2]) is False
     assert SymbolicSolver.is_consistent(vx % 2, vx % 2) is True
-    assert (
-        SymbolicSolver.is_consistent(vx % 2, SymBinaryOp("%", vx + 0, SymConst(2)))
-        is True
-    )
+    assert SymbolicSolver.is_consistent(vx % 2, SymBinaryOp("%", vx + 0, SymConst(2))) is True
 
     assert SymBinaryOp("&", vx, vy).simplify() == SymBinaryOp("&", vx, vy)
     assert SymBinaryOp("-", vx, vy).simplify() == (vx - vy)
@@ -724,87 +693,43 @@ def test_sym_irreducible_and_piecewise_branches() -> None:
     assert SymBinaryOp("max", vx, vy).simplify() == SymBinaryOp("max", vx, vy)
 
     assert SymBinaryOp("+", vx % 2, vy).simplify() == SymBinaryOp("+", vx % 2, vy)
-    assert SymBinaryOp("+", vx % 2, SymConst(3)).simplify() == SymBinaryOp(
-        "+", vx % 2, SymConst(3)
-    )
-    assert SymBinaryOp("+", SymConst(3), vx % 2).simplify() == SymBinaryOp(
-        "+", SymConst(3), vx % 2
-    )
+    assert SymBinaryOp("+", vx % 2, SymConst(3)).simplify() == SymBinaryOp("+", vx % 2, SymConst(3))
+    assert SymBinaryOp("+", SymConst(3), vx % 2).simplify() == SymBinaryOp("+", SymConst(3), vx % 2)
     assert SymBinaryOp("-", vx % 2, vy).simplify() == SymBinaryOp("-", vx % 2, vy)
-    assert SymBinaryOp("-", vx % 2, SymConst(3)).simplify() == SymBinaryOp(
-        "-", vx % 2, SymConst(3)
-    )
-    assert SymBinaryOp("-", (vx % 2) + vy, SymConst(3)).simplify() == SymBinaryOp(
-        "-", (vx % 2) + vy, SymConst(3)
-    )
+    assert SymBinaryOp("-", vx % 2, SymConst(3)).simplify() == SymBinaryOp("-", vx % 2, SymConst(3))
+    assert SymBinaryOp("-", (vx % 2) + vy, SymConst(3)).simplify() == SymBinaryOp("-", (vx % 2) + vy, SymConst(3))
     assert SymBinaryOp("//", vx % 2, vy).simplify() == SymBinaryOp("//", vx % 2, vy)
-    assert SymBinaryOp("//", vx % 2, SymConst(3)).simplify() == SymBinaryOp(
-        "//", vx % 2, SymConst(3)
-    )
-    assert SymBinaryOp("//", SymConst(3), vx % 2).simplify() == SymBinaryOp(
-        "//", SymConst(3), vx % 2
-    )
-    assert SymBinaryOp("//", (vx % 2) * vy, SymVar("z")).simplify() == SymBinaryOp(
-        "//", (vx % 2) * vy, SymVar("z")
-    )
-    assert SymBinaryOp(
-        "//", SymBinaryOp("*", vx % 2, SymConst(5)), SymConst(2)
-    ).simplify() == SymBinaryOp(
-        "//", SymBinaryOp("*", vx % 2, SymConst(5)), SymConst(2)
-    )
-    assert SymBinaryOp(
-        "//", SymBinaryOp("*", SymConst(5), vx % 2), SymConst(2)
-    ).simplify() == SymBinaryOp(
-        "//", SymBinaryOp("*", SymConst(5), vx % 2), SymConst(2)
-    )
-    assert SymBinaryOp("%", vx, SymConst(3)).simplify() == SymBinaryOp(
-        "%", vx, SymConst(3)
-    )
-    assert SymBinaryOp("%", SymConst(3), vx).simplify() == SymBinaryOp(
-        "%", SymConst(3), vx
-    )
-    assert SymBinaryOp(
-        "min", SymBinaryOp("min", vx, vy), SymVar("z")
-    ).simplify() == SymBinaryOp("min", SymBinaryOp("min", vx, vy), SymVar("z"))
-    assert SymBinaryOp(
-        "min", SymBinaryOp("+", vx % 2, vy), SymVar("z")
-    ).simplify() == SymBinaryOp("min", SymBinaryOp("+", vx % 2, vy), SymVar("z"))
-    assert SymBinaryOp(
-        "min", SymVar("z"), SymBinaryOp("min", vx, vy)
-    ).simplify() == SymBinaryOp("min", SymVar("z"), SymBinaryOp("min", vx, vy))
-    assert SymBinaryOp(
-        "min", SymVar("z"), SymBinaryOp("+", vx % 2, vy)
-    ).simplify() == SymBinaryOp("min", SymVar("z"), SymBinaryOp("+", vx % 2, vy))
-    assert SymBinaryOp(
-        "max", SymBinaryOp("max", vx, vy), SymVar("z")
-    ).simplify() == SymBinaryOp("max", SymBinaryOp("max", vx, vy), SymVar("z"))
-    assert SymBinaryOp(
-        "max", SymBinaryOp("+", vx % 2, vy), SymVar("z")
-    ).simplify() == SymBinaryOp("max", SymBinaryOp("+", vx % 2, vy), SymVar("z"))
-    assert SymBinaryOp(
-        "max", SymVar("z"), SymBinaryOp("max", vx, vy)
-    ).simplify() == SymBinaryOp("max", SymVar("z"), SymBinaryOp("max", vx, vy))
-    assert SymBinaryOp(
-        "max", SymVar("z"), SymBinaryOp("+", vx % 2, vy)
-    ).simplify() == SymBinaryOp("max", SymVar("z"), SymBinaryOp("+", vx % 2, vy))
+    assert SymBinaryOp("//", vx % 2, SymConst(3)).simplify() == SymBinaryOp("//", vx % 2, SymConst(3))
+    assert SymBinaryOp("//", SymConst(3), vx % 2).simplify() == SymBinaryOp("//", SymConst(3), vx % 2)
+    assert SymBinaryOp("//", (vx % 2) * vy, SymVar("z")).simplify() == SymBinaryOp("//", (vx % 2) * vy, SymVar("z"))
+    assert SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(5)), SymConst(2)).simplify() == SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(5)), SymConst(2))
+    assert SymBinaryOp("//", SymBinaryOp("*", SymConst(5), vx % 2), SymConst(2)).simplify() == SymBinaryOp("//", SymBinaryOp("*", SymConst(5), vx % 2), SymConst(2))
+    assert SymBinaryOp("%", vx, SymConst(3)).simplify() == SymBinaryOp("%", vx, SymConst(3))
+    assert SymBinaryOp("%", SymConst(3), vx).simplify() == SymBinaryOp("%", SymConst(3), vx)
 
-    assert SymBinaryOp("&", SymConst(1), SymConst(2)).simplify() == SymBinaryOp(
-        "&", SymConst(1), SymConst(2)
-    )
-    assert SymBinaryOp("**", vx % 2, SymConst(3)).simplify() == SymBinaryOp(
-        "**", vx % 2, SymConst(3)
-    )
+
+def test_sym_minmax_unary_and_parser_edge_branches() -> None:
+    """Test min/max absorption, unary simplification, piecewise free_vars, and parser edge branches."""
+    vx = SymVar("x")
+    vy = SymVar("y")
+    c0 = SymConst(0)
+
+    assert SymBinaryOp("min", SymBinaryOp("min", vx, vy), SymVar("z")).simplify() == SymBinaryOp("min", SymBinaryOp("min", vx, vy), SymVar("z"))
+    assert SymBinaryOp("min", SymBinaryOp("+", vx % 2, vy), SymVar("z")).simplify() == SymBinaryOp("min", SymBinaryOp("+", vx % 2, vy), SymVar("z"))
+    assert SymBinaryOp("min", SymVar("z"), SymBinaryOp("min", vx, vy)).simplify() == SymBinaryOp("min", SymVar("z"), SymBinaryOp("min", vx, vy))
+    assert SymBinaryOp("min", SymVar("z"), SymBinaryOp("+", vx % 2, vy)).simplify() == SymBinaryOp("min", SymVar("z"), SymBinaryOp("+", vx % 2, vy))
+    assert SymBinaryOp("max", SymBinaryOp("max", vx, vy), SymVar("z")).simplify() == SymBinaryOp("max", SymBinaryOp("max", vx, vy), SymVar("z"))
+    assert SymBinaryOp("max", SymBinaryOp("+", vx % 2, vy), SymVar("z")).simplify() == SymBinaryOp("max", SymBinaryOp("+", vx % 2, vy), SymVar("z"))
+    assert SymBinaryOp("max", SymVar("z"), SymBinaryOp("max", vx, vy)).simplify() == SymBinaryOp("max", SymVar("z"), SymBinaryOp("max", vx, vy))
+    assert SymBinaryOp("max", SymVar("z"), SymBinaryOp("+", vx % 2, vy)).simplify() == SymBinaryOp("max", SymVar("z"), SymBinaryOp("+", vx % 2, vy))
+
+    assert SymBinaryOp("&", SymConst(1), SymConst(2)).simplify() == SymBinaryOp("&", SymConst(1), SymConst(2))
+    assert SymBinaryOp("**", vx % 2, SymConst(3)).simplify() == SymBinaryOp("**", vx % 2, SymConst(3))
     assert SymBinaryOp("**", vx % 2, vy).simplify() == SymBinaryOp("**", vx % 2, vy)
-    assert SymBinaryOp("**", SymConst(3), vx % 2).simplify() == SymBinaryOp(
-        "**", SymConst(3), vx % 2
-    )
+    assert SymBinaryOp("**", SymConst(3), vx % 2).simplify() == SymBinaryOp("**", SymConst(3), vx % 2)
 
-    assert SymUnaryOp("custom", SymConst(5)).simplify() == SymUnaryOp(
-        "custom", SymConst(5)
-    )
-    assert SymUnaryOp("-", SymUnaryOp("abs", vx)).simplify() == SymUnaryOp(
-        "-", SymUnaryOp("abs", vx)
-    )
+    assert SymUnaryOp("custom", SymConst(5)).simplify() == SymUnaryOp("custom", SymConst(5))
+    assert SymUnaryOp("-", SymUnaryOp("abs", vx)).simplify() == SymUnaryOp("-", SymUnaryOp("abs", vx))
     assert SymPiecewise([], default=SymConst(0)).free_vars() == set()
     assert SymUnaryOp("abs", vx).simplify() == SymUnaryOp("abs", vx)
     assert hash(SymInt("x + 1")) == hash(SymInt("1 + x"))

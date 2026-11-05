@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import typing
+from collections.abc import Iterable, Mapping
 
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode, PartitionSpec
 from ml_switcheroo_ir.shapes import DimensionType

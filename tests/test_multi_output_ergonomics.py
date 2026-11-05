@@ -83,9 +83,7 @@ def test_get_producing_output_index() -> None:
     assert res_mut[1] == 1
 
     # 6. Cache invalidation when a node is replaced in-place in graph.nodes (same len)
-    replacement_split = LogicalNode(
-        id="split_node", op_type="Split", outputs=["rep_0", "rep_1"]
-    )
+    replacement_split = LogicalNode(id="split_node", op_type="Split", outputs=["rep_0", "rep_1"])
     replacement_split.set_shape_metadata((2, 4))
     assert replacement_split.shape_metadata == (2, 4)
     replacement_split.update_attributes({"axis": 1}, split_size=2)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import typing
+
 import typing_extensions
 
 from ml_switcheroo_ir.shapes.ast import DimensionType, SymConst, SymInt, SymNode
@@ -112,11 +113,7 @@ class SymbolicConstraintTracker:
         """
         if isinstance(dim, bool):
             return False
-        return (
-            (isinstance(dim, int) and dim == 1)
-            or (isinstance(dim, SymConst) and dim.value == 1)
-            or str(dim) == "1"
-        )
+        return (isinstance(dim, int) and dim == 1) or (isinstance(dim, SymConst) and dim.value == 1) or str(dim) == "1"
 
     def record_equality(
         self,
@@ -232,9 +229,7 @@ class SymbolicConstraintTracker:
         return solution
 
     @typing.overload
-    def substitute(
-        self, dim_or_shape: tuple[DimensionType, ...]
-    ) -> tuple[DimensionType, ...]:
+    def substitute(self, dim_or_shape: tuple[DimensionType, ...]) -> tuple[DimensionType, ...]:
         """Substitute known resolved values into a shape tuple.
 
         Args:
@@ -257,9 +252,7 @@ class SymbolicConstraintTracker:
 
     def substitute(
         self,
-        dim_or_shape: (
-            int | str | SymNode | SymInt | tuple[int | str | SymNode | SymInt, ...]
-        ),
+        dim_or_shape: (int | str | SymNode | SymInt | tuple[int | str | SymNode | SymInt, ...]),
     ) -> int | str | SymNode | SymInt | tuple[int | str | SymNode | SymInt, ...]:
         """Substitute known resolved values into dimension or shape tuple.
 

@@ -101,9 +101,7 @@ def test_framework_registries_loader_with_json_and_dialects(
     with open(custom_file, "w", encoding="utf-8") as f:
         json.dump(custom_data, f)
 
-    res = framework_registries._load_framework_schema_file(
-        "custom_fw.json", "custom_fw", json_path=custom_file
-    )
+    res = framework_registries._load_framework_schema_file("custom_fw.json", "custom_fw", json_path=custom_file)
     assert "custom_add" in res
     assert "custom_no_dialects" in res
     assert framework_registries.ODL_DIALECT_MAPPINGS.get("custom_add") == {
@@ -161,9 +159,7 @@ def test_low_level_registries_loader_with_custom_json(tmp_path: Path) -> None:
     with open(custom_file, "w", encoding="utf-8") as f:
         json.dump(custom_data, f)
 
-    res = low_level_registries._load_schema_file(
-        "custom_ll.json", "custom_ll", json_path=custom_file
-    )
+    res = low_level_registries._load_schema_file("custom_ll.json", "custom_ll", json_path=custom_file)
     assert "custom_ll_op" in res
     assert res["custom_ll_op"].domain == "custom_ll"
 
@@ -367,9 +363,7 @@ def test_stablehlo_loader_error_and_malformed_entries() -> None:
     # Hit the fallback branch exception
     with (
         mock.patch("builtins.open", side_effect=OSError("Read error")),
-        mock.patch(
-            "ml_switcheroo_ir.schema.stablehlo.find_schema_file", return_value=None
-        ),
+        mock.patch("ml_switcheroo_ir.schema.stablehlo.find_schema_file", return_value=None),
         mock.patch("pathlib.Path.exists", return_value=True),
     ):
         stablehlo._load_stablehlo_schemas()
@@ -538,15 +532,9 @@ def test_snapshots_discovery_precedence(tmp_path: Path) -> None:
     # Sibling repo root with empty snapshots subdir falls back to DEFAULT_SNAPSHOT_DIR
     from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR, resolve_snapshots_path
 
-    sibling_root = (
-        Path(__file__).resolve().parent.parent.parent / "ml-ecosystem-snapshots"
-    )
-    with mock.patch(
-        "ml_switcheroo_ir.snapshots._has_snapshot_files", return_value=False
-    ):
-        assert (
-            resolve_snapshots_path(sibling_root) == Path(DEFAULT_SNAPSHOT_DIR).resolve()
-        )
+    sibling_root = Path(__file__).resolve().parent.parent.parent / "ml-ecosystem-snapshots"
+    with mock.patch("ml_switcheroo_ir.snapshots._has_snapshot_files", return_value=False):
+        assert resolve_snapshots_path(sibling_root) == Path(DEFAULT_SNAPSHOT_DIR).resolve()
 
 
 def test_find_schema_file_all_branches(tmp_path: Path) -> None:
@@ -562,10 +550,7 @@ def test_find_schema_file_all_branches(tmp_path: Path) -> None:
     assert find_schema_file("dummy.json", override_path=override_file) == override_file
 
     # 2. Non-existent override path
-    assert (
-        find_schema_file("dummy.json", override_path=tmp_path / "nonexistent.json")
-        is None
-    )
+    assert find_schema_file("dummy.json", override_path=tmp_path / "nonexistent.json") is None
 
     # 3. Non-existent filename anywhere
     assert find_schema_file("completely_unknown_file_12345.json") is None
@@ -576,9 +561,7 @@ def test_find_schema_file_all_branches(tmp_path: Path) -> None:
     snap_subdir.mkdir(parents=True)
     parent_file = parent_dir / "parent_candidate_dummy.json"
     parent_file.write_text("{}", encoding="utf-8")
-    with mock.patch(
-        "ml_switcheroo_ir.snapshots.DEFAULT_SNAPSHOT_DIR", str(snap_subdir)
-    ):
+    with mock.patch("ml_switcheroo_ir.snapshots.DEFAULT_SNAPSHOT_DIR", str(snap_subdir)):
         parent_res = find_schema_file("parent_candidate_dummy.json")
         assert parent_res == parent_file
 
@@ -600,9 +583,7 @@ def test_translation_engine_fallback_merge_when_no_concept_map() -> None:
     """Verify ParameterTranslationEngine populates fallback translations when concept_map.json is missing."""
     engine = ParameterTranslationEngine()
     engine.translations.clear()
-    with mock.patch(
-        "builtins.open", side_effect=FileNotFoundError("Missing concept map")
-    ):
+    with mock.patch("builtins.open", side_effect=FileNotFoundError("Missing concept map")):
         engine._load_default_translations(None)
     assert "matmul" in engine.translations
     assert "layer_norm" in engine.translations

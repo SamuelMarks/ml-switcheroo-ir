@@ -6,8 +6,8 @@ API structures between the ml-ecosystem-snapshots scraper and the ml-switcheroo 
 
 from __future__ import annotations
 
-from enum import Enum
 import typing
+from enum import Enum
 
 import pydantic
 
@@ -176,20 +176,12 @@ class GhostParam(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra="ignore")
 
     name: str = pydantic.Field(description="Parameter name.")
-    kind: ParameterKind = pydantic.Field(
-        description="Kind of parameter (e.g. POSITIONAL_OR_KEYWORD)."
-    )
-    default: JsonValue = pydantic.Field(
-        default=None, description="Default value as string."
-    )
-    annotation: str | None = pydantic.Field(
-        default=None, description="Type annotation as string."
-    )
+    kind: ParameterKind = pydantic.Field(description="Kind of parameter (e.g. POSITIONAL_OR_KEYWORD).")
+    default: JsonValue = pydantic.Field(default=None, description="Default value as string.")
+    annotation: str | None = pydantic.Field(default=None, description="Type annotation as string.")
     description: str | None = pydantic.Field(default=None, description="Description")
 
-    standardized_name: str | None = pydantic.Field(
-        default=None, description="Standardized name"
-    )
+    standardized_name: str | None = pydantic.Field(default=None, description="Standardized name")
 
 
 class GhostResult(pydantic.BaseModel):
@@ -197,15 +189,9 @@ class GhostResult(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="allow")
 
-    name: str | None = pydantic.Field(
-        default=None, description="Result SSA name or output identifier."
-    )
-    type: str | None = pydantic.Field(
-        default=None, description="Result type (e.g. tensor<?x?xf32>)."
-    )
-    description: str | None = pydantic.Field(
-        default=None, description="Description of the result."
-    )
+    name: str | None = pydantic.Field(default=None, description="Result SSA name or output identifier.")
+    type: str | None = pydantic.Field(default=None, description="Result type (e.g. tensor<?x?xf32>).")
+    description: str | None = pydantic.Field(default=None, description="Description of the result.")
 
 
 class ExtendedGhostParam(GhostParam):
@@ -259,18 +245,10 @@ class GhostRef(pydantic.BaseModel):
     name: str = pydantic.Field(description="Short name of the object.")
     api_path: str = pydantic.Field(description="Fully qualified import path.")
     kind: str = pydantic.Field(description="One of: 'class', 'function'")
-    params: list[GhostParam] = pydantic.Field(
-        default_factory=list, description="List of parameters."
-    )
-    docstring: str | None = pydantic.Field(
-        default=None, description="Extracted docstring."
-    )
-    has_varargs: bool = pydantic.Field(
-        default=False, description="True if signature accepts *args."
-    )
-    schema_version: str = pydantic.Field(
-        default="2.0.0", description="Version of the schema format."
-    )
+    params: list[GhostParam] = pydantic.Field(default_factory=list, description="List of parameters.")
+    docstring: str | None = pydantic.Field(default=None, description="Extracted docstring.")
+    has_varargs: bool = pydantic.Field(default=False, description="True if signature accepts *args.")
+    schema_version: str = pydantic.Field(default="2.0.0", description="Version of the schema format.")
 
     is_public: bool | None = pydantic.Field(default=None, description="Is public")
     is_c_extension: bool | None = pydantic.Field(
@@ -282,22 +260,12 @@ class GhostRef(pydantic.BaseModel):
         description="Explicit list of accepted keyword arguments when **kwargs is present.",
     )
 
-    aliases: list[str] | None = pydantic.Field(
-        default_factory=list, description="Aliases"
-    )
+    aliases: list[str] | None = pydantic.Field(default_factory=list, description="Aliases")
     returns_type: str | None = pydantic.Field(default=None, description="Returns type")
-    returns_description: str | None = pydantic.Field(
-        default=None, description="Returns description"
-    )
-    raises: list[str] | None = pydantic.Field(
-        default_factory=list, description="Raises"
-    )
-    environment_tags: list[str] | None = pydantic.Field(
-        default_factory=list, description="Environment tags"
-    )
-    overloads: list[dict[str, JsonValue] | GhostRef] | None = pydantic.Field(
-        default_factory=list, description="Overloads"
-    )
+    returns_description: str | None = pydantic.Field(default=None, description="Returns description")
+    raises: list[str] | None = pydantic.Field(default_factory=list, description="Raises")
+    environment_tags: list[str] | None = pydantic.Field(default_factory=list, description="Environment tags")
+    overloads: list[dict[str, JsonValue] | GhostRef] | None = pydantic.Field(default_factory=list, description="Overloads")
 
     def has_arg(self, arg_name: str) -> bool:
         """Check if a specific argument exists in the signature.
@@ -320,18 +288,14 @@ class ExtendedGhostRef(GhostRef):
         default_factory=list,
         description="List of extended parameter specifications.",
     )
-    returns: list[GhostResult] | None = pydantic.Field(
-        default=None, description="Multiple SSA returns or results."
-    )
+    returns: list[GhostResult] | None = pydantic.Field(default=None, description="Multiple SSA returns or results.")
     domain_metadata: dict[str, JsonValue] | None = pydantic.Field(
         default=None,
         description="Structured domain metadata for ISAs and compilers.",
     )
-    signature_completeness: typing.Literal["exact", "heuristic", "opaque"] | None = (
-        pydantic.Field(
-            default="exact",
-            description="Completeness of signature resolution: exact, heuristic, or opaque.",
-        )
+    signature_completeness: typing.Literal["exact", "heuristic", "opaque"] | None = pydantic.Field(
+        default="exact",
+        description="Completeness of signature resolution: exact, heuristic, or opaque.",
     )
     is_c_extension: bool | None = pydantic.Field(
         default=False,
@@ -636,14 +600,10 @@ RDNA3_VOPD_OPERATORS: dict[str, VopdOperatorSpec] = {
     "V_DUAL_MUL_F32": VopdOperatorSpec(mnemonic="V_DUAL_MUL_F32", slots=["X", "Y"]),
     "V_DUAL_ADD_F32": VopdOperatorSpec(mnemonic="V_DUAL_ADD_F32", slots=["X", "Y"]),
     "V_DUAL_SUB_F32": VopdOperatorSpec(mnemonic="V_DUAL_SUB_F32", slots=["X", "Y"]),
-    "V_DUAL_SUBREV_F32": VopdOperatorSpec(
-        mnemonic="V_DUAL_SUBREV_F32", slots=["X", "Y"]
-    ),
+    "V_DUAL_SUBREV_F32": VopdOperatorSpec(mnemonic="V_DUAL_SUBREV_F32", slots=["X", "Y"]),
     "V_DUAL_MOV_B32": VopdOperatorSpec(mnemonic="V_DUAL_MOV_B32", slots=["X", "Y"]),
     "V_DUAL_CNDMASK_B32": VopdOperatorSpec(mnemonic="V_DUAL_CNDMASK_B32", slots=["X"]),
-    "V_DUAL_DOT2ACC_F32_F16": VopdOperatorSpec(
-        mnemonic="V_DUAL_DOT2ACC_F32_F16", slots=["Y"]
-    ),
+    "V_DUAL_DOT2ACC_F32_F16": VopdOperatorSpec(mnemonic="V_DUAL_DOT2ACC_F32_F16", slots=["Y"]),
 }
 
 # Standard RDNA equivalents that can be mapped to VOPD opcodes
@@ -763,12 +723,8 @@ class SnapshotEnvelope(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="allow")
 
-    schema_version: str = pydantic.Field(
-        default="2.0.0", description="Snapshot schema version."
-    )
-    target: str = pydantic.Field(
-        ..., description="Target framework, dialect, or hardware ISA."
-    )
+    schema_version: str = pydantic.Field(default="2.0.0", description="Snapshot schema version.")
+    target: str = pydantic.Field(..., description="Target framework, dialect, or hardware ISA.")
     version: str | None = pydantic.Field(
         default=None,
         description="Upstream framework version or toolkit release.",
@@ -781,30 +737,16 @@ class SnapshotEnvelope(pydantic.BaseModel):
         default=None,
         description="Extraction source (tablegen, binary_disassembly, python_ast).",
     )
-    upstream_commit: str | None = pydantic.Field(
-        default=None, description="Upstream git commit hash or release tag."
-    )
+    upstream_commit: str | None = pydantic.Field(default=None, description="Upstream git commit hash or release tag.")
     supported_microarchitectures: list[str] | None = pydantic.Field(
         default=None,
         description="Explicit list of supported GPU compute capabilities or target architectures.",
     )
-    generated_at: str | None = pydantic.Field(
-        default=None, description="ISO-8601 generation timestamp."
-    )
-    environment: dict[str, JsonValue] | None = pydantic.Field(
-        default=None, description="Build host environment metadata."
-    )
-    categories: dict[str, list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef]] = (
-        pydantic.Field(
-            default_factory=dict, description="Categorized symbol dictionaries."
-        )
-    )
-    operations: list[dict[str, JsonValue] | GhostMlirRef] | None = pydantic.Field(
-        default=None, description="Flat list of IR or dialect operations."
-    )
-    instructions: list[dict[str, JsonValue] | GhostIsaRef] | None = pydantic.Field(
-        default=None, description="Flat list of hardware ISA instructions."
-    )
+    generated_at: str | None = pydantic.Field(default=None, description="ISO-8601 generation timestamp.")
+    environment: dict[str, JsonValue] | None = pydantic.Field(default=None, description="Build host environment metadata.")
+    categories: dict[str, list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef]] = pydantic.Field(default_factory=dict, description="Categorized symbol dictionaries.")
+    operations: list[dict[str, JsonValue] | GhostMlirRef] | None = pydantic.Field(default=None, description="Flat list of IR or dialect operations.")
+    instructions: list[dict[str, JsonValue] | GhostIsaRef] | None = pydantic.Field(default=None, description="Flat list of hardware ISA instructions.")
 
 
 class LogicOp(str, Enum):

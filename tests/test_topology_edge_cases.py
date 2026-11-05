@@ -33,9 +33,7 @@ def test_topological_sort_5_node_indirect_cycle() -> None:
     c3 = LogicalNode(id="c3", op_type="Relu", inputs=["c2"])
     c4 = LogicalNode(id="c4", op_type="Relu", inputs=["c3"])
     c5 = LogicalNode(id="c5", op_type="Relu", inputs=["c4"])
-    graph = LogicalGraph(
-        name="IndirectCycle5", nodes={n.id: n for n in [c1, c2, c3, c4, c5]}
-    )
+    graph = LogicalGraph(name="IndirectCycle5", nodes={n.id: n for n in [c1, c2, c3, c4, c5]})
 
     with pytest.raises(CyclicGraphError, match="Cycle detected"):
         topological_sort(graph, strict=True)
@@ -123,9 +121,7 @@ def test_multi_output_multiple_consumers_different_indices() -> None:
     # consumer1 consumes s_out1
     consumer1 = LogicalNode(id="c1", op_type="Gelu", inputs=["s_out1"])
     # consumer_joint consumes both s_out0 and s_out2
-    consumer_joint = LogicalNode(
-        id="c_joint", op_type="Add", inputs=["s_out0", "s_out2"]
-    )
+    consumer_joint = LogicalNode(id="c_joint", op_type="Add", inputs=["s_out0", "s_out2"])
 
     graph = LogicalGraph(
         name="MultiOutputMultiConsumer",

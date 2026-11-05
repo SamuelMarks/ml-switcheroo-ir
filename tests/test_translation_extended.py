@@ -12,58 +12,30 @@ def test_translate_weight_names_across_frameworks() -> None:
     engine = ParameterTranslationEngine()
 
     # LayerNorm weights
-    assert (
-        engine.translate_weight_name("layer_norm", "weight", "torch", "jax") == "scale"
-    )
-    assert (
-        engine.translate_weight_name("layer_norm", "weight", "torch", "keras3")
-        == "gamma"
-    )
-    assert (
-        engine.translate_weight_name("layer_norm", "weight", "torch", "tensorflow")
-        == "gamma"
-    )
-    assert (
-        engine.translate_weight_name("layer_norm", "weight", "torch", "mlx") == "weight"
-    )
-    assert (
-        engine.translate_weight_name("layer_norm", "weight", "torch", "onnx") == "scale"
-    )
+    assert engine.translate_weight_name("layer_norm", "weight", "torch", "jax") == "scale"
+    assert engine.translate_weight_name("layer_norm", "weight", "torch", "keras3") == "gamma"
+    assert engine.translate_weight_name("layer_norm", "weight", "torch", "tensorflow") == "gamma"
+    assert engine.translate_weight_name("layer_norm", "weight", "torch", "mlx") == "weight"
+    assert engine.translate_weight_name("layer_norm", "weight", "torch", "onnx") == "scale"
 
     # LayerNorm bias
-    assert (
-        engine.translate_weight_name("layer_norm", "bias", "torch", "keras3") == "beta"
-    )
-    assert (
-        engine.translate_weight_name("layer_norm", "bias", "torch", "tensorflow")
-        == "beta"
-    )
+    assert engine.translate_weight_name("layer_norm", "bias", "torch", "keras3") == "beta"
+    assert engine.translate_weight_name("layer_norm", "bias", "torch", "tensorflow") == "beta"
     assert engine.translate_weight_name("layer_norm", "bias", "torch", "onnx") == "bias"
 
     # RMSNorm weights
     assert engine.translate_weight_name("rms_norm", "weight", "torch", "jax") == "scale"
-    assert (
-        engine.translate_weight_name("rms_norm", "weight", "torch", "keras3") == "gamma"
-    )
+    assert engine.translate_weight_name("rms_norm", "weight", "torch", "keras3") == "gamma"
 
     # Convolution weights
-    assert (
-        engine.translate_weight_name("convolution", "weight", "torch", "jax") == "rhs"
-    )
-    assert (
-        engine.translate_weight_name("conv2d", "weight", "torch", "keras3") == "kernel"
-    )
-    assert (
-        engine.translate_weight_name("conv", "weight", "torch", "tensorflow")
-        == "filters"
-    )
+    assert engine.translate_weight_name("convolution", "weight", "torch", "jax") == "rhs"
+    assert engine.translate_weight_name("conv2d", "weight", "torch", "keras3") == "kernel"
+    assert engine.translate_weight_name("conv", "weight", "torch", "tensorflow") == "filters"
     assert engine.translate_weight_name("convolution", "weight", "torch", "onnx") == "W"
 
     # Linear weights
     assert engine.translate_weight_name("linear", "weight", "torch", "jax") == "kernel"
-    assert (
-        engine.translate_weight_name("dense", "weight", "torch", "keras3") == "kernel"
-    )
+    assert engine.translate_weight_name("dense", "weight", "torch", "keras3") == "kernel"
     assert engine.translate_weight_name("linear", "bias", "torch", "onnx") == "bias"
 
     # General op fallback

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 from ml_switcheroo_ir import LogicalNode
 from ml_switcheroo_ir.schema.framework_registries import (
     ARRAY_API_REGISTRY,

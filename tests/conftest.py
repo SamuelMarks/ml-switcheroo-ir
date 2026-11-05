@@ -28,9 +28,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "benchmark: mark test as a heavy benchmark")
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: list[pytest.Item]
-) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Skip benchmark tests unless --run-benchmarks is explicitly supplied.
 
     Args:

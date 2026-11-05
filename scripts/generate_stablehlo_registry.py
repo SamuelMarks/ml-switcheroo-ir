@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import json
 import os
-from pathlib import Path
 import sys
+from collections.abc import Mapping
+from pathlib import Path
 
 import pydantic
 
@@ -108,16 +108,11 @@ def _normalize_stablehlo_op_name(raw: Mapping[str, JsonValue]) -> str:
         return api_path.split(".", 1)[1]
     if raw_name.endswith("Op"):
         stem = raw_name[:-2]
-        return "".join(
-            "_" + c.lower() if c.isupper() and i > 0 else c.lower()
-            for i, c in enumerate(stem)
-        )
+        return "".join("_" + c.lower() if c.isupper() and i > 0 else c.lower() for i, c in enumerate(stem))
     return raw_name.lower()
 
 
-def _infer_stablehlo_attr_spec(
-    op_name: str, a_name: str, a_info: JsonValue
-) -> dict[str, JsonValue]:
+def _infer_stablehlo_attr_spec(op_name: str, a_name: str, a_info: JsonValue) -> dict[str, JsonValue]:
     """Infer Python type, required flag, and default value for a StableHLO attribute.
 
     Args:
@@ -129,11 +124,7 @@ def _infer_stablehlo_attr_spec(
         dict[str, JsonValue]: Normalized attribute schema dictionary.
     """
     a_type = str(a_info.get("type", "")) if isinstance(a_info, dict) else str(a_info)
-    is_optional = (
-        "OptionalAttr" in a_type
-        or "DefaultValued" in a_type
-        or a_name in _OPTIONAL_STABLEHLO_ATTRS
-    )
+    is_optional = "OptionalAttr" in a_type or "DefaultValued" in a_type or a_name in _OPTIONAL_STABLEHLO_ATTRS
     if op_name == "convolution" and a_name in (
         "padding",
         "window_strides",
@@ -141,41 +132,17 @@ def _infer_stablehlo_attr_spec(
     ):
         is_optional = False
 
-    default_val: JsonValue = (
-        1 if a_name in ("batch_group_count", "feature_group_count") else None
-    )
+    default_val: JsonValue = 1 if a_name in ("batch_group_count", "feature_group_count") else None
     py_type = "str"
     if "BoolAttr" in a_type or a_type == "boolean":
         py_type = "bool"
-    elif (
-        "IntegerAttr" in a_type
-        or "I64" in a_type
-        or "I32" in a_type
-        or a_type == "integer"
-    ):
+    elif "IntegerAttr" in a_type or "I64" in a_type or "I32" in a_type or a_type == "integer":
         py_type = "int"
-    elif (
-        "FloatAttr" in a_type
-        or "F32" in a_type
-        or "F64" in a_type
-        or a_type == "number"
-    ):
+    elif "FloatAttr" in a_type or "F32" in a_type or "F64" in a_type or a_type == "number":
         py_type = "float"
-    elif (
-        "Array" in a_type
-        or a_type == "array"
-        or (isinstance(a_info, dict) and "items" in a_info)
-        or a_name in _ARRAY_STABLEHLO_ATTRS
-    ):
+    elif "Array" in a_type or a_type == "array" or (isinstance(a_info, dict) and "items" in a_info) or a_name in _ARRAY_STABLEHLO_ATTRS:
         py_type = "List[int]" if a_name != "precision_config" else "List[str]"
-    elif (
-        "Dictionary" in a_type
-        or "NumbersAttr" in a_type
-        or "Numbers" in a_type
-        or a_type == "object"
-        or (isinstance(a_info, dict) and "properties" in a_info)
-        or a_name in _DICT_STABLEHLO_ATTRS
-    ):
+    elif "Dictionary" in a_type or "NumbersAttr" in a_type or "Numbers" in a_type or a_type == "object" or (isinstance(a_info, dict) and "properties" in a_info) or a_name in _DICT_STABLEHLO_ATTRS:
         py_type = "dict"
 
     model = StableHloAttrSpecModel(
@@ -187,9 +154,7 @@ def _infer_stablehlo_attr_spec(
     return model.model_dump()
 
 
-def _extract_stablehlo_attributes(
-    op_name: str, attrs_raw: JsonValue
-) -> list[dict[str, JsonValue]]:
+def _extract_stablehlo_attributes(op_name: str, attrs_raw: JsonValue) -> list[dict[str, JsonValue]]:
     """Extract normalized attribute schema list from a StableHLO snapshot record.
 
     Args:
@@ -203,21 +168,13 @@ def _extract_stablehlo_attributes(
     if isinstance(attrs_raw, dict):
         for a_name, a_info in sorted(attrs_raw.items()):
             if a_name:
-                attributes.append(
-                    _infer_stablehlo_attr_spec(op_name, str(a_name), a_info)
-                )
+                attributes.append(_infer_stablehlo_attr_spec(op_name, str(a_name), a_info))
     elif isinstance(attrs_raw, list):
         for a in attrs_raw:
             if isinstance(a, dict):
                 a_name = str(a.get("name") or "").strip()
                 if a_name:
-                    raw_def = a.get("default", None)
-                    def_val: JsonValue = (
-                        raw_def
-                        if isinstance(raw_def, (str, int, float, bool, list, dict))
-                        or raw_def is None
-                        else str(raw_def)
-                    )
+                    def_val: JsonValue = a.get("default", None)
                     model = StableHloAttrSpecModel(
                         name=a_name,
                         type=str(a.get("type", "str")),
@@ -239,7 +196,7 @@ def extract_stablehlo_schemas(
     Returns:
         list[dict[str, JsonValue]]: List of grounded operator definition dictionaries.
     """
-    with open(snapshot_path, "r", encoding="utf-8") as f:
+    with open(snapshot_path, encoding="utf-8") as f:
         data = json.load(f)
 
     raw_ops: list[Mapping[str, JsonValue]] = []
@@ -265,37 +222,16 @@ def extract_stablehlo_schemas(
         seen.add(op_name)
 
         raw_operands = raw.get("operands")
-        inputs = (
-            [
-                str(opnd.get("name") or "").strip()
-                for opnd in raw_operands
-                if isinstance(opnd, dict) and str(opnd.get("name") or "").strip()
-            ]
-            if isinstance(raw_operands, list)
-            else []
-        )
+        inputs = [str(opnd.get("name") or "").strip() for opnd in raw_operands if isinstance(opnd, dict) and str(opnd.get("name") or "").strip()] if isinstance(raw_operands, list) else []
         raw_returns = raw.get("returns")
-        outputs = (
-            [
-                str(ret.get("name") or "").strip()
-                for ret in raw_returns
-                if isinstance(ret, dict) and str(ret.get("name") or "").strip()
-            ]
-            if isinstance(raw_returns, list)
-            else []
-        ) or ["result"]
+        outputs = ([str(ret.get("name") or "").strip() for ret in raw_returns if isinstance(ret, dict) and str(ret.get("name") or "").strip()] if isinstance(raw_returns, list) else []) or ["result"]
 
         op_model = StableHloOpSpecModel(
             name=op_name,
             domain="stablehlo",
             inputs=inputs,
             outputs=outputs,
-            attributes=[
-                StableHloAttrSpecModel.model_validate(attr)
-                for attr in _extract_stablehlo_attributes(
-                    op_name, raw.get("attributes")
-                )
-            ],
+            attributes=[StableHloAttrSpecModel.model_validate(attr) for attr in _extract_stablehlo_attributes(op_name, raw.get("attributes"))],
         )
         ops.append(op_model.model_dump())
 
@@ -309,24 +245,8 @@ def main(snapshot_path: str | None = None, output_path: str | None = None) -> No
         snapshot_path (str | None): Source snapshot file path.
         output_path (str | None): Target stablehlo_ops.json path.
     """
-    target_snap = (
-        snapshot_path
-        if snapshot_path is not None
-        else (
-            sys.argv[1]
-            if len(sys.argv) > 1
-            else os.path.join(DEFAULT_SNAPSHOT_DIR, "stablehlo_v1.9.0.json")
-        )
-    )
-    target_out = (
-        output_path
-        if output_path is not None
-        else (
-            sys.argv[2]
-            if len(sys.argv) > 2
-            else "src/ml_switcheroo_ir/schema/stablehlo_ops.json"
-        )
-    )
+    target_snap = snapshot_path if snapshot_path is not None else (sys.argv[1] if len(sys.argv) > 1 else os.path.join(DEFAULT_SNAPSHOT_DIR, "stablehlo_v1.9.0.json"))
+    target_out = output_path if output_path is not None else (sys.argv[2] if len(sys.argv) > 2 else "src/ml_switcheroo_ir/schema/stablehlo_ops.json")
 
     ops = extract_stablehlo_schemas(target_snap)
     with open(target_out, "w", encoding="utf-8") as f:

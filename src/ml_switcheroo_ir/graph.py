@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from collections import defaultdict, deque
-from collections.abc import Iterable, Mapping
 import copy
-from enum import Enum
 import gzip
 import io
 import json
 import os
-from pathlib import Path
 import typing
+from abc import ABC, abstractmethod
+from collections import defaultdict, deque
+from collections.abc import Iterable, Mapping
+from enum import Enum
+from pathlib import Path
 
 import pydantic
 import pydantic_core
@@ -225,9 +225,7 @@ def _normalize_shape_metadata(
     if shape_metadata is None:
         return None
     if isinstance(shape_metadata, (str, bytes, Mapping)):
-        raise TypeError(
-            f"Invalid shape_metadata {shape_metadata!r}; expected TensorShape, sequence of DimensionType, or None."
-        )
+        raise TypeError(f"Invalid shape_metadata {shape_metadata!r}; expected TensorShape, sequence of DimensionType, or None.")
     return _validate_dimension_tuple(shape_metadata)
 
 
@@ -272,18 +270,14 @@ class LogicalNode(pydantic.BaseModel):
     output_specs: list[TensorSpec] = pydantic.Field(default_factory=list)
     subgraphs: dict[
         str,
-        typing.Annotated[
-            LogicalGraph | AttributeValue, _AttributeValuePydanticAnnotation
-        ],
+        typing.Annotated[LogicalGraph | AttributeValue, _AttributeValuePydanticAnnotation],
     ] = pydantic.Field(default_factory=dict)
     device: str | None = None
     stream: str | None = None
 
     @pydantic.field_validator("shape_metadata", mode="before")
     @classmethod
-    def _validate_shape_metadata_field(
-        cls, val: ShapeMetadataType | Iterable[DimensionType]
-    ) -> tuple[DimensionType, ...] | None:
+    def _validate_shape_metadata_field(cls, val: ShapeMetadataType | Iterable[DimensionType]) -> tuple[DimensionType, ...] | None:
         """Validate and normalize shape_metadata on assignment and construction.
 
         Args:
@@ -296,9 +290,7 @@ class LogicalNode(pydantic.BaseModel):
 
     @pydantic.field_validator("outputs", mode="before")
     @classmethod
-    def _ensure_tracked_outputs(
-        cls, val: Iterable[str] | VersionedOutputList
-    ) -> VersionedOutputList:
+    def _ensure_tracked_outputs(cls, val: Iterable[str] | VersionedOutputList) -> VersionedOutputList:
         """Wrap outputs in VersionedOutputList for mutation version tracking.
 
         Args:
@@ -371,9 +363,7 @@ class LogicalNode(pydantic.BaseModel):
             stream=stream,
         )
 
-    def set_shape_metadata(
-        self, shape_metadata: ShapeMetadataType | Iterable[DimensionType]
-    ) -> None:
+    def set_shape_metadata(self, shape_metadata: ShapeMetadataType | Iterable[DimensionType]) -> None:
         """Set normalized shape metadata on this node.
 
         Args:
@@ -470,9 +460,7 @@ class LogicalNode(pydantic.BaseModel):
         attributes: Mapping[str, AttributeValue] | None = None,
         inputs: list[str] | None = None,
         outputs: list[str] | None = None,
-        shape_metadata: ShapeMetadataType
-        | Iterable[DimensionType]
-        | _OmittedSentinel = _CLONE_OMITTED,
+        shape_metadata: ShapeMetadataType | Iterable[DimensionType] | _OmittedSentinel = _CLONE_OMITTED,
         source_ast_ref: str | None | _OmittedSentinel = _CLONE_OMITTED,
         sharding: PartitionSpec | None | _OmittedSentinel = _CLONE_OMITTED,
         dtype: DType | None | _OmittedSentinel = _CLONE_OMITTED,
@@ -509,42 +497,25 @@ class LogicalNode(pydantic.BaseModel):
         cloned_op = op_type if op_type is not None else self.op_type
         cloned_domain = domain if domain is not None else self.domain
         cloned_version = version if version is not None else self.version
-        cloned_attrs = copy.deepcopy(
-            dict(attributes) if attributes is not None else self.attributes
-        )
+        cloned_attrs = copy.deepcopy(dict(attributes) if attributes is not None else self.attributes)
         if kwargs:
             cloned_attrs.update(kwargs)
 
         raw_subgraphs = subgraphs if subgraphs is not None else self.subgraphs
-        cloned_subgraphs: dict[str, LogicalGraph | AttributeValue] = {
-            k: v.clone() if isinstance(v, LogicalGraph) else copy.deepcopy(v)
-            for k, v in raw_subgraphs.items()
-        }
+        cloned_subgraphs: dict[str, LogicalGraph | AttributeValue] = {k: v.clone() if isinstance(v, LogicalGraph) else copy.deepcopy(v) for k, v in raw_subgraphs.items()}
 
         if isinstance(shape_metadata, _OmittedSentinel):
             resolved_shape_meta = copy.deepcopy(self.shape_metadata)
         else:
             resolved_shape_meta = _normalize_shape_metadata(shape_metadata)
 
-        resolved_ast_ref = (
-            self.source_ast_ref
-            if isinstance(source_ast_ref, _OmittedSentinel)
-            else source_ast_ref
-        )
-        resolved_sharding = (
-            copy.deepcopy(self.sharding)
-            if isinstance(sharding, _OmittedSentinel)
-            else copy.deepcopy(sharding)
-        )
+        resolved_ast_ref = self.source_ast_ref if isinstance(source_ast_ref, _OmittedSentinel) else source_ast_ref
+        resolved_sharding = copy.deepcopy(self.sharding) if isinstance(sharding, _OmittedSentinel) else copy.deepcopy(sharding)
         resolved_dtype = self.dtype if isinstance(dtype, _OmittedSentinel) else dtype
-        resolved_device = (
-            self.device if isinstance(device, _OmittedSentinel) else device
-        )
-        resolved_stream = (
-            self.stream if isinstance(stream, _OmittedSentinel) else stream
-        )
+        resolved_device = self.device if isinstance(device, _OmittedSentinel) else device
+        resolved_stream = self.stream if isinstance(stream, _OmittedSentinel) else stream
 
-        cls = self.__class__
+        cls = type(self)
         return cls(
             id=cloned_id,
             op_type=cloned_op,
@@ -557,12 +528,7 @@ class LogicalNode(pydantic.BaseModel):
             source_ast_ref=resolved_ast_ref,
             sharding=resolved_sharding,
             dtype=resolved_dtype,
-            output_specs=[
-                copy.deepcopy(s)
-                for s in (
-                    output_specs if output_specs is not None else self.output_specs
-                )
-            ],
+            output_specs=[copy.deepcopy(s) for s in (output_specs if output_specs is not None else self.output_specs)],
             subgraphs=cloned_subgraphs,
             device=resolved_device,
             stream=resolved_stream,
@@ -622,9 +588,7 @@ class NodeDict(dict[str, LogicalNode]):
 
     def __init__(
         self,
-        mapping_or_iterable: Mapping[str, LogicalNode]
-        | Iterable[tuple[str, LogicalNode]]
-        | None = None,
+        mapping_or_iterable: Mapping[str, LogicalNode] | Iterable[tuple[str, LogicalNode]] | None = None,
         **kwargs: LogicalNode,
     ) -> None:
         """Initialize NodeDict and set initial version counter.
@@ -671,9 +635,7 @@ class NodeDict(dict[str, LogicalNode]):
         """
 
     @typing.overload
-    def pop(
-        self, key: str, default: LogicalNode | _DefaultT
-    ) -> LogicalNode | _DefaultT:
+    def pop(self, key: str, default: LogicalNode | _DefaultT) -> LogicalNode | _DefaultT:
         """Remove and return a node by ID or default and increment version.
 
         Args:
@@ -803,9 +765,7 @@ def _normalize_graph_nodes(
         return nodes
     if isinstance(nodes, Mapping):
         return NodeDict(nodes)
-    raise TypeError(
-        f"LogicalGraph 'nodes' must be a Mapping[str, LogicalNode] or None, got {type(nodes).__name__}."
-    )
+    raise TypeError(f"LogicalGraph 'nodes' must be a Mapping[str, LogicalNode] or None, got {type(nodes).__name__}.")
 
 
 def _auto_detect_input_pseudo_nodes(
@@ -825,15 +785,9 @@ def _auto_detect_input_pseudo_nodes(
             param_name = str(node.attributes.get("name", nid))
             if param_name not in inputs:
                 inputs.append(param_name)
-            if (
-                node.dtype is not None or node.shape_metadata is not None
-            ) and param_name not in input_specs:
+            if (node.dtype is not None or node.shape_metadata is not None) and param_name not in input_specs:
                 spec_dtype = node.dtype or DType.float32
-                spec_shape = (
-                    node.shape_metadata
-                    if isinstance(node.shape_metadata, tuple)
-                    else ()
-                )
+                spec_shape = node.shape_metadata if isinstance(node.shape_metadata, tuple) else ()
                 input_specs[param_name] = TensorSpec(shape=spec_shape, dtype=spec_dtype)
 
 
@@ -893,22 +847,18 @@ class LogicalGraph(pydantic.BaseModel):
     mesh: LogicalMesh | None = None
     pipeline_topology: PipelineTopologyConfig | None = None
 
-    _cached_output_map: dict[str, tuple[LogicalNode, int]] | None = (
-        pydantic.PrivateAttr(default=None)
-    )
+    _cached_output_map: dict[str, tuple[LogicalNode, int]] | None = pydantic.PrivateAttr(default=None)
     _cached_nodes_version: int = pydantic.PrivateAttr(default=-1)
     _cached_outputs_node: LogicalNode | None = pydantic.PrivateAttr(default=None)
     _cached_outputs_list_ref: list[str] | None = pydantic.PrivateAttr(default=None)
     _cached_outputs_version: int = pydantic.PrivateAttr(default=-1)
-    _edge_value_names: dict[tuple[str, int], str] = pydantic.PrivateAttr(
-        default_factory=dict
-    )
+    _edge_value_names: dict[tuple[str, int], str] = pydantic.PrivateAttr(default_factory=dict)
+    _attributes: dict[str, AttributeValue] = pydantic.PrivateAttr(default_factory=dict)
+    _loop_options: AttributeValue | None = pydantic.PrivateAttr(default=None)
 
     @pydantic.field_validator("nodes", mode="before")
     @classmethod
-    def _validate_nodes_field(
-        cls, val: Mapping[str, LogicalNode] | NodeDict | None
-    ) -> NodeDict:
+    def _validate_nodes_field(cls, val: Mapping[str, LogicalNode] | NodeDict | None) -> NodeDict:
         """Validate and normalize nodes into a NodeDict.
 
         Args:
@@ -979,6 +929,42 @@ class LogicalGraph(pydantic.BaseModel):
         self._edge_value_names = edge_val_names
 
     @property
+    def attributes(self) -> dict[str, AttributeValue]:
+        """Return mutable runtime attributes dictionary for this graph.
+
+        Returns:
+            dict[str, AttributeValue]: Graph runtime attributes.
+        """
+        return self._attributes
+
+    @attributes.setter
+    def attributes(self, val: dict[str, AttributeValue]) -> None:
+        """Set runtime attributes dictionary for this graph.
+
+        Args:
+            val (dict[str, AttributeValue]): New graph runtime attributes.
+        """
+        self._attributes = val
+
+    @property
+    def loop_options(self) -> AttributeValue | None:
+        """Return optional compiler loop options attached to this graph.
+
+        Returns:
+            AttributeValue | None: Loop options object or None.
+        """
+        return self._loop_options
+
+    @loop_options.setter
+    def loop_options(self, val: AttributeValue | None) -> None:
+        """Set optional compiler loop options attached to this graph.
+
+        Args:
+            val (AttributeValue | None): Loop options object or None.
+        """
+        self._loop_options = val
+
+    @property
     def nodes_list(self) -> list[LogicalNode]:
         """Return list of LogicalNode instances in dictionary insertion order.
 
@@ -1014,9 +1000,7 @@ class LogicalGraph(pydantic.BaseModel):
                 return self.nodes[node_part], int(idx_part)
         return None
 
-    def get_producing_output_index(
-        self, output_name: str
-    ) -> tuple[LogicalNode, int] | None:
+    def get_producing_output_index(self, output_name: str) -> tuple[LogicalNode, int] | None:
         """Resolve both the producing node and the specific output port index.
 
         Time Complexity:
@@ -1153,21 +1137,9 @@ class LogicalGraph(pydantic.BaseModel):
             dict[str, tuple[LogicalNode, int]]: Mapping from output SSA name to (node, port_index).
         """
         nodes_dict = self.nodes
-        dict_ver = (
-            nodes_dict.version if isinstance(nodes_dict, NodeDict) else len(nodes_dict)
-        )
+        dict_ver = nodes_dict.version
         tracked_node = self._cached_outputs_node
-        if (
-            self._cached_output_map is not None
-            and dict_ver == self._cached_nodes_version
-            and (
-                tracked_node is None
-                or (
-                    tracked_node.outputs is self._cached_outputs_list_ref
-                    and tracked_node.outputs.version == self._cached_outputs_version
-                )
-            )
-        ):
+        if self._cached_output_map is not None and dict_ver == self._cached_nodes_version and (tracked_node is None or (tracked_node.outputs is self._cached_outputs_list_ref and tracked_node.outputs.version == self._cached_outputs_version)):
             return self._cached_output_map
 
         mapping: dict[str, tuple[LogicalNode, int]] = {}
@@ -1181,12 +1153,8 @@ class LogicalGraph(pydantic.BaseModel):
         self._cached_output_map = mapping
         self._cached_nodes_version = dict_ver
         self._cached_outputs_node = first_multi_node
-        self._cached_outputs_list_ref = (
-            first_multi_node.outputs if first_multi_node is not None else None
-        )
-        self._cached_outputs_version = (
-            first_multi_node.outputs.version if first_multi_node is not None else 0
-        )
+        self._cached_outputs_list_ref = first_multi_node.outputs if first_multi_node is not None else None
+        self._cached_outputs_version = first_multi_node.outputs.version if first_multi_node is not None else 0
         return mapping
 
     def get_output_producer(self, output_name: str) -> LogicalNode | None:
@@ -1216,11 +1184,7 @@ class LogicalGraph(pydantic.BaseModel):
         cloned_specs = {k: copy.deepcopy(v) for k, v in self.input_specs.items()}
         cloned_inits = copy.deepcopy(self.initializers)
         cloned_mesh = copy.deepcopy(self.mesh) if self.mesh is not None else None
-        cloned_topology = (
-            copy.deepcopy(self.pipeline_topology)
-            if self.pipeline_topology is not None
-            else None
-        )
+        cloned_topology = copy.deepcopy(self.pipeline_topology) if self.pipeline_topology is not None else None
 
         new_g = LogicalGraph(
             name=self.name,
@@ -1271,14 +1235,7 @@ class LogicalGraph(pydantic.BaseModel):
             return [node for node in self.nodes.values() if node_id in node.inputs]
         source_node = self.nodes[node_id]
         output_ids = set(source_node.outputs) | {node_id}
-        return [
-            node
-            for node in self.nodes.values()
-            if any(
-                inp in output_ids or inp.startswith(f"{node_id}:")
-                for inp in node.inputs
-            )
-        ]
+        return [node for node in self.nodes.values() if any(inp in output_ids or inp.startswith(f"{node_id}:") for inp in node.inputs)]
 
     def __len__(self) -> int:
         """Return total node count in graph.
@@ -1309,17 +1266,9 @@ class LogicalGraph(pydantic.BaseModel):
         if self.mesh is not None:
             mesh_dict = {
                 "shape": {k: int(v) for k, v in self.mesh.shape.items()},
-                "webrtc_topology": (
-                    dict(self.mesh.webrtc_topology.to_dict())
-                    if self.mesh.webrtc_topology is not None
-                    else None
-                ),
+                "webrtc_topology": (dict(self.mesh.webrtc_topology.to_dict()) if self.mesh.webrtc_topology is not None else None),
             }
-        pipe_dict: dict[str, JsonValue] | None = (
-            dict(self.pipeline_topology.to_dict())
-            if self.pipeline_topology is not None
-            else None
-        )
+        pipe_dict: dict[str, JsonValue] | None = dict(self.pipeline_topology.to_dict()) if self.pipeline_topology is not None else None
         return {
             "edges": [
                 {
@@ -1343,9 +1292,7 @@ class LogicalGraph(pydantic.BaseModel):
             "inputs": list(self.inputs),
             "mesh": mesh_dict,
             "name": self.name,
-            "nodes": {
-                nid: _serialize_node_dict(node) for nid, node in self.nodes.items()
-            },
+            "nodes": {nid: _serialize_node_dict(node) for nid, node in self.nodes.items()},
             "outputs": list(self.outputs),
             "pipeline_topology": pipe_dict,
         }
@@ -1402,9 +1349,7 @@ class LogicalGraph(pydantic.BaseModel):
         if comp in ("gzip", "gz") or (comp is None and path_str.endswith(".gz")):
             with gzip.open(path, "wt", encoding="utf-8") as f:
                 self.to_stream(f, indent=indent)
-        elif comp in ("zstd", "zst") or (
-            comp is None and path_str.endswith((".zst", ".zstd"))
-        ):
+        elif comp in ("zstd", "zst") or (comp is None and path_str.endswith((".zst", ".zstd"))):
             if zstandard is None:
                 raise ImportError("zstandard library is required for .zst compression.")
             cctx = zstandard.ZstdCompressor()
@@ -1438,16 +1383,8 @@ class LogicalGraph(pydantic.BaseModel):
         raw_map = data.model_dump() if isinstance(data, SerializedGraphModel) else data
         raw_nodes = raw_map.get("nodes", {})
         if not isinstance(raw_nodes, Mapping):
-            raise TypeError(
-                f"LogicalGraph.from_dict expected 'nodes' to be a Mapping, got {type(raw_nodes).__name__}."
-            )
-        nodes = NodeDict(
-            {
-                str(nid): _parse_node_dict(ndata, cls)
-                for nid, ndata in raw_nodes.items()
-                if isinstance(ndata, Mapping)
-            }
-        )
+            raise TypeError(f"LogicalGraph.from_dict expected 'nodes' to be a Mapping, got {type(raw_nodes).__name__}.")
+        nodes = NodeDict({str(nid): _parse_node_dict(ndata, cls) for nid, ndata in raw_nodes.items() if isinstance(ndata, Mapping)})
         return _build_graph_from_parsed_sections(cls, nodes, raw_map)
 
     @classmethod
@@ -1478,19 +1415,15 @@ class LogicalGraph(pydantic.BaseModel):
         if comp in ("gzip", "gz") or (comp is None and path_str.endswith(".gz")):
             with gzip.open(path, "rt", encoding="utf-8") as f:
                 return _stream_parse_graph(f, cls)
-        elif comp in ("zstd", "zst") or (
-            comp is None and path_str.endswith((".zst", ".zstd"))
-        ):
+        elif comp in ("zstd", "zst") or (comp is None and path_str.endswith((".zst", ".zstd"))):
             if zstandard is None:
-                raise ImportError(
-                    "zstandard library is required for .zst decompression."
-                )
+                raise ImportError("zstandard library is required for .zst decompression.")
             dctx = zstandard.ZstdDecompressor()
             with open(path, "rb") as raw_f, dctx.stream_reader(raw_f) as reader:
                 text_wrapper = io.TextIOWrapper(reader, encoding="utf-8")
                 return _stream_parse_graph(text_wrapper, cls)
         elif comp is None or comp in ("none", "identity"):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return _stream_parse_graph(f, cls)
         else:
             raise ValueError(f"Unsupported compression format: {compression}")
@@ -1498,15 +1431,7 @@ class LogicalGraph(pydantic.BaseModel):
     @classmethod
     def from_json(
         cls,
-        json_str: (
-            str
-            | bytes
-            | typing.IO[str]
-            | typing.IO[bytes]
-            | typing.TextIO
-            | typing.BinaryIO
-            | Path
-        ),
+        json_str: (str | bytes | typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO | Path),
     ) -> LogicalGraph:
         """Deserialize a graph from a JSON string, stream, or file path.
 
@@ -1531,16 +1456,39 @@ class LogicalGraph(pydantic.BaseModel):
             data = json.loads(json_str.decode("utf-8"))
         else:
             stripped = json_str.strip()
-            if (
-                not stripped.startswith(("{", "["))
-                and len(json_str) <= 4096
-                and len(json_str.splitlines()) <= 1
-                and chr(0) not in json_str
-                and os.path.exists(json_str)
-            ):
+            if not stripped.startswith(("{", "[")) and len(json_str) <= 4096 and len(json_str.splitlines()) <= 1 and chr(0) not in json_str and os.path.exists(json_str):
                 return cls.from_file(json_str)
             data = json.loads(json_str)
         return cls.from_dict(data)
+
+
+def _build_toposort_adjacency(
+    graph: LogicalGraph,
+) -> tuple[dict[str, list[str]], dict[str, int]]:
+    """Build adjacency list and in-degree map for topological sorting.
+
+    Args:
+        graph (LogicalGraph): The logical graph to inspect.
+
+    Returns:
+        tuple[dict[str, list[str]], dict[str, int]]: ``(adj, in_degree)`` mappings.
+    """
+    adj: dict[str, list[str]] = defaultdict(list)
+    in_degree: dict[str, int] = {nid: 0 for nid in graph.nodes}
+
+    for nid, node in graph.nodes.items():
+        seen_upstreams: set[str] = set()
+        for inp_id in node.inputs:
+            upstream_id: str | None = inp_id if inp_id in graph.nodes else None
+            if upstream_id is None:
+                producer = graph.get_output_producer(inp_id)
+                if producer is not None and producer.id in graph.nodes:
+                    upstream_id = producer.id
+            if upstream_id is not None and upstream_id not in seen_upstreams:
+                seen_upstreams.add(upstream_id)
+                adj[upstream_id].append(nid)
+                in_degree[nid] += 1
+    return adj, in_degree
 
 
 def topological_sort(graph: LogicalGraph, strict: bool = False) -> list[LogicalNode]:
@@ -1564,32 +1512,13 @@ def topological_sort(graph: LogicalGraph, strict: bool = False) -> list[LogicalN
     Raises:
         CyclicGraphError: If cycles exist and strict is True.
     """
-    adj: dict[str, list[str]] = defaultdict(list)
-    in_degree: dict[str, int] = {nid: 0 for nid in graph.nodes}
-
-    for nid, node in graph.nodes.items():
-        seen_upstreams: set[str] = set()
-        for inp_id in node.inputs:
-            upstream_id: str | None = None
-            if inp_id in graph.nodes:
-                upstream_id = inp_id
-            else:
-                producer = graph.get_output_producer(inp_id)
-                if producer is not None and producer.id in graph.nodes:
-                    upstream_id = producer.id
-            if upstream_id is not None and upstream_id not in seen_upstreams:
-                seen_upstreams.add(upstream_id)
-                adj[upstream_id].append(nid)
-                in_degree[nid] += 1
-
-    initial_roots = sorted([nid for nid in graph.nodes if in_degree[nid] == 0])
-    queue = deque(initial_roots)
+    adj, in_degree = _build_toposort_adjacency(graph)
+    queue = deque(sorted(nid for nid in graph.nodes if in_degree[nid] == 0))
     sorted_nodes: list[LogicalNode] = []
 
     while queue:
         u = queue.popleft()
         sorted_nodes.append(graph.nodes[u])
-
         for v in sorted(adj[u]):
             in_degree[v] -= 1
             if in_degree[v] == 0:
@@ -1599,9 +1528,7 @@ def topological_sort(graph: LogicalGraph, strict: bool = False) -> list[LogicalN
         if strict:
             raise CyclicGraphError("Cycle detected in graph during topological sort.")
         seen = {n.id for n in sorted_nodes}
-        for nid, n in graph.nodes.items():
-            if nid not in seen:
-                sorted_nodes.append(n)
+        sorted_nodes.extend(n for nid, n in graph.nodes.items() if nid not in seen)
 
     return sorted_nodes
 
@@ -1625,11 +1552,11 @@ class CompilerBackend(ABC, typing.Generic[CompiledArtifactT]):
         raise NotImplementedError
 
 
-class BaseFrontend(ABC):
-    """Abstract base for registry typing."""
+class BaseFrontend:
+    """Base class for frontend registry typing."""
 
 
-class GraphFrontend(BaseFrontend):
+class GraphFrontend(BaseFrontend, ABC):
     """Produces LogicalGraph from code via parse/lift chain."""
 
     @abstractmethod

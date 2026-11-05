@@ -20,9 +20,7 @@ def test_register_and_validate_custom_op() -> None:
         name="FlashAttention",
         domain="ml.switcheroo.custom",
         attributes=[
-            CustomAttributeSchema(
-                name="dropout_p", type="float", required=False, default=0.0
-            ),
+            CustomAttributeSchema(name="dropout_p", type="float", required=False, default=0.0),
             CustomAttributeSchema(name="causal", type="bool", required=True),
         ],
         inputs=["q", "k", "v"],
@@ -111,12 +109,8 @@ def test_custom_op_dict_op_attributes() -> None:
         name="OpWithAttrs",
         domain="ai.custom",
         attributes={
-            "direct_op_attr": OpAttribute(
-                name="direct_op_attr", type="int", required=True, default=0
-            ),
-            "custom_attr": CustomAttributeSchema(
-                name="named_custom", type="float", required=False, default=1.0
-            ),
+            "direct_op_attr": OpAttribute(name="direct_op_attr", type="int", required=True, default=0),
+            "custom_attr": CustomAttributeSchema(name="named_custom", type="float", required=False, default=1.0),
         },
     )
     op_schema = schema.to_op_schema()

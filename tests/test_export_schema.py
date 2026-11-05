@@ -133,11 +133,11 @@ def test_export_schemas_directory(tmp_path: Path) -> None:
     assert exported["SnapshotEnvelope"].is_file()
     assert exported["TypeScript"].is_file()
 
-    with open(exported["LogicalGraph"], "r", encoding="utf-8") as f:
+    with open(exported["LogicalGraph"], encoding="utf-8") as f:
         schema = json.load(f)
         assert "$schema" in schema
 
-    with open(exported["TypeScript"], "r", encoding="utf-8") as f:
+    with open(exported["TypeScript"], encoding="utf-8") as f:
         content = f.read()
         assert "export interface LogicalGraph" in content
 
@@ -171,9 +171,7 @@ def test_cli_export_schema_stdout(capsys: pytest.CaptureFixture[str]) -> None:
     assert "export interface LogicalGraph" in captured.out
 
 
-def test_cli_export_schema_files(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_export_schema_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test CLI export-schema command exporting to directory and custom file paths.
 
     Args:

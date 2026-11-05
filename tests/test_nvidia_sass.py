@@ -38,9 +38,7 @@ def test_sass_stall_count_validation() -> None:
         attributes={"stall_count": -1},
     )
     errs = v.validate_node(neg_node)
-    assert any(
-        "stall count must be an integer between 0 and 15" in e.message for e in errs
-    )
+    assert any("stall count must be an integer between 0 and 15" in e.message for e in errs)
 
     # Invalid stall count > 15
     large_node = LogicalNode(
@@ -51,9 +49,7 @@ def test_sass_stall_count_validation() -> None:
         attributes={"stall_count": 16},
     )
     errs = v.validate_node(large_node)
-    assert any(
-        "stall count must be an integer between 0 and 15" in e.message for e in errs
-    )
+    assert any("stall count must be an integer between 0 and 15" in e.message for e in errs)
 
     # Invalid boolean or float stall count
     bad_type_node = LogicalNode(
@@ -64,9 +60,7 @@ def test_sass_stall_count_validation() -> None:
         attributes={"stall_count": True},
     )
     errs = v.validate_node(bad_type_node)
-    assert any(
-        "stall count must be an integer between 0 and 15" in e.message for e in errs
-    )
+    assert any("stall count must be an integer between 0 and 15" in e.message for e in errs)
 
 
 def test_sass_yield_flag_validation() -> None:
@@ -161,9 +155,7 @@ def test_sass_barrier_mask_validation() -> None:
         shape_metadata=(1,),
         attributes={"read_barrier": 64},
     )
-    assert any(
-        "Must be in range 0..63" in e.message for e in v.validate_node(node_bad_int)
-    )
+    assert any("Must be in range 0..63" in e.message for e in v.validate_node(node_bad_int))
 
     # Invalid list entry (> 5)
     node_bad_list = LogicalNode(
@@ -173,10 +165,7 @@ def test_sass_barrier_mask_validation() -> None:
         shape_metadata=(1,),
         attributes={"write_barrier": [0, 6]},
     )
-    assert any(
-        "Entries must be barrier indices 0..5" in e.message
-        for e in v.validate_node(node_bad_list)
-    )
+    assert any("Entries must be barrier indices 0..5" in e.message for e in v.validate_node(node_bad_list))
 
     # Invalid string mask
     node_bad_str = LogicalNode(
@@ -186,10 +175,7 @@ def test_sass_barrier_mask_validation() -> None:
         shape_metadata=(1,),
         attributes={"wait_barrier_mask": "012345678"},
     )
-    assert any(
-        "Invalid SASS barrier mask string" in e.message
-        for e in v.validate_node(node_bad_str)
-    )
+    assert any("Invalid SASS barrier mask string" in e.message for e in v.validate_node(node_bad_str))
 
     # Invalid barrier type
     node_bad_type = LogicalNode(
@@ -199,10 +185,7 @@ def test_sass_barrier_mask_validation() -> None:
         shape_metadata=(1,),
         attributes={"read_barrier": 3.14},
     )
-    assert any(
-        "Invalid SASS barrier mask type" in e.message
-        for e in v.validate_node(node_bad_type)
-    )
+    assert any("Invalid SASS barrier mask type" in e.message for e in v.validate_node(node_bad_type))
 
 
 def test_sass_scoreboarding_latency_hazard_detection() -> None:

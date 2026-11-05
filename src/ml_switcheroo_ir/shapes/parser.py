@@ -33,6 +33,58 @@ class SymbolicExpressionParser:
         self.failed: bool = False
 
     @staticmethod
+    def _consume_alnum_span(s: str, i: int, n: int) -> tuple[str | None, int]:
+        """Consume a contiguous numeric or identifier span starting at ``i``.
+
+        Args:
+            s (str): Expression string.
+            i (int): Current index.
+            n (int): Total length of ``s``.
+
+        Returns:
+            tuple[str | None, int]: ``(token_or_none, next_index)``.
+        """
+        c = s[i]
+        if c.isdigit():
+            end = i
+            while end < n and s[end].isdigit():
+                end += 1
+            return s[i:end], end
+        if c.isalpha() or c == "_":
+            end = i
+            while end < n and (s[end].isalnum() or s[end] == "_"):
+                end += 1
+            return s[i:end], end
+        return None, i + 1
+
+    @staticmethod
+    def _consume_next_token(s: str, i: int, n: int) -> tuple[str | None, int]:
+        """Consume a single token starting at index ``i`` in ``s``.
+
+        Args:
+            s (str): Stripped expression string.
+            i (int): Current index in ``s``.
+            n (int): Total length of ``s``.
+
+        Returns:
+            tuple[str | None, int]: ``(token_or_none, next_index)``.
+        """
+        c = s[i]
+        if c.isspace():
+            return None, i + 1
+        if c in "(),+-%":
+            return c, i + 1
+        if c in ("^", "*"):
+            step = 2 if (c == "*" and i + 1 < n and s[i + 1] == "*") else 1
+            return ("**" if (c == "^" or step == 2) else "*"), i + step
+        if c in ("<", ">", "=", "!"):
+            step = 2 if (i + 1 < n and s[i + 1] == "=") else 1
+            return s[i : i + step], i + step
+        if c == "/":
+            return "//", (i + 2 if (i + 1 < n and s[i + 1] == "/") else i + 1)
+        return SymbolicExpressionParser._consume_alnum_span(s, i, n)
+
+    @staticmethod
     def tokenize(expr_str: str) -> list[str]:
         """Tokenize a symbolic expression string into component tokens.
 
@@ -54,44 +106,9 @@ class SymbolicExpressionParser:
         s = expr_str.strip()
         n = len(s)
         while i < n:
-            c = s[i]
-            if c.isspace():
-                i += 1
-            elif c == "^":
-                tokens.append("**")
-                i += 1
-            elif c in "(),+*":
-                if c == "*" and i + 1 < n and s[i + 1] == "*":
-                    tokens.append("**")
-                    i += 2
-                else:
-                    tokens.append(c)
-                    i += 1
-            elif c in ("<", ">", "=", "!"):
-                if i + 1 < n and s[i + 1] == "=":
-                    tokens.append(s[i : i + 2])
-                    i += 2
-                else:
-                    tokens.append(c)
-                    i += 1
-            elif c in ("-", "%"):
-                tokens.append(c)
-                i += 1
-            elif c == "/":
-                tokens.append("//")
-                i += 2 if (i + 1 < n and s[i + 1] == "/") else 1
-            elif c.isdigit():
-                start = i
-                while i < n and s[i].isdigit():
-                    i += 1
-                tokens.append(s[start:i])
-            elif c.isalpha() or c == "_":
-                start = i
-                while i < n and (s[i].isalnum() or s[i] == "_"):
-                    i += 1
-                tokens.append(s[start:i])
-            else:
-                i += 1
+            tok, i = SymbolicExpressionParser._consume_next_token(s, i, n)
+            if tok is not None:
+                tokens.append(tok)
         return tokens
 
     def parse_comparison(self) -> SymNode:
@@ -207,11 +224,7 @@ class SymbolicExpressionParser:
             inner = self.parse_factor()
             return SymBinaryOp("-", SymConst(0), inner)
         self.idx += 1
-        if (
-            tok in ("abs", "min", "max")
-            and self.idx < len(self.tokens)
-            and self.tokens[self.idx] == "("
-        ):
+        if tok in ("abs", "min", "max") and self.idx < len(self.tokens) and self.tokens[self.idx] == "(":
             base_node = self._parse_func_call(tok)
         else:
             base_node = SymConst(int(tok)) if tok.isdigit() else SymVar(tok)
@@ -272,12 +285,7 @@ class SymbolicSolver:
         Returns:
             bool: True if expressions evaluate to identical canonical representations.
         """
-        if (
-            isinstance(expr1, int)
-            and not isinstance(expr1, bool)
-            and isinstance(expr2, int)
-            and not isinstance(expr2, bool)
-        ):
+        if isinstance(expr1, int) and not isinstance(expr1, bool) and isinstance(expr2, int) and not isinstance(expr2, bool):
             return expr1 == expr2
 
         n1 = SymNode.to_node(expr1)

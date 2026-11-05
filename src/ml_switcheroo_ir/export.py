@@ -7,15 +7,15 @@ for web playground and frontend integrations, and programmatic Python code gener
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
 import keyword
-from pathlib import Path
 import re
 import typing
-import typing_extensions
+from collections.abc import Sequence
+from pathlib import Path
 
 import pydantic
+import typing_extensions
 
 from ml_switcheroo_ir.distributed import (
     PipelineTopologyConfig,
@@ -53,6 +53,31 @@ SchemaTargetLiteral: typing_extensions.TypeAlias = typing.Literal[
 ]
 
 
+def _build_single_json_schema(target_clean: str) -> dict[str, JsonValue] | None:
+    """Build the raw JSON schema dictionary for a single named schema target.
+
+    Args:
+        target_clean (str): Stripped target model name.
+
+    Returns:
+        dict[str, JsonValue] | None: Raw schema dictionary or None if unrecognized.
+    """
+    model_map: dict[str, type[pydantic.BaseModel]] = {
+        "LogicalGraph": LogicalGraph,
+        "LogicalNode": LogicalNode,
+        "SnapshotEnvelope": SnapshotEnvelope,
+        "PipelineTopologyConfig": PipelineTopologyConfig,
+        "WebRTCSignalingTopology": WebRTCSignalingTopology,
+    }
+    if target_clean in model_map:
+        return model_map[target_clean].model_json_schema()
+    if target_clean == "ZeroTangent":
+        return pydantic.TypeAdapter(ZeroTangent).json_schema()
+    if target_clean == "NoTangent":
+        return pydantic.TypeAdapter(NoTangent).json_schema()
+    return None
+
+
 def get_json_schema(
     target: SchemaTargetLiteral | str = "LogicalGraph",
 ) -> dict[str, JsonValue]:
@@ -70,53 +95,24 @@ def get_json_schema(
         ValueError: If target is not recognized.
     """
     target_clean = target.strip()
-    if target_clean == "LogicalGraph":
-        schema: dict[str, JsonValue] = LogicalGraph.model_json_schema()
-        schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
-        return schema
-    if target_clean == "LogicalNode":
-        schema = LogicalNode.model_json_schema()
-        schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
-        return schema
-    if target_clean == "SnapshotEnvelope":
-        schema = SnapshotEnvelope.model_json_schema()
-        schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
-        return schema
-    if target_clean == "ZeroTangent":
-        from ml_switcheroo_ir import sentinels as _sentinels  # noqa: F401
-
-        schema = pydantic.TypeAdapter(ZeroTangent).json_schema()
-        schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
-        return schema
-    if target_clean == "NoTangent":
-        from ml_switcheroo_ir import sentinels as _sentinels  # noqa: F401
-
-        schema = pydantic.TypeAdapter(NoTangent).json_schema()
-        schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
-        return schema
-    if target_clean == "PipelineTopologyConfig":
-        schema = PipelineTopologyConfig.model_json_schema()
-        schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
-        return schema
-    if target_clean == "WebRTCSignalingTopology":
-        schema = WebRTCSignalingTopology.model_json_schema()
-        schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
-        return schema
     if target_clean == "all":
         return {
-            "LogicalGraph": get_json_schema("LogicalGraph"),
-            "LogicalNode": get_json_schema("LogicalNode"),
-            "SnapshotEnvelope": get_json_schema("SnapshotEnvelope"),
-            "ZeroTangent": get_json_schema("ZeroTangent"),
-            "NoTangent": get_json_schema("NoTangent"),
-            "PipelineTopologyConfig": get_json_schema("PipelineTopologyConfig"),
-            "WebRTCSignalingTopology": get_json_schema("WebRTCSignalingTopology"),
+            name: get_json_schema(name)
+            for name in (
+                "LogicalGraph",
+                "LogicalNode",
+                "SnapshotEnvelope",
+                "ZeroTangent",
+                "NoTangent",
+                "PipelineTopologyConfig",
+                "WebRTCSignalingTopology",
+            )
         }
-    raise ValueError(
-        f"Unsupported schema target: '{target}'. Supported targets: 'LogicalGraph', "
-        "'LogicalNode', 'SnapshotEnvelope', 'ZeroTangent', 'NoTangent', "
-        "'PipelineTopologyConfig', 'WebRTCSignalingTopology', 'all'."
-    )
+    schema = _build_single_json_schema(target_clean)
+    if schema is not None:
+        schema["$schema"] = DRAFT_2020_12_SCHEMA_URI
+        return schema
+    raise ValueError(f"Unsupported schema target: '{target}'. Supported targets: 'LogicalGraph', 'LogicalNode', 'SnapshotEnvelope', 'ZeroTangent', 'NoTangent', 'PipelineTopologyConfig', 'WebRTCSignalingTopology', 'all'.")
 
 
 def generate_typescript_definitions() -> str:
@@ -335,24 +331,25 @@ def _format_sym_node(node: DimensionType) -> str:
     Returns:
         str: Python code expression creating the symbol.
     """
+    result = repr(node)
     if isinstance(node, SymInt):
-        return f"sw_ir.SymInt({_format_sym_node(node.node)})"
-    if isinstance(node, SymVar):
-        return f"sw_ir.SymVar({node.name!r})"
-    if isinstance(node, SymConst):
-        return f"sw_ir.SymConst({node.value!r})"
-    if isinstance(node, SymBinaryOp):
+        result = f"sw_ir.SymInt({_format_sym_node(node.node)})"
+    elif isinstance(node, SymVar):
+        result = f"sw_ir.SymVar({node.name!r})"
+    elif isinstance(node, SymConst):
+        result = f"sw_ir.SymConst({node.value!r})"
+    elif isinstance(node, SymBinaryOp):
         left_str = _format_sym_node(node.left)
         right_str = _format_sym_node(node.right)
-        return f"sw_ir.SymBinaryOp({node.op!r}, {left_str}, {right_str})"
-    if isinstance(node, SymUnaryOp):
+        result = f"sw_ir.SymBinaryOp({node.op!r}, {left_str}, {right_str})"
+    elif isinstance(node, SymUnaryOp):
         operand_str = _format_sym_node(node.operand)
-        return f"sw_ir.SymUnaryOp({node.op!r}, {operand_str})"
-    if isinstance(node, SymPiecewise):
+        result = f"sw_ir.SymUnaryOp({node.op!r}, {operand_str})"
+    elif isinstance(node, SymPiecewise):
         cases = [f"({c!r}, {_format_sym_node(n)})" for c, n in node.cases]
         def_str = _format_sym_node(node.default)
-        return f"sw_ir.SymPiecewise(cases=[{', '.join(cases)}], default={def_str})"
-    return repr(node)
+        result = f"sw_ir.SymPiecewise(cases=[{', '.join(cases)}], default={def_str})"
+    return result
 
 
 def _format_shape_tuple(
@@ -387,10 +384,7 @@ def _format_tensor_spec(spec: TensorSpec) -> str:
     shape_str = _format_shape_tuple(spec.shape)
     dtype_str = f"sw_ir.DType.{spec.dtype.name}"
     sparsity_str = repr(spec.sparsity)
-    return (
-        f"sw_ir.TensorSpec(shape={shape_str}, dtype={dtype_str}, "
-        f"sparsity={sparsity_str})"
-    )
+    return f"sw_ir.TensorSpec(shape={shape_str}, dtype={dtype_str}, sparsity={sparsity_str})"
 
 
 def _format_graph_expr(graph: LogicalGraph, indent: int = 0) -> str:
@@ -427,6 +421,52 @@ def _sanitize_python_identifier(name: str, fallback: str = "build_graph") -> str
     return cleaned
 
 
+def _format_node_entry_lines(nid: str, node: LogicalNode) -> list[str]:
+    """Format a single LogicalNode dictionary entry as Python source lines.
+
+    Args:
+        nid (str): Node dictionary key.
+        node (LogicalNode): Node instance to format.
+
+    Returns:
+        list[str]: Indented Python code lines for the node entry.
+    """
+    if isinstance(node, ZeroTangent):
+        shape_str = _format_shape_tuple(node.shape_metadata)
+        dtype_str = f"sw_ir.DType.{node.dtype.name}" if node.dtype is not None else "None"
+        return [f"        {nid!r}: sw_ir.ZeroTangent(id={node.id!r}, shape_metadata={shape_str}, dtype={dtype_str}),"]
+    if isinstance(node, NoTangent):
+        return [f"        {nid!r}: sw_ir.NoTangent(id={node.id!r}),"]
+
+    sharding_str = f"sw_ir.PartitionSpec(axes={node.sharding.axes!r})" if node.sharding is not None else "None"
+    dtype_val_str = f"sw_ir.DType.{node.dtype.name}" if node.dtype is not None else "None"
+    shape_meta_str = _format_shape_tuple(node.shape_metadata)
+    out_specs_list = f"[{', '.join(_format_tensor_spec(s) for s in node.output_specs)}]"
+    sorted_attrs = dict(sorted(node.attributes.items(), key=lambda kv: str(kv[0])))
+    subgraphs_entries = [(f"{sub_k!r}: {_format_graph_expr(sub_v)}" if isinstance(sub_v, LogicalGraph) else f"{sub_k!r}: {sub_v!r}") for sub_k, sub_v in sorted(node.subgraphs.items(), key=lambda kv: str(kv[0]))]
+    subgraphs_str = "{" + ", ".join(subgraphs_entries) + "}"
+
+    return [
+        f"        {nid!r}: sw_ir.LogicalNode(",
+        f"            id={node.id!r},",
+        f"            op_type={node.op_type!r},",
+        f"            domain={node.domain!r},",
+        f"            version={node.version},",
+        f"            attributes={sorted_attrs!r},",
+        f"            inputs={node.inputs!r},",
+        f"            outputs={node.outputs!r},",
+        f"            shape_metadata={shape_meta_str},",
+        f"            source_ast_ref={node.source_ast_ref!r},",
+        f"            sharding={sharding_str},",
+        f"            dtype={dtype_val_str},",
+        f"            output_specs={out_specs_list},",
+        f"            subgraphs={subgraphs_str},",
+        f"            device={node.device!r},",
+        f"            stream={node.stream!r},",
+        "        ),",
+    ]
+
+
 def export_to_python(
     graph: LogicalGraph,
     function_name: str = "build_graph",
@@ -447,11 +487,7 @@ def export_to_python(
         str: Formatted Python source code.
     """
     safe_fn_name = _sanitize_python_identifier(function_name)
-    safe_doc_name = (
-        graph.name.replace("\\", "\\\\").replace('"""', "'''").splitlines()[0]
-        if graph.name
-        else "Model"
-    )
+    safe_doc_name = graph.name.replace("\\", "\\\\").replace('"""', "'''").splitlines()[0] if graph.name else "Model"
     lines: list[str] = [
         '"""Auto-generated LogicalGraph definition.',
         "",
@@ -471,32 +507,23 @@ def export_to_python(
         '    """',
     ]
 
-    # Pipeline topology
     if graph.pipeline_topology is not None:
         pipe_dict = graph.pipeline_topology.to_dict()
-        lines.append(
-            f"    pipeline_topology = sw_ir.PipelineTopologyConfig.from_dict({pipe_dict!r})"
-        )
+        lines.append(f"    pipeline_topology = sw_ir.PipelineTopologyConfig.from_dict({pipe_dict!r})")
     else:
         lines.append("    pipeline_topology = None")
 
-    # Mesh
     if graph.mesh is not None:
         mesh_shape_repr = repr(dict(sorted(graph.mesh.shape.items())))
         if graph.mesh.webrtc_topology is not None:
             webrtc_dict = graph.mesh.webrtc_topology.to_dict()
-            lines.append(
-                f"    webrtc_topology = sw_ir.WebRTCSignalingTopology.from_dict({webrtc_dict!r})"
-            )
-            lines.append(
-                f"    mesh = sw_ir.LogicalMesh(shape={mesh_shape_repr}, webrtc_topology=webrtc_topology)"
-            )
+            lines.append(f"    webrtc_topology = sw_ir.WebRTCSignalingTopology.from_dict({webrtc_dict!r})")
+            lines.append(f"    mesh = sw_ir.LogicalMesh(shape={mesh_shape_repr}, webrtc_topology=webrtc_topology)")
         else:
             lines.append(f"    mesh = sw_ir.LogicalMesh(shape={mesh_shape_repr})")
     else:
         lines.append("    mesh = None")
 
-    # Input specs
     if graph.input_specs:
         lines.append("    input_specs: dict[str, sw_ir.TensorSpec] = {")
         for in_name in sorted(graph.input_specs.keys()):
@@ -506,76 +533,25 @@ def export_to_python(
     else:
         lines.append("    input_specs: dict[str, sw_ir.TensorSpec] = {}")
 
-    # Nodes
     lines.append("    nodes: dict[str, sw_ir.LogicalNode] = {")
     for nid, node in graph.nodes.items():
-        if isinstance(node, ZeroTangent):
-            shape_str = _format_shape_tuple(node.shape_metadata)
-            dtype_str = (
-                f"sw_ir.DType.{node.dtype.name}" if node.dtype is not None else "None"
-            )
-            lines.append(
-                f"        {nid!r}: sw_ir.ZeroTangent(id={node.id!r}, "
-                f"shape_metadata={shape_str}, dtype={dtype_str}),"
-            )
-            continue
-        if isinstance(node, NoTangent):
-            lines.append(f"        {nid!r}: sw_ir.NoTangent(id={node.id!r}),")
-            continue
-
-        sharding_str = "None"
-        if node.sharding is not None:
-            sharding_str = f"sw_ir.PartitionSpec(axes={node.sharding.axes!r})"
-
-        dtype_val_str = "None"
-        if node.dtype is not None:
-            dtype_val_str = f"sw_ir.DType.{node.dtype.name}"
-
-        shape_meta_str = _format_shape_tuple(node.shape_metadata)
-
-        out_specs_list = (
-            f"[{', '.join(_format_tensor_spec(s) for s in node.output_specs)}]"
-        )
-
-        sorted_attrs = dict(sorted(node.attributes.items(), key=lambda kv: str(kv[0])))
-        subgraphs_entries: list[str] = []
-        for sub_k, sub_v in sorted(node.subgraphs.items(), key=lambda kv: str(kv[0])):
-            if isinstance(sub_v, LogicalGraph):
-                subgraphs_entries.append(f"{sub_k!r}: {_format_graph_expr(sub_v)}")
-            else:
-                subgraphs_entries.append(f"{sub_k!r}: {sub_v!r}")
-        subgraphs_str = "{" + ", ".join(subgraphs_entries) + "}"
-
-        lines.append(f"        {nid!r}: sw_ir.LogicalNode(")
-        lines.append(f"            id={node.id!r},")
-        lines.append(f"            op_type={node.op_type!r},")
-        lines.append(f"            domain={node.domain!r},")
-        lines.append(f"            version={node.version},")
-        lines.append(f"            attributes={sorted_attrs!r},")
-        lines.append(f"            inputs={node.inputs!r},")
-        lines.append(f"            outputs={node.outputs!r},")
-        lines.append(f"            shape_metadata={shape_meta_str},")
-        lines.append(f"            source_ast_ref={node.source_ast_ref!r},")
-        lines.append(f"            sharding={sharding_str},")
-        lines.append(f"            dtype={dtype_val_str},")
-        lines.append(f"            output_specs={out_specs_list},")
-        lines.append(f"            subgraphs={subgraphs_str},")
-        lines.append(f"            device={node.device!r},")
-        lines.append(f"            stream={node.stream!r},")
-        lines.append("        ),")
+        lines.extend(_format_node_entry_lines(nid, node))
     lines.append("    }")
 
-    # Return LogicalGraph
-    lines.append("    return sw_ir.LogicalGraph(")
-    lines.append(f"        name={graph.name!r},")
-    lines.append("        nodes=nodes,")
-    lines.append(f"        inputs={graph.inputs!r},")
-    lines.append("        input_specs=input_specs,")
-    lines.append(f"        outputs={graph.outputs!r},")
-    lines.append(f"        initializers={graph.initializers!r},")
-    lines.append("        mesh=mesh,")
-    lines.append("        pipeline_topology=pipeline_topology,")
-    lines.append("    )")
+    lines.extend(
+        [
+            "    return sw_ir.LogicalGraph(",
+            f"        name={graph.name!r},",
+            "        nodes=nodes,",
+            f"        inputs={graph.inputs!r},",
+            "        input_specs=input_specs,",
+            f"        outputs={graph.outputs!r},",
+            f"        initializers={graph.initializers!r},",
+            "        mesh=mesh,",
+            "        pipeline_topology=pipeline_topology,",
+            "    )",
+        ]
+    )
 
     if standalone:
         lines.extend(
@@ -627,9 +603,7 @@ def export_schemas(
         "WebRTCSignalingTopology",
     ):
         schema = get_json_schema(name)
-        snake_name = "".join(
-            ["_" + c.lower() if c.isupper() else c for c in name]
-        ).lstrip("_")
+        snake_name = "".join(["_" + c.lower() if c.isupper() else c for c in name]).lstrip("_")
         out_file = directory / f"{snake_name}.schema.json"
 
         with open(out_file, "w", encoding="utf-8") as f:

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import runpy
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
@@ -135,12 +135,7 @@ def test_get_doc_coverage() -> None:
 
 def test_count_shields() -> None:
     """Test count_shields accurately reports test, doc, and branch badge counts."""
-    content = (
-        "# Title\n"
-        "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
-        "[![Branch Coverage](https://img.shields.io/badge/branch_coverage-100%25-brightgreen.svg)](#)\n"
-        "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
-    )
+    content = "# Title\n[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n[![Branch Coverage](https://img.shields.io/badge/branch_coverage-100%25-brightgreen.svg)](#)\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
     assert count_shields(content) == (1, 1, 1)
 
     empty_content = "# No badges\n"
@@ -169,60 +164,38 @@ def test_enforce_coverage_shields() -> None:
         # Branch coverage present
         with open(readme, "w", encoding="utf-8") as f:
             f.write(
-                "# Title\n"
-                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
-                "[![Branch Coverage](https://img.shields.io/badge/branch_coverage-100%25-brightgreen.svg)](#)\n"
-                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
+                "# Title\n[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n[![Branch Coverage](https://img.shields.io/badge/branch_coverage-100%25-brightgreen.svg)](#)\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
             )
         with pytest.raises(ValueError, match="Expected 0 branch coverage shields"):
             enforce_coverage_shields(readme)
 
         # Missing test coverage shield
         with open(readme, "w", encoding="utf-8") as f:
-            f.write(
-                "# Title\n"
-                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
-            )
+            f.write("# Title\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n")
         with pytest.raises(ValueError, match="Expected exactly 1 test coverage shield"):
             enforce_coverage_shields(readme)
 
         # Multiple test coverage shields
         with open(readme, "w", encoding="utf-8") as f:
-            f.write(
-                "# Title\n"
-                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
-                "[![Test Coverage](https://img.shields.io/badge/test_coverage-90%25-green.svg)](#)\n"
-                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
-            )
+            f.write("# Title\n[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n[![Test Coverage](https://img.shields.io/badge/test_coverage-90%25-green.svg)](#)\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n")
         with pytest.raises(ValueError, match="Expected exactly 1 test coverage shield"):
             enforce_coverage_shields(readme)
 
         # Missing doc coverage shield
         with open(readme, "w", encoding="utf-8") as f:
-            f.write(
-                "# Title\n"
-                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
-            )
+            f.write("# Title\n[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n")
         with pytest.raises(ValueError, match="Expected exactly 1 doc coverage shield"):
             enforce_coverage_shields(readme)
 
         # 0% coverage shield rejected
         with open(readme, "w", encoding="utf-8") as f:
-            f.write(
-                "# Title\n"
-                "[![Test Coverage](https://img.shields.io/badge/test_coverage-0%25-red.svg)](#)\n"
-                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
-            )
+            f.write("# Title\n[![Test Coverage](https://img.shields.io/badge/test_coverage-0%25-red.svg)](#)\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n")
         with pytest.raises(ValueError, match="Coverage shield cannot be 0%"):
             enforce_coverage_shields(readme)
 
         # Valid shields: exactly 1 test, 1 doc, 0 branch
         with open(readme, "w", encoding="utf-8") as f:
-            f.write(
-                "# Title\n"
-                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
-                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
-            )
+            f.write("# Title\n[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n")
         enforce_coverage_shields(readme)
 
 
@@ -248,9 +221,7 @@ def test_get_test_coverage_failure() -> None:
 def test_get_coverage_metrics_temp_file_handling() -> None:
     """Test get_coverage_metrics temporary file generation and cleanup."""
 
-    def fake_subprocess_run(
-        cmd: list[str], **kwargs: bool | str | int | None
-    ) -> MagicMock:
+    def fake_subprocess_run(cmd: list[str], **kwargs: bool | str | int | None) -> MagicMock:
         """Fake coverage json execution by dumping valid json.
 
         Args:
@@ -309,9 +280,7 @@ def test_get_coverage_metrics_temp_file_handling() -> None:
 def test_update_readme_without_coverage_path_or_sibling() -> None:
     """Test update_readme when coverage_json_path is None and sibling coverage.json does not exist."""
 
-    def fake_subprocess_run(
-        cmd: list[str], **kwargs: bool | str | int | None
-    ) -> MagicMock:
+    def fake_subprocess_run(cmd: list[str], **kwargs: bool | str | int | None) -> MagicMock:
         """Fake coverage json execution.
 
         Args:
@@ -344,14 +313,10 @@ def test_update_readme_without_coverage_path_or_sibling() -> None:
     with TemporaryDirectory() as tmpdir:
         readme_file = os.path.join(tmpdir, "README.md")
         with open(readme_file, "w", encoding="utf-8") as f:
-            f.write(
-                "# Title\n"
-                "[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
-                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
-            )
+            f.write("# Title\n[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n")
         with patch("subprocess.run", side_effect=fake_subprocess_run):
             update_readme(readme_path=readme_file, coverage_json_path=None)
-        with open(readme_file, "r", encoding="utf-8") as f:
+        with open(readme_file, encoding="utf-8") as f:
             content = f.read()
         assert "test_coverage-100%25" in content
 
@@ -373,11 +338,7 @@ def test_update_readme_missing_file() -> None:
 
 def test_update_readme_success() -> None:
     """Test update_readme properly updates shields in a markdown document."""
-    initial_content = (
-        "# Project\n"
-        "[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
-        "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
-    )
+    initial_content = "# Project\n[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
     mock_res = MagicMock(stdout="actual: 100.0%\n")
     with TemporaryDirectory() as tmpdir:
         readme_file = os.path.join(tmpdir, "README.md")
@@ -401,7 +362,7 @@ def test_update_readme_success() -> None:
         with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=readme_file, coverage_json_path=cov_file)
 
-        with open(readme_file, "r", encoding="utf-8") as f:
+        with open(readme_file, encoding="utf-8") as f:
             updated = f.read()
 
         assert "test_coverage-100%25-brightgreen.svg" in updated
@@ -417,7 +378,7 @@ def test_update_readme_success() -> None:
         with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=readme_file, coverage_json_path=cov_file)
 
-        with open(readme_file, "r", encoding="utf-8") as f:
+        with open(readme_file, encoding="utf-8") as f:
             updated2 = f.read()
 
         assert "branch_coverage" not in updated2
@@ -435,12 +396,10 @@ def test_update_readme_insertions_and_deduplications() -> None:
         # Case 1: Only Doc Coverage present -> insert Test Coverage before Doc Coverage
         case1_file = os.path.join(tmpdir, "case1.md")
         with open(case1_file, "w", encoding="utf-8") as f:
-            f.write(
-                "# Title\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
-            )
+            f.write("# Title\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n")
         with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=case1_file, coverage_json_path=cov_file)
-        with open(case1_file, "r", encoding="utf-8") as f:
+        with open(case1_file, encoding="utf-8") as f:
             assert count_shields(f.read()) == (1, 1, 0)
 
         # Case 2: Neither present, but header present -> insert after header
@@ -449,7 +408,7 @@ def test_update_readme_insertions_and_deduplications() -> None:
             f.write("# Title\n\nSome body text.\n")
         with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=case2_file, coverage_json_path=cov_file)
-        with open(case2_file, "r", encoding="utf-8") as f:
+        with open(case2_file, encoding="utf-8") as f:
             assert count_shields(f.read()) == (1, 1, 0)
 
         # Case 3: Neither present and no header -> insert at top
@@ -458,7 +417,7 @@ def test_update_readme_insertions_and_deduplications() -> None:
             f.write("Just raw text without header.\n")
         with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=case3_file, coverage_json_path=cov_file)
-        with open(case3_file, "r", encoding="utf-8") as f:
+        with open(case3_file, encoding="utf-8") as f:
             assert count_shields(f.read()) == (1, 1, 0)
 
         # Case 4: Multiple duplicates of both -> deduplicate to exactly one each
@@ -473,7 +432,7 @@ def test_update_readme_insertions_and_deduplications() -> None:
             )
         with patch("subprocess.run", return_value=mock_res):
             update_readme(readme_path=case4_file, coverage_json_path=cov_file)
-        with open(case4_file, "r", encoding="utf-8") as f:
+        with open(case4_file, encoding="utf-8") as f:
             assert count_shields(f.read()) == (1, 1, 0)
 
         # Case 5: Enforcement failure after update raises ValueError
@@ -495,11 +454,7 @@ def test_update_badges_main() -> None:
         readme_file = os.path.join(tmpdir, "README.md")
         cov_file = os.path.join(tmpdir, "coverage.json")
         with open(readme_file, "w", encoding="utf-8") as f:
-            f.write(
-                "# Test\n"
-                "[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n"
-                "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n"
-            )
+            f.write("# Test\n[![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)\n")
         with open(cov_file, "w", encoding="utf-8") as f:
             json.dump({"totals": {"percent_covered": 100.0}}, f)
 
@@ -529,11 +484,7 @@ def test_update_badges_runpy_main() -> None:
             readme_file = os.path.join(tmpdir, "README.md")
             cov_file = os.path.join(tmpdir, "coverage.json")
             with open(readme_file, "w", encoding="utf-8") as f:
-                f.write(
-                    "# Test\n"
-                    "[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n"
-                    "[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n"
-                )
+                f.write("# Test\n[![Test Coverage](https://img.shields.io/badge/test_coverage-50%25-red.svg)](#)\n[![Doc Coverage](https://img.shields.io/badge/doc_coverage-50%25-red.svg)](#)\n")
             with open(cov_file, "w", encoding="utf-8") as f:
                 json.dump({"totals": {"percent_covered": 100.0}}, f)
 
@@ -687,11 +638,11 @@ def test_generate_registry_main() -> None:
         assert os.path.exists(json_path)
         assert os.path.exists(py_path)
 
-        with open(json_path, "r", encoding="utf-8") as f:
+        with open(json_path, encoding="utf-8") as f:
             loaded_json = json.load(f)
             assert "Abs" in loaded_json
 
-        with open(py_path, "r", encoding="utf-8") as f:
+        with open(py_path, encoding="utf-8") as f:
             loaded_py = f.read()
             assert "ONNX_REGISTRY" in loaded_py
             assert "load_onnx_schemas" in loaded_py
@@ -708,9 +659,7 @@ def test_generate_registry_main() -> None:
         # Test onnx_dir with Operators.md at root
         onnx_root_dir = os.path.join(tmpdir, "fake_onnx_root")
         os.makedirs(onnx_root_dir, exist_ok=True)
-        with open(
-            os.path.join(onnx_root_dir, "Operators.md"), "w", encoding="utf-8"
-        ) as f:
+        with open(os.path.join(onnx_root_dir, "Operators.md"), "w", encoding="utf-8") as f:
             f.write(SAMPLE_ONNX_DOCS)
         with patch("sys.argv", ["generate_registry.py", "--onnx-dir", onnx_root_dir]):
             gen_main(json_path=json_path, registry_path=py_path)
@@ -771,16 +720,13 @@ has been available since version 1.
 
         ops = parse_onnx_docs(md_file, cross_validate=True)
         assert "ai.onnx.preview.training.Adagrad" in ops
-        assert (
-            ops["ai.onnx.preview.training.Adagrad"]["domain"]
-            == "ai.onnx.preview.training"
-        )
+        assert ops["ai.onnx.preview.training.Adagrad"]["domain"] == "ai.onnx.preview.training"
 
+    from ml_switcheroo_ir.types import JsonValue
     from scripts.generate_registry import (
         OnnxOpEntryValue,
         OnnxParamProtocol,
     )
-    from ml_switcheroo_ir.types import JsonValue
 
     # Test cross_validate_with_onnx_defs with empty domain schema and non-empty domain
     class FakeSchema:
@@ -804,9 +750,7 @@ has been available since version 1.
     fake_onnx_pkg = MagicMock()
     fake_onnx_pkg.defs = fake_onnx_defs
 
-    with patch.dict(
-        "sys.modules", {"onnx": fake_onnx_pkg, "onnx.defs": fake_onnx_defs}
-    ):
+    with patch.dict("sys.modules", {"onnx": fake_onnx_pkg, "onnx.defs": fake_onnx_defs}):
         test_ops: dict[str, dict[str, OnnxOpEntryValue]] = {
             "FakeOp": {
                 "domain": "ai.onnx",
@@ -828,9 +772,7 @@ has been available since version 1.
     s_v5.since_version = 5
 
     fake_onnx_defs.get_all_schemas = MagicMock(return_value=[s_v10, s_v5])
-    with patch.dict(
-        "sys.modules", {"onnx": fake_onnx_pkg, "onnx.defs": fake_onnx_defs}
-    ):
+    with patch.dict("sys.modules", {"onnx": fake_onnx_pkg, "onnx.defs": fake_onnx_defs}):
         test_ops2: dict[str, dict[str, OnnxOpEntryValue]] = {
             "FakeOp": {
                 "domain": "ai.onnx",
@@ -986,9 +928,7 @@ def test_verify_grounding_find_snapshots_directory() -> None:
             assert find_snapshots_directory() == Path(tmpdir).resolve()
 
         # ML_ECOSYSTEM_SNAPSHOTS_DIR non-existent branch
-        with patch.dict(
-            os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": "/nonexistent/path"}
-        ):
+        with patch.dict(os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": "/nonexistent/path"}):
             assert find_snapshots_directory() is not None
 
         # Without override, should find existing DEFAULT_SNAPSHOT_DIR
@@ -1168,16 +1108,10 @@ def test_verify_grounding_main_paths() -> None:
                 "scripts.verify_grounding.find_snapshots_directory",
                 return_value=Path(populated_tmpdir),
             ),
-            patch(
-                "scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]
-            ),
+            patch("scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]),
             patch("scripts.verify_grounding.verify_mlir_grounding", return_value=[]),
-            patch(
-                "scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]
-            ),
-            patch(
-                "scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]
-            ),
+            patch("scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]),
+            patch("scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]),
             patch("scripts.verify_grounding.verify_onnx_grounding", return_value=[]),
         ):
             assert verify_grounding_main([]) == 0
@@ -1190,16 +1124,10 @@ def test_verify_grounding_main_paths() -> None:
                 "scripts.verify_grounding.find_snapshots_directory",
                 return_value=Path(tmpdir),
             ),
-            patch(
-                "scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]
-            ),
+            patch("scripts.verify_grounding.verify_stablehlo_grounding", return_value=[]),
             patch("scripts.verify_grounding.verify_mlir_grounding", return_value=[]),
-            patch(
-                "scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]
-            ),
-            patch(
-                "scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]
-            ),
+            patch("scripts.verify_grounding.verify_ir_snapshot_grounding", return_value=[]),
+            patch("scripts.verify_grounding.verify_custom_ops_grounding", return_value=[]),
             patch("scripts.verify_grounding.verify_onnx_grounding", return_value=[]),
         ):
             assert verify_grounding_main(["--snapshots-dir", tmpdir]) == 0
@@ -1257,9 +1185,7 @@ def test_find_snapshots_directory_env_and_override() -> None:
             assert find_snapshots_directory() == Path(tmpdir).resolve()
         # Env var set to nonexistent dir
         with (
-            patch.dict(
-                os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": "/invalid/nonexistent/dir"}
-            ),
+            patch.dict(os.environ, {"ML_ECOSYSTEM_SNAPSHOTS_DIR": "/invalid/nonexistent/dir"}),
             patch("scripts.verify_grounding.DEFAULT_SNAPSHOT_DIR", tmpdir),
         ):
             # Should fall back to default_path or relative
@@ -1330,6 +1256,8 @@ def test_verify_ir_snapshot_grounding_paths() -> None:
                     "categories": {
                         "classes": [
                             {"api_path": ""},
+                            {"api_path": "ml_switcheroo_ir.LogicalNode"},
+                            {"api_path": "ml_switcheroo_ir.LogicalNode.clone"},
                             {"api_path": "nonexistent_module.BadClass"},
                             {"api_path": "ml_switcheroo_ir.NonExistentClass"},
                             {"api_path": "ml_switcheroo_ir.LogicalNode.bad_method"},
@@ -1568,9 +1496,7 @@ def test_verify_grounding_array_api() -> None:
                             {
                                 "name": "abs",
                                 "api_path": "array_api.abs",
-                                "params": [
-                                    {"name": "wrong_input", "kind": "POSITIONAL_ONLY"}
-                                ],
+                                "params": [{"name": "wrong_input", "kind": "POSITIONAL_ONLY"}],
                                 "kwargs": [],
                             },
                             {
@@ -1718,11 +1644,7 @@ def test_verify_grounding_collectives() -> None:
         nccl_file = tmppath / "nccl_v2.21.json"
         with open(nccl_file, "w", encoding="utf-8") as f:
             json.dump(
-                {
-                    "categories": {
-                        "array": [{"name": "broadcast", "api_path": "nccl.broadcast"}]
-                    }
-                },
+                {"categories": {"array": [{"name": "broadcast", "api_path": "nccl.broadcast"}]}},
                 f,
             )
         errs = verify_collectives_grounding(tmppath)
@@ -1736,9 +1658,7 @@ def test_verify_grounding_collectives() -> None:
             clear=True,
         ):
             errs_missing_reg = verify_collectives_grounding(tmppath)
-            assert any(
-                "missing from COLLECTIVE_OPS_REGISTRY" in e for e in errs_missing_reg
-            )
+            assert any("missing from COLLECTIVE_OPS_REGISTRY" in e for e in errs_missing_reg)
 
         # 4. Snapshot with non-list category, non-dict item, only api_path, only name
         with open(nccl_file, "w", encoding="utf-8") as f:
@@ -1773,9 +1693,7 @@ def test_verify_grounding_collectives() -> None:
             },
         ):
             errs_no_red = verify_collectives_grounding(tmppath)
-            assert any(
-                "schema missing 'reduction_op' attribute" in e for e in errs_no_red
-            )
+            assert any("schema missing 'reduction_op' attribute" in e for e in errs_no_red)
 
         with patch.dict(
             "scripts.verify_grounding.COLLECTIVE_OPS_REGISTRY",
@@ -1787,10 +1705,7 @@ def test_verify_grounding_collectives() -> None:
             },
         ):
             errs_no_comm = verify_collectives_grounding(tmppath)
-            assert any(
-                "schema missing 'comm' communicator attribute" in e
-                for e in errs_no_comm
-            )
+            assert any("schema missing 'comm' communicator attribute" in e for e in errs_no_comm)
 
         # 5. Non-reduction collective schema with all communicator params valid
         fake_coll_schema = MagicMock()
@@ -1824,9 +1739,7 @@ def test_verify_grounding_custom_attention() -> None:
         # 1. Defective JSON in flash_attention file
         flash_file.write_text("{invalid_json", encoding="utf-8")
         errs_bad_json = verify_custom_ops_grounding(tmppath)
-        assert any(
-            "Failed parsing flash_attention snapshot" in e for e in errs_bad_json
-        )
+        assert any("Failed parsing flash_attention snapshot" in e for e in errs_bad_json)
 
         # 2. Non-list category and non-dict items
         flash_file.write_text(
@@ -1868,10 +1781,7 @@ def test_verify_grounding_custom_attention() -> None:
             {"FlashAttention": fake_schema},
         ):
             errs_mismatch = verify_custom_ops_grounding(tmppath)
-            assert any(
-                "inputs ['wrong_q', 'wrong_k'] do not match expected" in e
-                for e in errs_mismatch
-            )
+            assert any("inputs ['wrong_q', 'wrong_k'] do not match expected" in e for e in errs_mismatch)
 
         # 4. Valid flash_attention snapshot matching CUSTOM_OPS_REGISTRY
         fixtures_dir = Path(DEFAULT_SNAPSHOT_DIR)
@@ -1911,9 +1821,7 @@ def test_verify_grounding_main_ecosystem_and_strict() -> None:
     fixtures_dir = str(DEFAULT_SNAPSHOT_DIR)
 
     # Strict mode with non-existent directory returns 1
-    assert (
-        verify_grounding_main(["--strict", "--snapshots-dir", "/nonexistent/dir"]) == 1
-    )
+    assert verify_grounding_main(["--strict", "--snapshots-dir", "/nonexistent/dir"]) == 1
 
     # Strict mode with empty directory returns 1 even when explicit target_dir is passed
     with TemporaryDirectory() as empty_dir:
@@ -1929,20 +1837,10 @@ def test_verify_grounding_main_ecosystem_and_strict() -> None:
 
     # Passing explicit --ecosystem-snapshots-dir with valid fixtures
     if Path(fixtures_dir).exists() and any(Path(fixtures_dir).glob("*.json")):
-        assert (
-            verify_grounding_main(
-                ["--strict", "--ecosystem-snapshots-dir", fixtures_dir]
-            )
-            == 0
-        )
+        assert verify_grounding_main(["--strict", "--ecosystem-snapshots-dir", fixtures_dir]) == 0
 
     # Zero-mock end-to-end verification against ../ml-ecosystem-snapshots
-    assert (
-        verify_grounding_main(
-            ["--strict", "--snapshots-dir", "../ml-ecosystem-snapshots"]
-        )
-        == 0
-    )
+    assert verify_grounding_main(["--strict", "--snapshots-dir", "../ml-ecosystem-snapshots"]) == 0
 
 
 def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
@@ -2032,9 +1930,7 @@ def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
         assert len(o_errs) == 2
 
 
-def test_lint_typing_exhaustive(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_lint_typing_exhaustive(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test scripts/lint_typing.py across clean and violating Python constructs."""
     from scripts.lint_typing import check_source, collect_python_files, main
 
@@ -2046,8 +1942,14 @@ def test_lint_typing_exhaustive(
         "import builtins\n"
         "x: typing.Sequence[int] = [1, 2]\n"
         "y = builtins.len(x)\n"
-        "z = object.__repr__(x)\n"
+        "z = repr(x)\n"
         "p = os.path.join('a', 'b')\n"
+        "class C:\n"
+        "  object = 'object'\n"
+        "  def __init__(self) -> None:\n"
+        "    super().__init__()\n"
+        "  def __eq__(self, other: object) -> bool:\n"
+        "    return False\n"
         "# normal comment\n"
     )
     assert check_source(clean_src, Path("clean.py")) == []
@@ -2055,32 +1957,36 @@ def test_lint_typing_exhaustive(
     bad_src = (
         "from typing import Any, cast, Sequence\n"
         "from builtins import getattr, len\n"
+        "from operator import attrgetter\n"
         "import typing\n"
         "import builtins\n"
+        "import operator\n"
         "a: typing.Any = 1\n"
         "b = builtins.setattr\n"
         "c = object.__setattr__\n"
         "d = getattr(a, 'x', None)\n"
         "e: Any = 2\n"
+        "g = a.__repr__()\n"
+        "h = operator.itemgetter('x')\n"
+        "i = core_schema.any_schema()\n"
         "f = 3  # " + "type: ignore[assignment]\n"
     )
     violations = check_source(bad_src, Path("bad.py"))
-    assert len(violations) == 9
-    assert any("Forbidden typing import 'typing.Any'" in v for v in violations)
-    assert any("Forbidden typing import 'typing.cast'" in v for v in violations)
-    assert any(
-        "Forbidden reflection import 'builtins.getattr'" in v for v in violations
-    )
-    assert any("Forbidden typing construct 'typing.Any'" in v for v in violations)
-    assert any(
-        "Forbidden reflection construct 'builtins.setattr'" in v for v in violations
-    )
-    assert any(
-        "Forbidden reflection construct 'object.__setattr__'" in v for v in violations
-    )
-    assert any("Forbidden call to 'getattr()'" in v for v in violations)
+    assert len(violations) == 14
+    assert any("Forbidden import 'typing.Any'" in v for v in violations)
+    assert any("Forbidden import 'typing.cast'" in v for v in violations)
+    assert any("Forbidden import 'builtins.getattr'" in v for v in violations)
+    assert any("Forbidden import 'operator.attrgetter'" in v for v in violations)
+    assert any("Forbidden reference 'typing.Any'" in v for v in violations)
+    assert any("Forbidden builtin reference 'builtins.setattr'" in v for v in violations)
+    assert any("Forbidden dunder attribute access '.__setattr__'" in v for v in violations)
+    assert any("Forbidden reflection/cast call 'getattr()'" in v for v in violations)
     assert any("Forbidden reference to 'Any'" in v for v in violations)
-    assert any("Forbidden comment directive 'type: ignore'" in v for v in violations)
+    assert any("Forbidden reference to 'object'" in v for v in violations)
+    assert any("Forbidden direct dunder method call '.__repr__()'" in v for v in violations)
+    assert any("Forbidden operator helper 'operator.itemgetter'" in v for v in violations)
+    assert any("Forbidden untyped schema reference '.any_schema'" in v for v in violations)
+    assert any("Forbidden '# type: ignore' comment" in v for v in violations)
 
     sub_dir = tmp_path / "pkg"
     sub_dir.mkdir()
@@ -2089,9 +1995,7 @@ def test_lint_typing_exhaustive(
     txt_file = sub_dir / "notes.txt"
     txt_file.write_text("ignored\n", encoding="utf-8")
 
-    collected = collect_python_files(
-        [clean_file, sub_dir, txt_file, tmp_path / "missing.py"]
-    )
+    collected = collect_python_files([clean_file, sub_dir, txt_file, tmp_path / "missing.py"])
     assert collected == [clean_file]
 
     assert main([str(clean_file)]) == 0
@@ -2100,7 +2004,7 @@ def test_lint_typing_exhaustive(
     bad_file.write_text("x = getattr(object(), '__doc__', None)\n", encoding="utf-8")
     assert main([str(sub_dir)]) == 1
     captured = capsys.readouterr()
-    assert "Forbidden call to 'getattr()'" in captured.err
+    assert "Forbidden reflection/cast call 'getattr()'" in captured.err
 
-    with patch.object(sys, "argv", ["lint_typing.py"]):
+    with patch("sys.argv", ["lint_typing.py"]):
         assert main(None) == 0

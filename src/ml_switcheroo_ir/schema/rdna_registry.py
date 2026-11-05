@@ -63,17 +63,11 @@ def _load_rdna_schemas(json_path: Path | str | None = None) -> None:
 
             for op_name, op_info in GHOST_VOPD_OPS.items():
                 slots = op_info.slots
-                slot_str = (
-                    "BOTH"
-                    if set(slots) == {"X", "Y"}
-                    else (slots[0] if slots else "BOTH")
-                )
+                slot_str = "BOTH" if set(slots) == {"X", "Y"} else (slots[0] if slots else "BOTH")
                 RDNA_VOPD_SLOTS[op_name] = slot_str
 
             RDNA_TO_VOPD_MAP.update(GHOST_VOPD_MAP)
-            RDNA_REGISTRY.update(
-                build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="amd_rdna")
-            )
+            RDNA_REGISTRY.update(build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="amd_rdna"))
 
 
 _load_rdna_schemas()

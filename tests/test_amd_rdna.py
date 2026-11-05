@@ -99,14 +99,8 @@ def test_vopd_unsupported_opcodes() -> None:
     )
 
     errors = validate_vopd_pairing(opX, opY)
-    assert any(
-        "Opcode 'V_UNKNOWN_OP' is not a valid RDNA3 VOPD instruction." in e.message
-        for e in errors
-    )
-    assert any(
-        "Opcode 'V_DOT4_I32_I8' is not a valid RDNA3 VOPD instruction." in e.message
-        for e in errors
-    )
+    assert any("Opcode 'V_UNKNOWN_OP' is not a valid RDNA3 VOPD instruction." in e.message for e in errors)
+    assert any("Opcode 'V_DOT4_I32_I8' is not a valid RDNA3 VOPD instruction." in e.message for e in errors)
 
 
 def test_vopd_illegal_slot_assignment() -> None:
@@ -125,10 +119,7 @@ def test_vopd_illegal_slot_assignment() -> None:
     )
 
     errors = validate_vopd_pairing(opX, opY)
-    assert any(
-        "Opcode 'V_DUAL_CNDMASK_B32' cannot be issued in VOPD Slot Y." in e.message
-        for e in errors
-    )
+    assert any("Opcode 'V_DUAL_CNDMASK_B32' cannot be issued in VOPD Slot Y." in e.message for e in errors)
 
     # Test Slot X restriction: V_DUAL_DOT2ACC_F32_F16 is only permitted in Slot Y
     opX_bad_slot = LogicalNode(
@@ -144,10 +135,7 @@ def test_vopd_illegal_slot_assignment() -> None:
         attributes={"dst": 1},
     )
     errors_x = validate_vopd_pairing(opX_bad_slot, opY_good)
-    assert any(
-        "Opcode 'V_DUAL_DOT2ACC_F32_F16' cannot be issued in VOPD Slot X." in e.message
-        for e in errors_x
-    )
+    assert any("Opcode 'V_DUAL_DOT2ACC_F32_F16' cannot be issued in VOPD Slot X." in e.message for e in errors_x)
 
 
 def test_vopd_destination_register_conflict() -> None:

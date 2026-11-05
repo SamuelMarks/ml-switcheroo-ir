@@ -259,6 +259,11 @@ def test_shape_tracker_inference_and_feedback() -> None:
     # broadcast_dimension with equivalent expressions
     assert broadcast_dimension("batch + 2", "2 + batch") == "batch + 2"
 
+
+def test_shape_tracker_mock_containers_and_unification_edges() -> None:
+    """Test ShapeTracker with custom protocol containers, shorter telemetry, and equality chaining."""
+    t2 = SymbolicConstraintTracker()
+
     # ShapeTracker edge branches: node with shape only and fewer dims in telemetry
     class MockNodeShapeOnly:
         """Mock node with only shape attribute."""
@@ -282,9 +287,7 @@ def test_shape_tracker_inference_and_feedback() -> None:
             """
             return self._id
 
-    n_so = MockNodeShapeOnly(
-        "n_so", (SymInt("si_track_none"), SymVar("sv_track_none"), "var_dim", 64, 128)
-    )
+    n_so = MockNodeShapeOnly("n_so", (SymInt("si_track_none"), SymVar("sv_track_none"), "var_dim", 64, 128))
 
     class _SimpleNodeContainer:
         """Container with nodes mapping for duck-typed node resolution tests."""
@@ -341,6 +344,34 @@ def test_shape_tracker_inference_and_feedback() -> None:
     ShapeTracker.update_from_feedback({"batch_dim": [64], "123": [32]}, tracker=t_1d)
     assert t_1d.solve()["batch_dim"] == 64
 
+
+def test_shape_tracker_list_containers_and_exact_rank_bounds() -> None:
+    """Test ShapeTracker with list-backed graph containers and exact-rank bound resolution."""
+    from ml_switcheroo_ir import LogicalGraph, LogicalNode
+
+    t2 = SymbolicConstraintTracker()
+    si_b = SymInt("batch")
+
+    class _SimpleNodeContainer:
+        """Container with nodes mapping for duck-typed node resolution tests."""
+
+        def __init__(self, nodes_map: Mapping[str, ShapeNodeProtocol]) -> None:
+            """Initialize node container.
+
+            Args:
+                nodes_map (Mapping[str, ShapeNodeProtocol]): Mapping of node ID to node object.
+            """
+            self._nodes = nodes_map
+
+        @property
+        def nodes(self) -> Mapping[str, ShapeNodeProtocol]:
+            """Return nodes mapping.
+
+            Returns:
+                Mapping[str, ShapeNodeProtocol]: Nodes mapping.
+            """
+            return self._nodes
+
     # ShapeTracker with list-based graph nodes and unobserved node skipped
     class _ListGraphContainer:
         """Graph container with nodes stored as a list."""
@@ -371,9 +402,7 @@ def test_shape_tracker_inference_and_feedback() -> None:
     assert ShapeTracker.update_from_feedback({"inv": "not_list"}) == {}
 
     # Exact rank match in resolve_dynamic_bounds
-    n_exact = LogicalNode(
-        "n_exact", "Relu", shape_metadata=(SymInt("A"), SymVar("B"), "C", 10)
-    )
+    n_exact = LogicalNode("n_exact", "Relu", shape_metadata=(SymInt("A"), SymVar("B"), "C", 10))
     n_none = LogicalNode("n_none", "Relu", shape_metadata=None)
 
     class MockNodeShapeMetaOnly:
@@ -399,9 +428,7 @@ def test_shape_tracker_inference_and_feedback() -> None:
             return self._id
 
     n_smo = MockNodeShapeMetaOnly("n_smo", (16, 32))
-    g_exact = _SimpleNodeContainer(
-        {"n_exact": n_exact, "n_none": n_none, "n_smo": n_smo}
-    )
+    g_exact = _SimpleNodeContainer({"n_exact": n_exact, "n_none": n_none, "n_smo": n_smo})
     bounds_exact = ShapeTracker.resolve_dynamic_bounds(
         g_exact,
         {"n_exact": [1, 2, 3, 10], "n_none": [1], "n_smo": [16, 32]},
@@ -415,7 +442,6 @@ def test_shape_tracker_inference_and_feedback() -> None:
     with pytest.raises(ShapeMismatchError, match="Incompatible dimensions"):
         broadcast_dimension(5, "dim_x", tracker=None)
 
-    from ml_switcheroo_ir import LogicalGraph, LogicalNode
     from ml_switcheroo_ir.shapes import SymBinaryOp
 
     tr = SymbolicConstraintTracker()
@@ -432,11 +458,7 @@ def test_shape_tracker_inference_and_feedback() -> None:
     assert "a + b" not in sol
 
     g_strict = LogicalGraph(
-        nodes={
-            "n_rank": LogicalNode(
-                id="n_rank", op_type="Relu", shape_metadata=("B", "N")
-            )
-        },
+        nodes={"n_rank": LogicalNode(id="n_rank", op_type="Relu", shape_metadata=("B", "N"))},
     )
     with pytest.raises(ShapeMismatchError, match="observed rank"):
         ShapeTracker.resolve_dynamic_bounds(

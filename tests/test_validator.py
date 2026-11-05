@@ -13,9 +13,7 @@ MOCK_REGISTRY = {
         domain="ai.onnx",
         version=11,
         attributes={
-            "alpha": OpAttribute(
-                name="alpha", type="float", required=False, default=1.0
-            ),
+            "alpha": OpAttribute(name="alpha", type="float", required=False, default=1.0),
             "beta": OpAttribute(name="beta", type="float", required=False, default=1.0),
             "transA": OpAttribute(name="transA", type="int", required=False, default=0),
             "transB": OpAttribute(name="transB", type="int", required=False, default=0),
@@ -28,12 +26,8 @@ MOCK_REGISTRY = {
         domain="ai.onnx",
         version=11,
         attributes={
-            "kernel_shape": OpAttribute(
-                name="kernel_shape", type="List[int]", required=True, default=None
-            ),
-            "strides": OpAttribute(
-                name="strides", type="List[int]", required=False, default=[1, 1]
-            ),
+            "kernel_shape": OpAttribute(name="kernel_shape", type="List[int]", required=True, default=None),
+            "strides": OpAttribute(name="strides", type="List[int]", required=False, default=[1, 1]),
             "group": OpAttribute(name="group", type="int", required=False, default=1),
         },
         inputs=["X", "W", "B"],
@@ -90,9 +84,7 @@ def test_validator_invalid_type(validator: Validator) -> None:
     Args:
         validator (Validator): Mock-registry Validator fixture.
     """
-    node = LogicalNode(
-        id="conv1", op_type="Conv", attributes={"group": "1", "kernel_shape": [3, 3]}
-    )
+    node = LogicalNode(id="conv1", op_type="Conv", attributes={"group": "1", "kernel_shape": [3, 3]})
 
     errors = validator.validate_attribute_types(node)
     assert len(errors) == 1
@@ -164,9 +156,7 @@ def test_validator_graph_integration(validator: Validator) -> None:
         validator (Validator): Mock-registry Validator fixture.
     """
     node1 = LogicalNode(id="n1", op_type="Gemm", attributes={"alpha": 2.0})
-    node2 = LogicalNode(
-        id="n2", op_type="Conv", inputs=["n1", "n3"]
-    )  # missing kernel_shape, dangling n3
+    node2 = LogicalNode(id="n2", op_type="Conv", inputs=["n1", "n3"])  # missing kernel_shape, dangling n3
 
     graph = LogicalGraph(nodes={"n1": node1, "n2": node2})
     errors = validator.validate_graph(graph)
@@ -194,9 +184,7 @@ def test_validator_default_registry() -> None:
     from ml_switcheroo_ir import LogicalNode
     from ml_switcheroo_ir.schema.custom_ops import CustomOpSchema
 
-    s = CustomOpSchema(
-        name="dot_general", domain="stablehlo", attributes=[], inputs=[], outputs=[]
-    )
+    s = CustomOpSchema(name="dot_general", domain="stablehlo", attributes=[], inputs=[], outputs=[])
     v_custom = Validator(registry={"dot_general": s.to_op_schema()})
     n = LogicalNode(id="x", op_type="dot_general", domain="stablehlo")
     assert v_custom._get_schema(n) is not None
@@ -208,17 +196,13 @@ def test_validator_list_type_check_errors(validator: Validator) -> None:
     Args:
         validator (Validator): Mock-registry Validator fixture.
     """
-    node = LogicalNode(
-        id="conv1", op_type="Conv", attributes={"kernel_shape": [3, "3"]}
-    )
+    node = LogicalNode(id="conv1", op_type="Conv", attributes={"kernel_shape": [3, "3"]})
     errors = validator.validate_attribute_types(node)
     assert len(errors) == 1
     assert errors[0].attribute == "kernel_shape"
 
     # Int type valid check
-    node2 = LogicalNode(
-        id="conv2", op_type="Conv", attributes={"group": 2.5, "kernel_shape": [3]}
-    )
+    node2 = LogicalNode(id="conv2", op_type="Conv", attributes={"group": 2.5, "kernel_shape": [3]})
     errors2 = validator.validate_attribute_types(node2)
     assert errors2[0].attribute == "group"
 
@@ -242,16 +226,10 @@ def test_validator_various_types() -> None:
             version=1,
             attributes={
                 "s": OpAttribute(name="s", type="str", required=False, default=""),
-                "lf": OpAttribute(
-                    name="lf", type="List[float]", required=False, default=[]
-                ),
-                "ls": OpAttribute(
-                    name="ls", type="List[str]", required=False, default=[]
-                ),
+                "lf": OpAttribute(name="lf", type="List[float]", required=False, default=[]),
+                "ls": OpAttribute(name="ls", type="List[str]", required=False, default=[]),
                 "b": OpAttribute(name="b", type="bool", required=False, default=False),
-                "any": OpAttribute(
-                    name="any", type="Any", required=False, default=None
-                ),
+                "any": OpAttribute(name="any", type="Any", required=False, default=None),
             },
             inputs=[],
             outputs=[],
@@ -268,27 +246,15 @@ def test_validator_various_types() -> None:
     assert not v.validate_attribute_types(node_valid)
 
     # Invalid str
-    assert v.validate_attribute_types(
-        LogicalNode(id="n", op_type="TestOp", attributes={"s": 1})
-    )
+    assert v.validate_attribute_types(LogicalNode(id="n", op_type="TestOp", attributes={"s": 1}))
     # Invalid List[float]
-    assert v.validate_attribute_types(
-        LogicalNode(id="n", op_type="TestOp", attributes={"lf": ["a"]})
-    )
-    assert v.validate_attribute_types(
-        LogicalNode(id="n", op_type="TestOp", attributes={"lf": 1.0})
-    )
+    assert v.validate_attribute_types(LogicalNode(id="n", op_type="TestOp", attributes={"lf": ["a"]}))
+    assert v.validate_attribute_types(LogicalNode(id="n", op_type="TestOp", attributes={"lf": 1.0}))
     # Invalid List[str]
-    assert v.validate_attribute_types(
-        LogicalNode(id="n", op_type="TestOp", attributes={"ls": [1]})
-    )
-    assert v.validate_attribute_types(
-        LogicalNode(id="n", op_type="TestOp", attributes={"ls": "a"})
-    )
+    assert v.validate_attribute_types(LogicalNode(id="n", op_type="TestOp", attributes={"ls": [1]}))
+    assert v.validate_attribute_types(LogicalNode(id="n", op_type="TestOp", attributes={"ls": "a"}))
     # Invalid bool
-    assert v.validate_attribute_types(
-        LogicalNode(id="n", op_type="TestOp", attributes={"b": 1})
-    )
+    assert v.validate_attribute_types(LogicalNode(id="n", op_type="TestOp", attributes={"b": 1}))
 
 
 def test_validator_custom_domain() -> None:
@@ -315,9 +281,7 @@ def test_validator_edge_source_idx_out_of_bounds() -> None:
     from ml_switcheroo_ir import LogicalEdge, LogicalGraph, LogicalNode
     from ml_switcheroo_ir.validator import Validator
 
-    producer = LogicalNode(
-        id="prod", op_type="Split", domain="ai.onnx", outputs=["out0", "out1"]
-    )
+    producer = LogicalNode(id="prod", op_type="Split", domain="ai.onnx", outputs=["out0", "out1"])
     consumer = LogicalNode(id="cons", op_type="Relu", domain="ai.onnx")
 
     edge = LogicalEdge(source="prod", target="cons", source_idx=2)
@@ -326,16 +290,12 @@ def test_validator_edge_source_idx_out_of_bounds() -> None:
     validator = Validator()
     errors = validator.validate_graph(graph)
 
-    assert any("out of bounds" in str(e.message) for e in errors), (
-        f"Errors were: {errors}"
-    )
+    assert any("out of bounds" in str(e.message) for e in errors), f"Errors were: {errors}"
 
     # Also test when edge.source is an explicit SSA output name with out-of-bounds source_idx
     from unittest import mock
 
-    with mock.patch(
-        "ml_switcheroo_ir.LogicalGraph.edges", new_callable=mock.PropertyMock
-    ) as mock_edges:
+    with mock.patch("ml_switcheroo_ir.LogicalGraph.edges", new_callable=mock.PropertyMock) as mock_edges:
         mock_edges.return_value = [
             LogicalEdge(source="prod", target="cons", source_idx=2),
             LogicalEdge(source="out1", target="cons", source_idx=2),

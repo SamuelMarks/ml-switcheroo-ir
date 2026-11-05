@@ -17,11 +17,7 @@ def test_validator_custom_registry_override() -> None:
         name="SpecialOp",
         domain="ml.switcheroo.custom",
         version=1,
-        attributes={
-            "factor": OpAttribute(
-                name="factor", type="float", required=True, default=1.0
-            )
-        },
+        attributes={"factor": OpAttribute(name="factor", type="float", required=True, default=1.0)},
         inputs=["in"],
         outputs=["out"],
     )
@@ -71,9 +67,7 @@ def test_validator_custom_op_in_onnx_registry_fallback() -> None:
     assert not v.validate_kind(node)
     assert v._get_schema(node) is fake_onnx["CustomInOnnx"]
 
-    missing_node = LogicalNode(
-        id="m1", op_type="NonExistent", domain="ml.switcheroo.custom"
-    )
+    missing_node = LogicalNode(id="m1", op_type="NonExistent", domain="ml.switcheroo.custom")
     assert v._get_schema(missing_node) is None
 
     other_node = LogicalNode(id="o1", op_type="CustomInOnnx", domain="ai.custom")
@@ -129,9 +123,7 @@ def test_grounding_validator_engine_exception_handling(tmp_path: Path) -> None:
 
     broken_engine = MagicMock()
     broken_engine.get_symbol.side_effect = RuntimeError("engine lookup failed")
-    broken_engine.suggest_closest_symbol.side_effect = RuntimeError(
-        "engine suggest failed"
-    )
+    broken_engine.suggest_closest_symbol.side_effect = RuntimeError("engine suggest failed")
 
     gv_resilient = GroundingValidator()
     gv_resilient._engine = broken_engine
@@ -150,15 +142,9 @@ def test_validator_bool_rejected_for_int_and_float_attributes() -> None:
         version=1,
         attributes={
             "axis": OpAttribute(name="axis", type="int", required=True, default=None),
-            "scale": OpAttribute(
-                name="scale", type="float", required=True, default=None
-            ),
-            "pads": OpAttribute(
-                name="pads", type="List[int]", required=False, default=None
-            ),
-            "ratios": OpAttribute(
-                name="ratios", type="List[float]", required=False, default=None
-            ),
+            "scale": OpAttribute(name="scale", type="float", required=True, default=None),
+            "pads": OpAttribute(name="pads", type="List[int]", required=False, default=None),
+            "ratios": OpAttribute(name="ratios", type="List[float]", required=False, default=None),
         },
         inputs=["x"],
         outputs=["y"],
@@ -221,11 +207,7 @@ def test_validator_domain_aliases_and_side_effect_free_option() -> None:
         name="OpWithDefault",
         domain="ai.onnx",
         version=1,
-        attributes={
-            "alpha": OpAttribute(
-                name="alpha", type="float", required=False, default=1.0
-            )
-        },
+        attributes={"alpha": OpAttribute(name="alpha", type="float", required=False, default=1.0)},
         inputs=["x"],
         outputs=["y"],
     )

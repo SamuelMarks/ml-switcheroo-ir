@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
 import copy
 import json
 import logging
 import os
 import typing
-import typing_extensions
+from collections.abc import Iterable, Mapping, Sequence
 
 import pydantic
+import typing_extensions
 
 from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR
 from ml_switcheroo_ir.types import AttributeValue, JsonValue
@@ -31,15 +31,7 @@ def _is_4d_nested_sequence(
     Returns:
         typing.TypeGuard[Sequence[Sequence[Sequence[Sequence[JsonValue]]]]]: True if 4D nested sequence.
     """
-    return (
-        isinstance(val, (list, tuple))
-        and len(val) > 0
-        and isinstance(val[0], (list, tuple))
-        and len(val[0]) > 0
-        and isinstance(val[0][0], (list, tuple))
-        and len(val[0][0]) > 0
-        and isinstance(val[0][0][0], (list, tuple))
-    )
+    return isinstance(val, (list, tuple)) and len(val) > 0 and isinstance(val[0], (list, tuple)) and len(val[0]) > 0 and isinstance(val[0][0], (list, tuple)) and len(val[0][0]) > 0 and isinstance(val[0][0][0], (list, tuple))
 
 
 class OperationTranslationSpec(pydantic.BaseModel):
@@ -111,9 +103,7 @@ class TranslationMap(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
-    operations: dict[str, OperationTranslationSpec] = pydantic.Field(
-        default_factory=dict
-    )
+    operations: dict[str, OperationTranslationSpec] = pydantic.Field(default_factory=dict)
 
     @pydantic.model_validator(mode="before")
     @classmethod
@@ -185,9 +175,7 @@ class TranslationMap(pydantic.BaseModel):
         Returns:
             bool: True if equivalent.
         """
-        return isinstance(other, Mapping) and {
-            k: v.model_dump(exclude_none=True) for k, v in self.operations.items()
-        } == dict(other)
+        return isinstance(other, Mapping) and {k: v.model_dump(exclude_none=True) for k, v in self.operations.items()} == dict(other)
 
     def values(self) -> Iterable[OperationTranslationSpec]:
         """Return operation translation specs.
@@ -250,9 +238,7 @@ class TensorLikeProtocol(typing.Protocol):
 class TransposableTensorProtocol(typing.Protocol):
     """Structural protocol for tensor-like objects providing .transpose()."""
 
-    def transpose(
-        self, perm: tuple[int, ...]
-    ) -> TransposableTensorProtocol | tuple[str, tuple[int, ...]] | JsonValue:
+    def transpose(self, perm: tuple[int, ...]) -> TransposableTensorProtocol | tuple[str, tuple[int, ...]] | JsonValue:
         """Return tensor with transposed dimensions.
 
         Args:
@@ -267,9 +253,7 @@ class TransposableTensorProtocol(typing.Protocol):
 class PermutableTensorProtocol(typing.Protocol):
     """Structural protocol for PyTorch-like tensors providing .permute()."""
 
-    def permute(
-        self, perm: tuple[int, ...]
-    ) -> PermutableTensorProtocol | tuple[str, tuple[int, ...]] | JsonValue:
+    def permute(self, perm: tuple[int, ...]) -> PermutableTensorProtocol | tuple[str, tuple[int, ...]] | JsonValue:
         """Return tensor with permuted dimensions.
 
         Args:
@@ -284,9 +268,7 @@ class PermutableTensorProtocol(typing.Protocol):
 class SplittableTensorProtocol(typing.Protocol):
     """Structural protocol for tensor-like objects providing .split()."""
 
-    def split(
-        self, split_size: int, dim: int = 0
-    ) -> Sequence[SplittableTensorProtocol | JsonValue]:
+    def split(self, split_size: int, dim: int = 0) -> Sequence[SplittableTensorProtocol | JsonValue]:
         """Split tensor into chunks along a dimension.
 
         Args:
@@ -299,21 +281,8 @@ class SplittableTensorProtocol(typing.Protocol):
 
 
 if typing.TYPE_CHECKING:
-    NestedTensorSequence: typing_extensions.TypeAlias = Sequence[
-        int | float | bool | str | "NestedTensorSequence"
-    ]
-    TensorLike: typing_extensions.TypeAlias = (
-        TensorLikeProtocol
-        | TransposableTensorProtocol
-        | PermutableTensorProtocol
-        | SplittableTensorProtocol
-        | list[list[list[list[JsonValue]]]]
-        | NestedTensorSequence
-        | Sequence[JsonValue]
-        | Mapping[str, JsonValue]
-        | tuple[str, tuple[int, ...]]
-        | JsonValue
-    )
+    NestedTensorSequence: typing_extensions.TypeAlias = Sequence[int | float | bool | str | "NestedTensorSequence"]
+    TensorLike: typing_extensions.TypeAlias = TensorLikeProtocol | TransposableTensorProtocol | PermutableTensorProtocol | SplittableTensorProtocol | list[list[list[list[JsonValue]]]] | NestedTensorSequence | Sequence[JsonValue] | Mapping[str, JsonValue] | tuple[str, tuple[int, ...]] | JsonValue
 else:
     NestedTensorSequence = Sequence
     TensorLike = (
@@ -542,11 +511,7 @@ class ParameterTranslationEngine:
                 Pre-loaded parameter translations mapping.
             concept_map_path (str | None): Path to concept_map.json file.
         """
-        self.translations: TranslationMap = (
-            TranslationMap.model_validate(translations)
-            if translations is not None
-            else TranslationMap()
-        )
+        self.translations: TranslationMap = TranslationMap.model_validate(translations) if translations is not None else TranslationMap()
         if not self.translations:
             self._load_default_translations(concept_map_path)
 
@@ -605,17 +570,13 @@ class ParameterTranslationEngine:
         for cand in candidates:
             if cand and os.path.isfile(cand):
                 try:
-                    with open(cand, "r", encoding="utf-8") as f:
+                    with open(cand, encoding="utf-8") as f:
                         data = json.load(f)
-                    if "_parameter_translations" in data and isinstance(
-                        data["_parameter_translations"], dict
-                    ):
+                    if "_parameter_translations" in data and isinstance(data["_parameter_translations"], dict):
                         self.translations.update(data["_parameter_translations"])
                         break
                 except (json.JSONDecodeError, OSError) as exc:
-                    _logger.debug(
-                        "Skipping invalid concept_map candidate %s: %s", cand, exc
-                    )
+                    _logger.debug("Skipping invalid concept_map candidate %s: %s", cand, exc)
         if path is None:
             self._merge_fallback_translations()
         self._canonicalize_role_aliases()
@@ -643,9 +604,7 @@ class ParameterTranslationEngine:
             ValueError: If source or target framework has no mapping for the parameter role.
         """
         if operation not in self.translations:
-            raise KeyError(
-                f"No parameter translations defined for operation '{operation}'."
-            )
+            raise KeyError(f"No parameter translations defined for operation '{operation}'.")
 
         roles = self.translations[operation].get("roles", {})
         for role_name, fw_mappings in roles.items():
@@ -653,14 +612,10 @@ class ParameterTranslationEngine:
             if param_name in src_params:
                 target_params = fw_mappings.get(target_framework, [])
                 if not target_params:
-                    raise ValueError(
-                        f"Target framework '{target_framework}' does not support role '{role_name}' for operation '{operation}'."
-                    )
+                    raise ValueError(f"Target framework '{target_framework}' does not support role '{role_name}' for operation '{operation}'.")
                 return str(target_params[0])
 
-        raise KeyError(
-            f"Parameter '{param_name}' is not recognized as a valid '{source_framework}' parameter for '{operation}'."
-        )
+        raise KeyError(f"Parameter '{param_name}' is not recognized as a valid '{source_framework}' parameter for '{operation}'.")
 
     def translate_attributes(
         self,
@@ -700,9 +655,7 @@ class ParameterTranslationEngine:
                 if allow_passthrough:
                     result[k] = v
                 else:
-                    raise ValueError(
-                        f"Ungrounded parameter '{k}' during translation from '{source_framework}' to '{target_framework}': {err}"
-                    ) from err
+                    raise ValueError(f"Ungrounded parameter '{k}' during translation from '{source_framework}' to '{target_framework}': {err}") from err
         return result
 
     def translate_weight_name(
@@ -742,6 +695,45 @@ class ParameterTranslationEngine:
             target_framework=target_framework,
         )
 
+    @staticmethod
+    def _permute_4d_nested_sequence(
+        weights: Sequence[Sequence[Sequence[Sequence[JsonValue]]]],
+        perm: Sequence[int],
+    ) -> list[list[list[list[JsonValue]]]]:
+        """Permute a 4D nested Python sequence according to axis permutation ``perm``.
+
+        Args:
+            weights (Sequence[Sequence[Sequence[Sequence[JsonValue]]]]): 4D nested list/tuple.
+            perm (Sequence[int]): 4-element permutation indices.
+
+        Returns:
+            list[list[list[list[JsonValue]]]]: Permuted 4D nested list.
+        """
+        dims = [
+            len(weights),
+            len(weights[0]),
+            len(weights[0][0]),
+            len(weights[0][0][0]),
+        ]
+        out_dims = [dims[p] for p in perm]
+        out_4d: list[list[list[list[JsonValue]]]] = []
+        for i0 in range(out_dims[0]):
+            plane1: list[list[list[JsonValue]]] = []
+            for i1 in range(out_dims[1]):
+                plane2: list[list[JsonValue]] = []
+                for i2 in range(out_dims[2]):
+                    row: list[JsonValue] = []
+                    for i3 in range(out_dims[3]):
+                        out_idx = (i0, i1, i2, i3)
+                        src_idx = [0, 0, 0, 0]
+                        for d_idx, p_axis in enumerate(perm):
+                            src_idx[p_axis] = out_idx[d_idx]
+                        row.append(weights[src_idx[0]][src_idx[1]][src_idx[2]][src_idx[3]])
+                    plane2.append(row)
+                plane1.append(plane2)
+            out_4d.append(plane1)
+        return out_4d
+
     def permute_conv_weights(
         self,
         weights: TensorLike,
@@ -769,9 +761,7 @@ class ParameterTranslationEngine:
         if len(src) != 4 or len(tgt) != 4:
             raise ValueError(f"Conv weight formats must have rank 4: '{src}', '{tgt}'.")
         if sorted(src) != sorted("OIHW") or sorted(tgt) != sorted("OIHW"):
-            raise ValueError(
-                f"Formats must be permutations of 'OIHW': '{src}', '{tgt}'."
-            )
+            raise ValueError(f"Formats must be permutations of 'OIHW': '{src}', '{tgt}'.")
         if src == tgt:
             return weights
 
@@ -781,32 +771,7 @@ class ParameterTranslationEngine:
         if isinstance(weights, PermutableTensorProtocol):
             return weights.permute(tuple(perm))
         if _is_4d_nested_sequence(weights):
-            dims = [
-                len(weights),
-                len(weights[0]),
-                len(weights[0][0]),
-                len(weights[0][0][0]),
-            ]
-            out_dims = [dims[p] for p in perm]
-            out_4d: list[list[list[list[JsonValue]]]] = []
-            for i0 in range(out_dims[0]):
-                plane1: list[list[list[JsonValue]]] = []
-                for i1 in range(out_dims[1]):
-                    plane2: list[list[JsonValue]] = []
-                    for i2 in range(out_dims[2]):
-                        row: list[JsonValue] = []
-                        for i3 in range(out_dims[3]):
-                            out_idx = [i0, i1, i2, i3]
-                            src_idx = [0, 0, 0, 0]
-                            for d_idx, p_axis in enumerate(perm):
-                                src_idx[p_axis] = out_idx[d_idx]
-                            row.append(
-                                weights[src_idx[0]][src_idx[1]][src_idx[2]][src_idx[3]]
-                            )
-                        plane2.append(row)
-                    plane1.append(plane2)
-                out_4d.append(plane1)
-            return out_4d
+            return self._permute_4d_nested_sequence(weights, perm)
         return (weights, tuple(perm))
 
     def split_qkv_weights(
@@ -836,14 +801,10 @@ class ParameterTranslationEngine:
             ValueError: If num_heads or head_dim is non-positive.
         """
         if num_heads <= 0 or head_dim <= 0:
-            raise ValueError(
-                f"num_heads ({num_heads}) and head_dim ({head_dim}) must be positive."
-            )
+            raise ValueError(f"num_heads ({num_heads}) and head_dim ({head_dim}) must be positive.")
 
         proj_size = num_heads * head_dim
-        if not isinstance(qkv_weight, (str, bytes)) and isinstance(
-            qkv_weight, SplittableTensorProtocol
-        ):
+        if not isinstance(qkv_weight, (str, bytes)) and isinstance(qkv_weight, SplittableTensorProtocol):
             parts = qkv_weight.split(proj_size, dim=split_dim)
             return (parts[0], parts[1], parts[2])
         if isinstance(qkv_weight, (list, tuple)) and len(qkv_weight) == 3 * proj_size:
@@ -872,10 +833,6 @@ class ParameterTranslationEngine:
             TensorLike | tuple[str, tuple[TensorLike, TensorLike, TensorLike], int]:
                 Merged QKV weight object.
         """
-        if (
-            isinstance(q_weight, list)
-            and isinstance(k_weight, list)
-            and isinstance(v_weight, list)
-        ):
+        if isinstance(q_weight, list) and isinstance(k_weight, list) and isinstance(v_weight, list):
             return [*q_weight, *k_weight, *v_weight]
         return ("qkv", (q_weight, k_weight, v_weight), concat_dim)

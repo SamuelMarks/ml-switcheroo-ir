@@ -75,9 +75,7 @@ def test_load_onnx_schemas_branches(tmp_path: Path) -> None:
                 "CustomOp": {
                     "domain": "ai.onnx.custom",
                     "version": 1,
-                    "attributes": {
-                        "alpha": {"type": "float", "required": False, "default": 1.0}
-                    },
+                    "attributes": {"alpha": {"type": "float", "required": False, "default": 1.0}},
                     "inputs": ["x"],
                     "outputs": ["y"],
                 }

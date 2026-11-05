@@ -2,8 +2,8 @@
 
 import json
 
-import pytest
 import pydantic
+import pytest
 
 from ml_switcheroo_ir.schema.ghost import (
     ExtendedGhostParam,

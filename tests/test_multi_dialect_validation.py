@@ -148,19 +148,13 @@ def test_mlir_dialect_validation_success() -> None:
     erf_node = LogicalNode(id="m3", op_type="erf", domain="math", inputs=["%x"])
     assert not v.validate_kind(erf_node)
 
-    expand_node = LogicalNode(
-        id="t1", op_type="expand_shape", domain="tensor", inputs=["%t"]
-    )
+    expand_node = LogicalNode(id="t1", op_type="expand_shape", domain="tensor", inputs=["%t"])
     assert not v.validate_kind(expand_node)
 
-    collapse_node = LogicalNode(
-        id="t2", op_type="collapse_shape", domain="tensor", inputs=["%t"]
-    )
+    collapse_node = LogicalNode(id="t2", op_type="collapse_shape", domain="tensor", inputs=["%t"])
     assert not v.validate_kind(collapse_node)
 
-    conv2d_node = LogicalNode(
-        id="l1", op_type="conv2d", domain="linalg", inputs=["%in", "%f", "%out"]
-    )
+    conv2d_node = LogicalNode(id="l1", op_type="conv2d", domain="linalg", inputs=["%in", "%f", "%out"])
     assert not v.validate_kind(conv2d_node)
 
     bmm_node = LogicalNode(
@@ -171,9 +165,7 @@ def test_mlir_dialect_validation_success() -> None:
     )
     assert not v.validate_kind(bmm_node)
 
-    cond_node = LogicalNode(
-        id="s1", op_type="condition", domain="scf", inputs=["%flag"]
-    )
+    cond_node = LogicalNode(id="s1", op_type="condition", domain="scf", inputs=["%flag"])
     assert not v.validate_kind(cond_node)
 
 
@@ -246,9 +238,7 @@ def test_grounding_validator_file_audit(tmp_path: Path) -> None:
     n3 = LogicalNode(id="n3", op_type="unknown", domain="linalg")
     graph = LogicalGraph(nodes={"n1": n1, "n2": n2, "n3": n3})
 
-    report: GroundingAuditReport = audit_graph_grounding(
-        graph, snapshots_path=str(manifest_file)
-    )
+    report: GroundingAuditReport = audit_graph_grounding(graph, snapshots_path=str(manifest_file))
     assert report.total_nodes == 3
     assert report.grounded_count == 1
     assert report.ungrounded_count == 2

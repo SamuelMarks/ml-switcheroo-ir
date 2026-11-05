@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
 import importlib
+import inspect
 import json
 import os
-from pathlib import Path
 import sys
+from collections.abc import Mapping
+from pathlib import Path
 
 from ml_switcheroo_ir.schema.custom_ops import (
     CANONICAL_ATTENTION_SCHEMAS,
@@ -94,7 +95,7 @@ def _load_snapshot_symbol_map(
     Returns:
         dict[str, dict[str, JsonValue]]: Mapping from symbol name / api_path to its snapshot record.
     """
-    with open(snapshot_file, "r", encoding="utf-8") as f:
+    with open(snapshot_file, encoding="utf-8") as f:
         data = json.load(f)
 
     snap_symbols: dict[str, dict[str, JsonValue]] = {}
@@ -135,22 +136,16 @@ def _verify_category_items_have_identifiers(
 
     errors: list[str] = []
     target_file = candidates[-1]
-    with open(target_file, "r", encoding="utf-8") as f:
+    with open(target_file, encoding="utf-8") as f:
         data = json.load(f)
 
     for cat_items in data.get("categories", {}).values():
         if isinstance(cat_items, list):
             for item in cat_items:
                 if isinstance(item, dict):
-                    has_id = bool(
-                        item.get("api_path")
-                        or item.get("name")
-                        or (allow_mnemonic and item.get("mnemonic"))
-                    )
+                    has_id = bool(item.get("api_path") or item.get("name") or (allow_mnemonic and item.get("mnemonic")))
                     if not has_id:
-                        errors.append(
-                            f"{label} item missing identifier in {target_file.name}."
-                        )
+                        errors.append(f"{label} item missing identifier in {target_file.name}.")
     return errors
 
 
@@ -228,35 +223,59 @@ def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
     """
     stablehlo_file = _find_stablehlo_snapshot_file(snapshots_dir)
     if stablehlo_file is None:
-        print(
-            f"[WARNING] StableHLO snapshot file not found in {snapshots_dir}. Skipping StableHLO checks."
-        )
+        print(f"[WARNING] StableHLO snapshot file not found in {snapshots_dir}. Skipping StableHLO checks.")
         return []
 
     gv = GroundingValidator(snapshot_manifest=str(stablehlo_file))
     errors: list[str] = []
 
     for op_name, schema in STABLEHLO_REGISTRY.items():
-        if (
-            op_name not in gv.grounded_symbols
-            and f"stablehlo.{op_name}" not in gv.grounded_symbols
-        ):
-            errors.append(
-                f"StableHLO op '{op_name}' is not grounded in {stablehlo_file.name} snapshot."
-            )
+        if op_name not in gv.grounded_symbols and f"stablehlo.{op_name}" not in gv.grounded_symbols:
+            errors.append(f"StableHLO op '{op_name}' is not grounded in {stablehlo_file.name} snapshot.")
 
         # Check attributes against snapshot record
-        sym_record = gv.grounded_symbols.get(op_name) or gv.grounded_symbols.get(
-            f"stablehlo.{op_name}"
-        )
+        sym_record = gv.grounded_symbols.get(op_name) or gv.grounded_symbols.get(f"stablehlo.{op_name}")
         if sym_record:
             known_attrs = _extract_known_attributes(sym_record)
             for attr_name in schema.attributes:
                 if known_attrs and attr_name not in known_attrs:
-                    errors.append(
-                        f"StableHLO op '{op_name}' attribute '{attr_name}' is not grounded in snapshot attributes {list(known_attrs)}."
-                    )
+                    errors.append(f"StableHLO op '{op_name}' attribute '{attr_name}' is not grounded in snapshot attributes {list(known_attrs)}.")
 
+    return errors
+
+
+def _verify_flash_attention_snapshot(snapshots_dir: Path) -> list[str]:
+    """Audit canonical custom attention schemas against a flash_attention snapshot if present.
+
+    Args:
+        snapshots_dir (Path): Directory containing snapshots.
+
+    Returns:
+        list[str]: Diagnostic errors for mismatched or missing custom attention operators.
+    """
+    flash_candidates = sorted(snapshots_dir.glob("*flash_attention*.json"))
+    if not flash_candidates:
+        return []
+    flash_file = flash_candidates[-1]
+    errors: list[str] = []
+    try:
+        _load_snapshot_symbol_map(flash_file)
+        for canonical_schema in CANONICAL_ATTENTION_SCHEMAS:
+            att_name = canonical_schema.name
+            exp_inputs = canonical_schema.inputs
+            if att_name not in CUSTOM_OPS_REGISTRY:
+                errors.append(f"Custom attention op '{att_name}' missing from CUSTOM_OPS_REGISTRY.")
+            elif CUSTOM_OPS_REGISTRY[att_name].inputs != exp_inputs:
+                att_inputs = CUSTOM_OPS_REGISTRY[att_name].inputs
+                errors.append(f"Custom attention op '{att_name}' inputs {att_inputs} do not match expected {exp_inputs}.")
+    except (
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as exc:
+        errors.append(f"Failed parsing flash_attention snapshot {flash_file.name}: {exc}")
     return errors
 
 
@@ -276,41 +295,12 @@ def verify_custom_ops_grounding(snapshots_dir: Path | None = None) -> list[str]:
         if not schema.name:
             errors.append("Custom op has empty name.")
         if schema.domain not in ("ml.switcheroo.custom", "collective", "quantization"):
-            errors.append(
-                f"Custom op '{op_name}' has invalid domain '{schema.domain}', expected 'ml.switcheroo.custom', 'collective', or 'quantization'."
-            )
+            errors.append(f"Custom op '{op_name}' has invalid domain '{schema.domain}', expected 'ml.switcheroo.custom', 'collective', or 'quantization'.")
         if not schema.outputs:
             errors.append(f"Custom op '{op_name}' has no defined outputs.")
 
     if snapshots_dir is not None:
-        flash_candidates = sorted(snapshots_dir.glob("*flash_attention*.json"))
-        if flash_candidates:
-            flash_file = flash_candidates[-1]
-            try:
-                _load_snapshot_symbol_map(flash_file)
-                for canonical_schema in CANONICAL_ATTENTION_SCHEMAS:
-                    att_name = canonical_schema.name
-                    exp_inputs = canonical_schema.inputs
-                    if att_name not in CUSTOM_OPS_REGISTRY:
-                        errors.append(
-                            f"Custom attention op '{att_name}' missing from CUSTOM_OPS_REGISTRY."
-                        )
-                    else:
-                        att_schema = CUSTOM_OPS_REGISTRY[att_name]
-                        if att_schema.inputs != exp_inputs:
-                            errors.append(
-                                f"Custom attention op '{att_name}' inputs {att_schema.inputs} do not match expected {exp_inputs}."
-                            )
-            except (
-                ValueError,
-                OSError,
-                KeyError,
-                TypeError,
-                json.JSONDecodeError,
-            ) as exc:
-                errors.append(
-                    f"Failed parsing flash_attention snapshot {flash_file.name}: {exc}"
-                )
+        errors.extend(_verify_flash_attention_snapshot(snapshots_dir))
 
     return errors
 
@@ -334,52 +324,24 @@ def verify_array_api_grounding(snapshots_dir: Path) -> list[str]:
 
     for op_name, schema in ARRAY_API_REGISTRY.items():
         if op_name not in snap_symbols and f"array_api.{op_name}" not in snap_symbols:
-            errors.append(
-                f"Array API op '{op_name}' is not grounded in {array_api_file.name} snapshot."
-            )
+            errors.append(f"Array API op '{op_name}' is not grounded in {array_api_file.name} snapshot.")
             continue
 
         sym_record = snap_symbols.get(op_name) or snap_symbols[f"array_api.{op_name}"]
         raw_params = sym_record.get("params")
         snap_params = raw_params if isinstance(raw_params, list) else []
         if schema.inputs:
-            pos_params = [
-                str(p["name"])
-                for p in snap_params
-                if isinstance(p, dict)
-                and p.get("kind") in ("POSITIONAL_ONLY", "POSITIONAL_OR_KEYWORD")
-                and isinstance(p.get("name"), str)
-            ]
+            pos_params = [str(p["name"]) for p in snap_params if isinstance(p, dict) and p.get("kind") in ("POSITIONAL_ONLY", "POSITIONAL_OR_KEYWORD") and isinstance(p.get("name"), str)]
             for idx, inp in enumerate(schema.inputs):
-                if (
-                    idx < len(pos_params)
-                    and inp != pos_params[idx]
-                    and inp not in pos_params
-                ):
-                    errors.append(
-                        f"Array API op '{op_name}' input {idx} ('{inp}') does not match snapshot parameter '{pos_params[idx]}'."
-                    )
+                if idx < len(pos_params) and inp != pos_params[idx] and inp not in pos_params:
+                    errors.append(f"Array API op '{op_name}' input {idx} ('{inp}') does not match snapshot parameter '{pos_params[idx]}'.")
         if schema.attributes:
-            kw_params = {
-                str(p["name"]): p
-                for p in snap_params
-                if isinstance(p, dict)
-                and p.get("kind") == "KEYWORD_ONLY"
-                and isinstance(p.get("name"), str)
-            }
+            kw_params = {str(p["name"]): p for p in snap_params if isinstance(p, dict) and p.get("kind") == "KEYWORD_ONLY" and isinstance(p.get("name"), str)}
             raw_kwargs = sym_record.get("kwargs")
-            kwargs_list = (
-                [str(k) for k in raw_kwargs] if isinstance(raw_kwargs, list) else []
-            )
+            kwargs_list = [str(k) for k in raw_kwargs] if isinstance(raw_kwargs, list) else []
             for attr_name in schema.attributes:
-                if (
-                    kw_params
-                    and attr_name not in kw_params
-                    and attr_name not in kwargs_list
-                ):
-                    errors.append(
-                        f"Array API op '{op_name}' attribute '{attr_name}' is not recognized in {array_api_file.name}."
-                    )
+                if kw_params and attr_name not in kw_params and attr_name not in kwargs_list:
+                    errors.append(f"Array API op '{op_name}' attribute '{attr_name}' is not recognized in {array_api_file.name}.")
     return errors
 
 
@@ -402,25 +364,17 @@ def verify_aten_grounding(snapshots_dir: Path) -> list[str]:
 
     for op_name, schema in ATEN_REGISTRY.items():
         if op_name not in snap_symbols and f"aten.{op_name}" not in snap_symbols:
-            errors.append(
-                f"ATen op '{op_name}' is not grounded in {aten_file.name} snapshot."
-            )
+            errors.append(f"ATen op '{op_name}' is not grounded in {aten_file.name} snapshot.")
             continue
 
         sym_record = snap_symbols.get(op_name) or snap_symbols[f"aten.{op_name}"]
         if schema.attributes:
             raw_params = sym_record.get("params")
             snap_params = raw_params if isinstance(raw_params, list) else []
-            known_params = {
-                str(p["name"])
-                for p in snap_params
-                if isinstance(p, dict) and p.get("name")
-            }
+            known_params = {str(p["name"]) for p in snap_params if isinstance(p, dict) and p.get("name")}
             for attr_name in schema.attributes:
                 if known_params and attr_name not in known_params:
-                    errors.append(
-                        f"ATen op '{op_name}' attribute '{attr_name}' is not recognized in {aten_file.name}."
-                    )
+                    errors.append(f"ATen op '{op_name}' attribute '{attr_name}' is not recognized in {aten_file.name}.")
     return errors
 
 
@@ -443,36 +397,19 @@ def verify_collectives_grounding(snapshots_dir: Path) -> list[str]:
 
     core_collectives = ["all_reduce", "all_gather", "reduce_scatter", "all_to_all"]
     for coll_name in core_collectives:
-        if (
-            coll_name not in COLLECTIVE_OPS_REGISTRY
-            and f"collective.{coll_name}" not in COLLECTIVE_OPS_REGISTRY
-        ):
-            errors.append(
-                f"Collective operation '{coll_name}' missing from COLLECTIVE_OPS_REGISTRY."
-            )
+        if coll_name not in COLLECTIVE_OPS_REGISTRY and f"collective.{coll_name}" not in COLLECTIVE_OPS_REGISTRY:
+            errors.append(f"Collective operation '{coll_name}' missing from COLLECTIVE_OPS_REGISTRY.")
             continue
 
         if coll_name not in snap_symbols and f"nccl.{coll_name}" not in snap_symbols:
-            errors.append(
-                f"Collective op '{coll_name}' is not grounded in {nccl_file.name} snapshot."
-            )
+            errors.append(f"Collective op '{coll_name}' is not grounded in {nccl_file.name} snapshot.")
             continue
 
-        schema = (
-            COLLECTIVE_OPS_REGISTRY.get(coll_name)
-            or COLLECTIVE_OPS_REGISTRY[f"collective.{coll_name}"]
-        )
-        if (
-            coll_name in ("all_reduce", "reduce_scatter")
-            and "reduction_op" not in schema.attributes
-        ):
-            errors.append(
-                f"Collective op '{coll_name}' schema missing 'reduction_op' attribute."
-            )
+        schema = COLLECTIVE_OPS_REGISTRY.get(coll_name) or COLLECTIVE_OPS_REGISTRY[f"collective.{coll_name}"]
+        if coll_name in ("all_reduce", "reduce_scatter") and "reduction_op" not in schema.attributes:
+            errors.append(f"Collective op '{coll_name}' schema missing 'reduction_op' attribute.")
         if "comm" not in schema.attributes:
-            errors.append(
-                f"Collective op '{coll_name}' schema missing 'comm' communicator attribute."
-            )
+            errors.append(f"Collective op '{coll_name}' schema missing 'comm' communicator attribute.")
 
     return errors
 
@@ -488,14 +425,33 @@ def verify_onnx_grounding() -> list[str]:
         errors.append("ONNX registry is empty.")
     for op_name, schema in ONNX_REGISTRY.items():
         if schema.name != op_name:
-            errors.append(
-                f"ONNX schema name mismatch: key '{op_name}' != schema.name '{schema.name}'."
-            )
+            errors.append(f"ONNX schema name mismatch: key '{op_name}' != schema.name '{schema.name}'.")
         if not (schema.domain == "ai.onnx" or schema.domain.startswith("ai.onnx.")):
-            errors.append(
-                f"ONNX op '{op_name}' has unexpected domain '{schema.domain}'."
-            )
+            errors.append(f"ONNX op '{op_name}' has unexpected domain '{schema.domain}'.")
     return errors
+
+
+def _collect_mlir_snapshot_symbols(
+    categories: Mapping[str, JsonValue],
+) -> tuple[set[str], dict[str, dict[str, JsonValue]]]:
+    """Extract dialect prefixes and symbol records from an MLIR snapshot categories mapping.
+
+    Args:
+        categories (Mapping[str, JsonValue]): Categories dictionary from MLIR snapshot JSON.
+
+    Returns:
+        tuple[set[str], dict[str, dict[str, JsonValue]]]: ``(known_dialects, known_symbols)``.
+    """
+    known_dialects: set[str] = set()
+    known_symbols: dict[str, dict[str, JsonValue]] = {}
+    for cat_items in categories.values():
+        if isinstance(cat_items, list):
+            for item in cat_items:
+                if isinstance(item, dict) and isinstance(item.get("api_path"), str):
+                    api_p = str(item["api_path"])
+                    known_dialects.add(api_p.split(".")[0])
+                    known_symbols[api_p] = item
+    return known_dialects, known_symbols
 
 
 def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
@@ -510,31 +466,19 @@ def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
     mlir_file = snapshots_dir / "mlir_v0.4.30.json"
     if not mlir_file.is_file():
         candidates = sorted(snapshots_dir.glob("mlir*.json"))
-        if candidates:
-            mlir_file = candidates[-1]
-        else:
+        if not candidates:
             return []
+        mlir_file = candidates[-1]
 
     errors: list[str] = []
-    with open(mlir_file, "r", encoding="utf-8") as f:
+    with open(mlir_file, encoding="utf-8") as f:
         data = json.load(f)
 
-    known_dialects: set[str] = set()
-    known_symbols: dict[str, dict[str, JsonValue]] = {}
-    for cat_items in data.get("categories", {}).values():
-        if isinstance(cat_items, list):
-            for item in cat_items:
-                if isinstance(item, dict) and isinstance(item.get("api_path"), str):
-                    api_p = str(item["api_path"])
-                    prefix = api_p.split(".")[0]
-                    known_dialects.add(prefix)
-                    known_symbols[api_p] = item
+    known_dialects, known_symbols = _collect_mlir_snapshot_symbols(data.get("categories", {}))
 
     for dialect in CORE_MLIR_DIALECTS:
         if known_dialects and dialect not in known_dialects:
-            errors.append(
-                f"Core MLIR dialect '{dialect}' is not grounded in {mlir_file.name}."
-            )
+            errors.append(f"Core MLIR dialect '{dialect}' is not grounded in {mlir_file.name}.")
 
     for op_name, schema in MLIR_REGISTRY.items():
         sym_record = known_symbols.get(op_name)
@@ -542,11 +486,37 @@ def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
             known_attrs = _extract_known_attributes(sym_record)
             for attr_name in schema.attributes:
                 if known_attrs and attr_name not in known_attrs:
-                    errors.append(
-                        f"MLIR op '{op_name}' attribute '{attr_name}' is not grounded in {mlir_file.name} snapshot attributes {list(known_attrs)}."
-                    )
+                    errors.append(f"MLIR op '{op_name}' attribute '{attr_name}' is not grounded in {mlir_file.name} snapshot attributes {list(known_attrs)}.")
 
     return errors
+
+
+def _resolve_ir_symbol(mod_path: str, obj_name: str, allow_nested: bool) -> bool:
+    """Resolve a symbol in a module (or nested parent class) via inspect.getmembers.
+
+    Args:
+        mod_path (str): Module path or dotted parent class path.
+        obj_name (str): Symbol name to resolve.
+        allow_nested (bool): Whether to fall back to resolving parent class members.
+
+    Returns:
+        bool: True if the symbol is resolvable, False otherwise.
+    """
+    try:
+        mod = importlib.import_module(mod_path)
+        _ = dict(inspect.getmembers(mod))[obj_name]
+    except (ImportError, AttributeError, KeyError):
+        if allow_nested and "." in mod_path:
+            try:
+                parent_mod_path, parent_cls = mod_path.rsplit(".", 1)
+                parent_mod = importlib.import_module(parent_mod_path)
+                parent = dict(inspect.getmembers(parent_mod))[parent_cls]
+                _ = dict(inspect.getmembers(parent))[obj_name]
+            except (ImportError, AttributeError, KeyError):
+                return False
+        else:
+            return False
+    return True
 
 
 def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
@@ -566,7 +536,7 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
         ir_file = candidates[-1]
 
     errors: list[str] = []
-    with open(ir_file, "r", encoding="utf-8") as f:
+    with open(ir_file, encoding="utf-8") as f:
         data = json.load(f)
 
     for cls_entry in data.get("categories", {}).get("classes", []):
@@ -574,33 +544,15 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
         if not path:
             continue
         mod_path, obj_name = path.rsplit(".", 1)
-        try:
-            mod = importlib.import_module(mod_path)
-            _ = mod.__dict__[obj_name]
-        except (ImportError, AttributeError, KeyError):
-            if "." in mod_path:
-                try:
-                    parent_mod_path, parent_cls = mod_path.rsplit(".", 1)
-                    parent = importlib.import_module(parent_mod_path).__dict__[
-                        parent_cls
-                    ]
-                    _ = parent.__dict__[obj_name]
-                except (ImportError, AttributeError, KeyError):
-                    errors.append(
-                        f"Exported symbol '{path}' not resolvable at runtime."
-                    )
-            else:
-                errors.append(f"Exported symbol '{path}' not resolvable at runtime.")
+        if not _resolve_ir_symbol(mod_path, obj_name, allow_nested=True):
+            errors.append(f"Exported symbol '{path}' not resolvable at runtime.")
 
     for fn_entry in data.get("categories", {}).get("functions", []):
         path = fn_entry.get("api_path", "")
         if not path:
             continue
         mod_path, obj_name = path.rsplit(".", 1)
-        try:
-            mod = importlib.import_module(mod_path)
-            _ = mod.__dict__[obj_name]
-        except (ImportError, AttributeError, KeyError):
+        if not _resolve_ir_symbol(mod_path, obj_name, allow_nested=False):
             errors.append(f"Exported function '{path}' not resolvable at runtime.")
 
     return errors
@@ -621,7 +573,7 @@ def verify_rdna_grounding(snapshots_dir: Path) -> list[str]:
 
     errors: list[str] = []
     rdna_file = candidates[-1]
-    with open(rdna_file, "r", encoding="utf-8") as f:
+    with open(rdna_file, encoding="utf-8") as f:
         data = json.load(f)
 
     instructions = data.get("categories", {}).get("instructions", [])
@@ -630,15 +582,11 @@ def verify_rdna_grounding(snapshots_dir: Path) -> list[str]:
             continue
         name = inst.get("name") or inst.get("mnemonic")
         if not name:
-            errors.append(
-                f"RDNA instruction missing name/mnemonic in {rdna_file.name}."
-            )
+            errors.append(f"RDNA instruction missing name/mnemonic in {rdna_file.name}.")
             continue
         vopd_slot = inst.get("vopd_slot")
         if vopd_slot is not None and vopd_slot not in ("X", "Y", "BOTH"):
-            errors.append(
-                f"RDNA instruction '{name}' has invalid vopd_slot '{vopd_slot}'."
-            )
+            errors.append(f"RDNA instruction '{name}' has invalid vopd_slot '{vopd_slot}'.")
     return errors
 
 
@@ -657,7 +605,7 @@ def verify_sass_grounding(snapshots_dir: Path) -> list[str]:
 
     errors: list[str] = []
     sass_file = candidates[-1]
-    with open(sass_file, "r", encoding="utf-8") as f:
+    with open(sass_file, encoding="utf-8") as f:
         data = json.load(f)
 
     instructions = data.get("categories", {}).get("instructions", [])
@@ -666,15 +614,11 @@ def verify_sass_grounding(snapshots_dir: Path) -> list[str]:
             continue
         name = inst.get("name") or inst.get("mnemonic")
         if not name:
-            errors.append(
-                f"SASS instruction missing name/mnemonic in {sass_file.name}."
-            )
+            errors.append(f"SASS instruction missing name/mnemonic in {sass_file.name}.")
             continue
         latency = inst.get("execution_latency")
         if latency is not None and not isinstance(latency, (int, list, tuple)):
-            errors.append(
-                f"SASS instruction '{name}' has invalid execution_latency '{latency}'."
-            )
+            errors.append(f"SASS instruction '{name}' has invalid execution_latency '{latency}'.")
     return errors
 
 
@@ -694,7 +638,7 @@ def verify_wgsl_grounding(snapshots_dir: Path) -> list[str]:
         return []
 
     errors: list[str] = []
-    with open(wgsl_file, "r", encoding="utf-8") as f:
+    with open(wgsl_file, encoding="utf-8") as f:
         data = json.load(f)
 
     for op in data.get("ops", []):
@@ -716,9 +660,7 @@ def verify_ptx_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: Diagnostic error messages for ungrounded PTX operations.
     """
-    return _verify_category_items_have_identifiers(
-        snapshots_dir, "*ptx*.json", "PTX", allow_mnemonic=True
-    )
+    return _verify_category_items_have_identifiers(snapshots_dir, "*ptx*.json", "PTX", allow_mnemonic=True)
 
 
 def verify_metal_grounding(snapshots_dir: Path) -> list[str]:
@@ -730,9 +672,7 @@ def verify_metal_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: Diagnostic error messages for ungrounded Metal operations.
     """
-    return _verify_category_items_have_identifiers(
-        snapshots_dir, "*metal*.json", "Metal", allow_mnemonic=False
-    )
+    return _verify_category_items_have_identifiers(snapshots_dir, "*metal*.json", "Metal", allow_mnemonic=False)
 
 
 def verify_wasm_grounding(snapshots_dir: Path) -> list[str]:
@@ -744,9 +684,7 @@ def verify_wasm_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: Diagnostic error messages for ungrounded WASM operations.
     """
-    return _verify_category_items_have_identifiers(
-        snapshots_dir, "*wasm*.json", "WASM", allow_mnemonic=False
-    )
+    return _verify_category_items_have_identifiers(snapshots_dir, "*wasm*.json", "WASM", allow_mnemonic=False)
 
 
 def verify_quantization_grounding() -> list[str]:
@@ -759,16 +697,10 @@ def verify_quantization_grounding() -> list[str]:
     if not QUANTIZATION_OPS_REGISTRY:
         errors.append("QUANTIZATION_OPS_REGISTRY is empty.")
     for op_name, schema in QUANTIZATION_OPS_REGISTRY.items():
-        if not schema.name or (
-            schema.name != op_name and not schema.name.endswith(f".{op_name}")
-        ):
-            errors.append(
-                f"Quantization op key '{op_name}' != schema.name '{schema.name}'."
-            )
+        if not schema.name or (schema.name != op_name and not schema.name.endswith(f".{op_name}")):
+            errors.append(f"Quantization op key '{op_name}' != schema.name '{schema.name}'.")
         if schema.domain not in ("quantization", "ml.switcheroo.quant"):
-            errors.append(
-                f"Quantization op '{op_name}' has invalid domain '{schema.domain}'."
-            )
+            errors.append(f"Quantization op '{op_name}' has invalid domain '{schema.domain}'.")
     return errors
 
 
@@ -826,6 +758,36 @@ def _verify_local_schemas_only() -> int:
     return 0
 
 
+def _run_all_snapshot_verifiers(snapshots_dir: Path) -> list[str]:
+    """Execute all live snapshot and local schema grounding verifiers.
+
+    Args:
+        snapshots_dir (Path): Directory containing ground-truth snapshots.
+
+    Returns:
+        list[str]: Combined list of all diagnostic error messages.
+    """
+    return (
+        verify_stablehlo_grounding(snapshots_dir)
+        + verify_mlir_grounding(snapshots_dir)
+        + verify_ir_snapshot_grounding(snapshots_dir)
+        + verify_custom_ops_grounding(snapshots_dir)
+        + verify_onnx_grounding()
+        + verify_rdna_grounding(snapshots_dir)
+        + verify_sass_grounding(snapshots_dir)
+        + verify_wgsl_grounding(snapshots_dir)
+        + verify_ptx_grounding(snapshots_dir)
+        + verify_metal_grounding(snapshots_dir)
+        + verify_wasm_grounding(snapshots_dir)
+        + verify_array_api_grounding(snapshots_dir)
+        + verify_aten_grounding(snapshots_dir)
+        + verify_collectives_grounding(snapshots_dir)
+        + verify_quantization_grounding()
+        + verify_state_ops_grounding()
+        + verify_odl_grounding()
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run anti-hallucination grounding verification for all schemas.
 
@@ -835,9 +797,7 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         int: Exit status code (0 for success, non-zero for failure).
     """
-    parser = argparse.ArgumentParser(
-        description="Verify anti-hallucination grounding against framework snapshots."
-    )
+    parser = argparse.ArgumentParser(description="Verify anti-hallucination grounding against framework snapshots.")
     parser.add_argument(
         "--snapshots-dir",
         type=str,
@@ -870,54 +830,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if not any(snapshots_dir.glob("*.json")):
         if args.strict:
-            print(
-                "[ERROR] Snapshot directory contains no snapshot files in strict mode."
-            )
+            print("[ERROR] Snapshot directory contains no snapshot files in strict mode.")
             return 1
-        print(
-            "[WARNING] Snapshot directory contains no snapshot files. Skipping live snapshot checks."
-        )
+        print("[WARNING] Snapshot directory contains no snapshot files. Skipping live snapshot checks.")
         return _verify_local_schemas_only()
 
     print(f"Using snapshots directory: {snapshots_dir}")
-
-    stablehlo_errors = verify_stablehlo_grounding(snapshots_dir)
-    mlir_errors = verify_mlir_grounding(snapshots_dir)
-    ir_errors = verify_ir_snapshot_grounding(snapshots_dir)
-    custom_errors = verify_custom_ops_grounding(snapshots_dir)
-    onnx_errors = verify_onnx_grounding()
-    rdna_errors = verify_rdna_grounding(snapshots_dir)
-    sass_errors = verify_sass_grounding(snapshots_dir)
-    wgsl_errors = verify_wgsl_grounding(snapshots_dir)
-    ptx_errors = verify_ptx_grounding(snapshots_dir)
-    metal_errors = verify_metal_grounding(snapshots_dir)
-    wasm_errors = verify_wasm_grounding(snapshots_dir)
-    array_api_errors = verify_array_api_grounding(snapshots_dir)
-    aten_errors = verify_aten_grounding(snapshots_dir)
-    collectives_errors = verify_collectives_grounding(snapshots_dir)
-    quant_errors = verify_quantization_grounding()
-    state_errors = verify_state_ops_grounding()
-    odl_errors = verify_odl_grounding()
-
-    all_errors = (
-        stablehlo_errors
-        + mlir_errors
-        + ir_errors
-        + custom_errors
-        + onnx_errors
-        + rdna_errors
-        + sass_errors
-        + wgsl_errors
-        + ptx_errors
-        + metal_errors
-        + wasm_errors
-        + array_api_errors
-        + aten_errors
-        + collectives_errors
-        + quant_errors
-        + state_errors
-        + odl_errors
-    )
+    all_errors = _run_all_snapshot_verifiers(snapshots_dir)
 
     print(f"Audited StableHLO schemas: {len(STABLEHLO_REGISTRY)} ops.")
     print(f"Audited MLIR dialects: {len(CORE_MLIR_DIALECTS)} dialects.")
@@ -932,9 +851,7 @@ def main(argv: list[str] | None = None) -> int:
     print("Audited Low-Level & Hardware ISAs (RDNA, SASS, WGSL, PTX, Metal, WASM).")
 
     if all_errors:
-        print(
-            f"\n[FAILURE] Found {len(all_errors)} ungrounded symbol(s) or schema defect(s):"
-        )
+        print(f"\n[FAILURE] Found {len(all_errors)} ungrounded symbol(s) or schema defect(s):")
         for err in all_errors:
             print(f"  - {err}")
         return 1

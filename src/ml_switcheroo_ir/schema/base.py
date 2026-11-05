@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
 import contextlib
 import json
-from pathlib import Path
 import threading
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from pathlib import Path
 
 import pydantic
 
@@ -60,9 +60,7 @@ class RawOpSchemaSpec(pydantic.BaseModel):
     domain: str = ""
     version: int = 1
     schema_version: int | None = None
-    attributes: list[RawOpAttributeSpec] | dict[str, RawOpAttributeSpec] = (
-        pydantic.Field(default_factory=list)
-    )
+    attributes: list[RawOpAttributeSpec] | dict[str, RawOpAttributeSpec] = pydantic.Field(default_factory=list)
     inputs: list[str] = pydantic.Field(default_factory=list)
     outputs: list[str] = pydantic.Field(default_factory=list)
     latency: int | None = None
@@ -236,9 +234,7 @@ class CustomOpSchema(pydantic.BaseModel):
 
     name: str
     domain: str
-    attributes: (
-        list[CustomAttributeSchema] | dict[str, CustomAttributeSchema | OpAttribute]
-    ) = pydantic.Field(default_factory=list)
+    attributes: list[CustomAttributeSchema] | dict[str, CustomAttributeSchema | OpAttribute] = pydantic.Field(default_factory=list)
     inputs: list[str] = pydantic.Field(default_factory=list)
     outputs: list[str] = pydantic.Field(default_factory=list)
     version: int = 1
@@ -248,11 +244,7 @@ class CustomOpSchema(pydantic.BaseModel):
         self,
         name: str,
         domain: str,
-        attributes: (
-            Sequence[CustomAttributeSchema]
-            | Mapping[str, CustomAttributeSchema | OpAttribute]
-            | None
-        ) = None,
+        attributes: (Sequence[CustomAttributeSchema] | Mapping[str, CustomAttributeSchema | OpAttribute] | None) = None,
         inputs: Sequence[str] | None = None,
         outputs: Sequence[str] | None = None,
         version: int = 1,
@@ -270,13 +262,7 @@ class CustomOpSchema(pydantic.BaseModel):
             version (int): Operator version (default: 1).
             schema_version (int | None): Optional upstream opset/schema version.
         """
-        norm_attrs: (
-            list[CustomAttributeSchema] | dict[str, CustomAttributeSchema | OpAttribute]
-        ) = (
-            dict(attributes)
-            if isinstance(attributes, Mapping)
-            else list(attributes or [])
-        )
+        norm_attrs: list[CustomAttributeSchema] | dict[str, CustomAttributeSchema | OpAttribute] = dict(attributes) if isinstance(attributes, Mapping) else list(attributes or [])
         super().__init__(
             name=name,
             domain=domain,
@@ -338,12 +324,7 @@ def parse_op_schema_entry(
         OpSchema: Parsed operator schema.
     """
     raw_attrs_obj = op_data.get("attributes", [])
-    raw_attrs_seq = (
-        raw_attrs_obj
-        if isinstance(raw_attrs_obj, Sequence)
-        and not isinstance(raw_attrs_obj, (str, bytes))
-        else []
-    )
+    raw_attrs_seq = raw_attrs_obj if isinstance(raw_attrs_obj, Sequence) and not isinstance(raw_attrs_obj, (str, bytes)) else []
     attrs: list[CustomAttributeSchema] = [
         CustomAttributeSchema(
             name=str(a.get("name", "")),
@@ -357,18 +338,9 @@ def parse_op_schema_entry(
 
     raw_sv = op_data.get("schema_version")
     raw_inputs = op_data.get("inputs", [])
-    inputs_list = (
-        [str(x) for x in raw_inputs]
-        if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, (str, bytes))
-        else []
-    )
+    inputs_list = [str(x) for x in raw_inputs] if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, (str, bytes)) else []
     raw_outputs = op_data.get("outputs", [])
-    outputs_list = (
-        [str(x) for x in raw_outputs]
-        if isinstance(raw_outputs, Sequence)
-        and not isinstance(raw_outputs, (str, bytes))
-        else []
-    )
+    outputs_list = [str(x) for x in raw_outputs] if isinstance(raw_outputs, Sequence) and not isinstance(raw_outputs, (str, bytes)) else []
     raw_ver = op_data.get("version", 1)
     ver_int = int(raw_ver) if isinstance(raw_ver, (int, str)) else 1
 
@@ -408,7 +380,7 @@ def load_op_schema_catalog(
     registry: dict[str, OpSchema] = {}
     target = find_file_fn(filename, json_path)
     if target is not None and target.exists():
-        with open(target, "r", encoding="utf-8") as f:
+        with open(target, encoding="utf-8") as f:
             data = json.load(f)
         for op_data in data.get("ops", []):
             schema = parse_op_schema_entry(

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
 import copy
 import json
 import string
 import typing
-import typing_extensions
+from collections.abc import Collection, Mapping, Sequence
 
 import pydantic
+import typing_extensions
 
 from ml_switcheroo_ir.distributed import (
     LogicalMesh,
@@ -31,18 +31,7 @@ from ml_switcheroo_ir.types import (
 if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.graph import LogicalEdge, LogicalGraph, LogicalNode, NodeDict
 
-    RawGraphValue: typing_extensions.TypeAlias = (
-        AttributeValue
-        | InitializerValue
-        | JsonValue
-        | LogicalGraph
-        | LogicalMesh
-        | PartitionSpec
-        | PipelineTopologyConfig
-        | Collection["RawGraphValue"]
-        | Sequence["RawGraphValue"]
-        | Mapping[str, "RawGraphValue"]
-    )
+    RawGraphValue: typing_extensions.TypeAlias = AttributeValue | InitializerValue | JsonValue | LogicalGraph | LogicalMesh | PartitionSpec | PipelineTopologyConfig | Collection["RawGraphValue"] | Sequence["RawGraphValue"] | Mapping[str, "RawGraphValue"]
 else:
     RawGraphValue: typing_extensions.TypeAlias = JsonValue
 
@@ -130,9 +119,7 @@ SerializedGraphModel.model_rebuild()
 class ZstdCompressorProtocol(typing.Protocol):
     """Protocol for zstandard.ZstdCompressor."""
 
-    def stream_writer(
-        self, writer: typing.BinaryIO
-    ) -> typing.ContextManager[typing.BinaryIO]:
+    def stream_writer(self, writer: typing.BinaryIO) -> typing.ContextManager[typing.BinaryIO]:
         """Return context-managed binary stream writer.
 
         Args:
@@ -146,9 +133,7 @@ class ZstdCompressorProtocol(typing.Protocol):
 class ZstdDecompressorProtocol(typing.Protocol):
     """Protocol for zstandard.ZstdDecompressor."""
 
-    def stream_reader(
-        self, source: typing.BinaryIO
-    ) -> typing.ContextManager[typing.BinaryIO]:
+    def stream_reader(self, source: typing.BinaryIO) -> typing.ContextManager[typing.BinaryIO]:
         """Return context-managed binary stream reader.
 
         Args:
@@ -204,11 +189,7 @@ def _normalize_partition_axis_atom(
     Returns:
         PartitionAxisAtom: Normalized atom.
     """
-    return (
-        raw
-        if raw is None or (isinstance(raw, (str, int)) and not isinstance(raw, bool))
-        else str(raw)
-    )
+    return raw if raw is None or (isinstance(raw, (str, int)) and not isinstance(raw, bool)) else str(raw)
 
 
 def _normalize_partition_axis(
@@ -223,12 +204,7 @@ def _normalize_partition_axis(
         PartitionAxisElement: Normalized axis element.
     """
     if isinstance(raw, (list, tuple)):
-        return tuple(
-            tuple(_normalize_partition_axis_atom(sub) for sub in item)
-            if isinstance(item, (list, tuple))
-            else _normalize_partition_axis_atom(item)
-            for item in raw
-        )
+        return tuple(tuple(_normalize_partition_axis_atom(sub) for sub in item) if isinstance(item, (list, tuple)) else _normalize_partition_axis_atom(item) for item in raw)
     return _normalize_partition_axis_atom(raw)
 
 
@@ -262,11 +238,7 @@ def _coerce_attribute_value(val: RawGraphValue) -> AttributeValue:
         return val
     if isinstance(val, Mapping):
         return {str(k): _coerce_attribute_value(v) for k, v in val.items()}
-    return (
-        str(val)
-        if isinstance(val, (LogicalMesh, PartitionSpec, PipelineTopologyConfig))
-        else [_coerce_attribute_value(item) for item in val]
-    )
+    return str(val) if isinstance(val, (LogicalMesh, PartitionSpec, PipelineTopologyConfig)) else [_coerce_attribute_value(item) for item in val]
 
 
 def _coerce_initializer_value(val: RawGraphValue) -> InitializerValue:
@@ -323,33 +295,16 @@ def _parse_node_dict(
     version_val = int(raw_ver) if isinstance(raw_ver, (int, str)) else 1
 
     raw_attrs = ndata.get("attributes")
-    attributes_val: dict[str, AttributeValue] = (
-        {str(k): _coerce_attribute_value(v) for k, v in raw_attrs.items()}
-        if isinstance(raw_attrs, Mapping)
-        else {}
-    )
+    attributes_val: dict[str, AttributeValue] = {str(k): _coerce_attribute_value(v) for k, v in raw_attrs.items()} if isinstance(raw_attrs, Mapping) else {}
 
     raw_inputs = ndata.get("inputs")
-    inputs_val: list[str] = (
-        [str(x) for x in raw_inputs]
-        if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, (str, bytes))
-        else []
-    )
+    inputs_val: list[str] = [str(x) for x in raw_inputs] if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, (str, bytes)) else []
 
     raw_outputs = ndata.get("outputs")
-    outputs_val: list[str] | None = (
-        [str(x) for x in raw_outputs]
-        if isinstance(raw_outputs, Sequence)
-        and not isinstance(raw_outputs, (str, bytes))
-        else None
-    )
+    outputs_val: list[str] | None = [str(x) for x in raw_outputs] if isinstance(raw_outputs, Sequence) and not isinstance(raw_outputs, (str, bytes)) else None
 
     raw_shape = ndata.get("shape_metadata")
-    shape_val: tuple[DimensionType, ...] | None = (
-        tuple(int(d) if isinstance(d, int) else str(d) for d in raw_shape)
-        if isinstance(raw_shape, Sequence) and not isinstance(raw_shape, (str, bytes))
-        else None
-    )
+    shape_val: tuple[DimensionType, ...] | None = tuple(int(d) if isinstance(d, int) else str(d) for d in raw_shape) if isinstance(raw_shape, Sequence) and not isinstance(raw_shape, (str, bytes)) else None
 
     sharding_raw = ndata.get("sharding")
     sharding_val: PartitionSpec | None = None
@@ -357,47 +312,25 @@ def _parse_node_dict(
         sharding_val = sharding_raw
     elif isinstance(sharding_raw, Mapping):
         raw_axes = sharding_raw.get("axes", ())
-        axes_seq = (
-            raw_axes
-            if isinstance(raw_axes, Sequence) and not isinstance(raw_axes, (str, bytes))
-            else ()
-        )
-        sharding_val = PartitionSpec(
-            axes=tuple(_normalize_partition_axis(a) for a in axes_seq)
-        )
+        axes_seq = raw_axes if isinstance(raw_axes, Sequence) and not isinstance(raw_axes, (str, bytes)) else ()
+        sharding_val = PartitionSpec(axes=tuple(_normalize_partition_axis(a) for a in axes_seq))
 
     dtype_raw = ndata.get("dtype")
-    dtype_val: DType | None = (
-        dtype_raw
-        if isinstance(dtype_raw, DType)
-        else (DType.from_str(str(dtype_raw)) if dtype_raw is not None else None)
-    )
+    dtype_val: DType | None = dtype_raw if isinstance(dtype_raw, DType) else (DType.from_str(str(dtype_raw)) if dtype_raw is not None else None)
 
     output_specs_raw = ndata.get("output_specs")
     output_specs_val: list[TensorSpec] = []
-    for s in (
-        output_specs_raw
-        if isinstance(output_specs_raw, Sequence)
-        and not isinstance(output_specs_raw, (str, bytes))
-        else []
-    ):
+    for s in output_specs_raw if isinstance(output_specs_raw, Sequence) and not isinstance(output_specs_raw, (str, bytes)) else []:
         if isinstance(s, TensorSpec):
             output_specs_val.append(s)
         else:
             s_map = s if isinstance(s, Mapping) else {}
             raw_s_shape = s_map.get("shape", ())
-            s_shape: list[DimensionType] = (
-                [int(x) if isinstance(x, int) else str(x) for x in raw_s_shape]
-                if isinstance(raw_s_shape, Sequence)
-                and not isinstance(raw_s_shape, (str, bytes))
-                else []
-            )
+            s_shape: list[DimensionType] = [int(x) if isinstance(x, int) else str(x) for x in raw_s_shape] if isinstance(raw_s_shape, Sequence) and not isinstance(raw_s_shape, (str, bytes)) else []
             s_dtype = str(s_map.get("dtype", "float32"))
             raw_sparsity = s_map.get("sparsity")
             s_sparsity = str(raw_sparsity) if raw_sparsity is not None else None
-            output_specs_val.append(
-                TensorSpec(shape=s_shape, dtype=s_dtype, sparsity=s_sparsity)
-            )
+            output_specs_val.append(TensorSpec(shape=s_shape, dtype=s_dtype, sparsity=s_sparsity))
 
     subgraphs_val = _parse_subgraphs_from_node_dict(ndata, graph_cls)
     raw_ast_ref = ndata.get("source_ast_ref")
@@ -502,17 +435,9 @@ def _parse_mesh_dict(
     if not isinstance(mesh_data, Mapping) or not mesh_data:
         return None
     raw_webrtc = mesh_data.get("webrtc_topology")
-    webrtc_topo = (
-        WebRTCSignalingTopology.model_validate(raw_webrtc)
-        if isinstance(raw_webrtc, Mapping)
-        else None
-    )
+    webrtc_topo = WebRTCSignalingTopology.model_validate(raw_webrtc) if isinstance(raw_webrtc, Mapping) else None
     raw_shape = mesh_data.get("shape", {})
-    shape_dict: dict[str, int] = (
-        {str(k): int(v) for k, v in raw_shape.items() if isinstance(v, (int, str))}
-        if isinstance(raw_shape, Mapping)
-        else {}
-    )
+    shape_dict: dict[str, int] = {str(k): int(v) for k, v in raw_shape.items() if isinstance(v, (int, str))} if isinstance(raw_shape, Mapping) else {}
     return LogicalMesh(shape=shape_dict, webrtc_topology=webrtc_topo)
 
 
@@ -535,18 +460,11 @@ def _parse_input_specs_dict(
                 input_specs[str(k)] = v
             elif isinstance(v, Mapping):
                 raw_shape = v.get("shape", ())
-                shape_seq: list[DimensionType] = (
-                    [int(x) if isinstance(x, int) else str(x) for x in raw_shape]
-                    if isinstance(raw_shape, Sequence)
-                    and not isinstance(raw_shape, (str, bytes))
-                    else []
-                )
+                shape_seq: list[DimensionType] = [int(x) if isinstance(x, int) else str(x) for x in raw_shape] if isinstance(raw_shape, Sequence) and not isinstance(raw_shape, (str, bytes)) else []
                 dtype_str = str(v.get("dtype", "float32"))
                 raw_sparsity = v.get("sparsity")
                 sparsity_str = str(raw_sparsity) if raw_sparsity is not None else None
-                input_specs[str(k)] = TensorSpec(
-                    shape=shape_seq, dtype=dtype_str, sparsity=sparsity_str
-                )
+                input_specs[str(k)] = TensorSpec(shape=shape_seq, dtype=dtype_str, sparsity=sparsity_str)
     return input_specs
 
 
@@ -697,6 +615,66 @@ def _stream_parse_nodes_section(
         nodes[str(nid)] = _parse_node_dict(ndata, graph_cls)
 
 
+def _unpack_edge_item(
+    edge: LogicalEdge | Mapping[str, RawGraphValue],
+) -> tuple[str, str, int | None, int, str | None]:
+    """Extract normalized ``(source, target, source_idx, target_idx, value_name)`` from an edge item.
+
+    Args:
+        edge (LogicalEdge | Mapping[str, RawGraphValue]): Edge instance or dictionary.
+
+    Returns:
+        tuple[str, str, int | None, int, str | None]: Normalized edge fields.
+    """
+    from ml_switcheroo_ir.graph import LogicalEdge as _LogicalEdge
+
+    if isinstance(edge, _LogicalEdge):
+        return (
+            edge.source,
+            edge.target,
+            edge.source_idx,
+            edge.target_idx,
+            edge.value_name,
+        )
+    src = str(edge.get("source", ""))
+    tgt = str(edge.get("target", ""))
+    raw_src_idx = edge.get("source_idx", 0)
+    src_idx = int(raw_src_idx) if isinstance(raw_src_idx, int) else None
+    raw_tgt_idx = edge.get("target_idx", 0)
+    tgt_idx = int(raw_tgt_idx) if isinstance(raw_tgt_idx, int) else 0
+    raw_val_name = edge.get("value_name")
+    val_name = str(raw_val_name) if raw_val_name is not None else None
+    return src, tgt, src_idx, tgt_idx, val_name
+
+
+def _resolve_edge_src_name(
+    src: str,
+    src_idx: int | None,
+    val_name: str | None,
+    nodes: Mapping[str, LogicalNode],
+    clear_existing: bool,
+) -> str:
+    """Resolve the upstream SSA value name for an edge.
+
+    Args:
+        src (str): Source node ID or SSA value name.
+        src_idx (int | None): Optional source port index.
+        val_name (str | None): Explicit edge value name.
+        nodes (Mapping[str, LogicalNode]): Graph nodes dictionary.
+        clear_existing (bool): Whether existing node inputs were cleared.
+
+    Returns:
+        str: Resolved upstream SSA value name.
+    """
+    if val_name and src not in nodes:
+        return str(val_name)
+    if src in nodes and src_idx is not None and (clear_existing or src_idx != 0):
+        return nodes[src].get_output_name(int(src_idx))
+    if val_name:
+        return str(val_name)
+    return src
+
+
 def _apply_edges_list(
     nodes: dict[str, LogicalNode],
     edges_list: Sequence[LogicalEdge | Mapping[str, RawGraphValue]],
@@ -715,8 +693,6 @@ def _apply_edges_list(
         edge_value_names (dict[tuple[str, int], str] | None): Optional mapping of
             (target_id, target_idx) to explicit edge value_name metadata.
     """
-    from ml_switcheroo_ir.graph import LogicalEdge as _LogicalEdge
-
     active_val_names = edge_value_names if edge_value_names is not None else {}
     if clear_existing:
         for node in nodes.values():
@@ -726,35 +702,12 @@ def _apply_edges_list(
     seen_ports: set[tuple[str, int, str]] = set()
 
     for edge in edges_list:
-        if isinstance(edge, _LogicalEdge):
-            src = edge.source
-            tgt = edge.target
-            src_idx = edge.source_idx
-            tgt_idx = edge.target_idx
-            val_name = edge.value_name
-        else:
-            src = str(edge.get("source", ""))
-            tgt = str(edge.get("target", ""))
-            raw_src_idx = edge.get("source_idx", 0)
-            src_idx = int(raw_src_idx) if isinstance(raw_src_idx, int) else None
-            raw_tgt_idx = edge.get("target_idx", 0)
-            tgt_idx = int(raw_tgt_idx) if isinstance(raw_tgt_idx, int) else 0
-            raw_val_name = edge.get("value_name")
-            val_name = str(raw_val_name) if raw_val_name is not None else None
-
+        src, tgt, src_idx, tgt_idx, val_name = _unpack_edge_item(edge)
         if tgt not in nodes:
             continue
 
         target_node = nodes[tgt]
-        if val_name and src not in nodes:
-            src_name = str(val_name)
-        elif src in nodes and src_idx is not None and (clear_existing or src_idx != 0):
-            src_name = nodes[src].get_output_name(int(src_idx))
-        elif val_name:
-            src_name = str(val_name)
-        else:
-            src_name = src
-
+        src_name = _resolve_edge_src_name(src, src_idx, val_name, nodes, clear_existing)
         port_key = (tgt, tgt_idx, src_name)
         if port_key not in seen_ports:
             seen_ports.add(port_key)
@@ -786,9 +739,7 @@ def _build_graph_from_parsed_sections(
     edge_value_names: dict[tuple[str, int], str] = {}
     edges_data = meta.get("edges")
     if isinstance(edges_data, list):
-        typed_edges: list[LogicalEdge | Mapping[str, RawGraphValue]] = [
-            e for e in edges_data if isinstance(e, Mapping)
-        ]
+        typed_edges: list[LogicalEdge | Mapping[str, RawGraphValue]] = [e for e in edges_data if isinstance(e, Mapping)]
         _apply_edges_list(
             nodes,
             typed_edges,
@@ -797,31 +748,13 @@ def _build_graph_from_parsed_sections(
         )
 
     pipe_topo_raw = meta.get("pipeline_topology")
-    pipe_topo = (
-        PipelineTopologyConfig.model_validate(pipe_topo_raw)
-        if isinstance(pipe_topo_raw, Mapping)
-        else None
-    )
+    pipe_topo = PipelineTopologyConfig.model_validate(pipe_topo_raw) if isinstance(pipe_topo_raw, Mapping) else None
     inputs_data = meta.get("inputs")
-    inputs_list: list[str] = (
-        [str(x) for x in inputs_data]
-        if isinstance(inputs_data, Sequence)
-        and not isinstance(inputs_data, (str, bytes))
-        else []
-    )
+    inputs_list: list[str] = [str(x) for x in inputs_data] if isinstance(inputs_data, Sequence) and not isinstance(inputs_data, (str, bytes)) else []
     outputs_data = meta.get("outputs")
-    outputs_list: list[str] | None = (
-        [str(x) for x in outputs_data]
-        if isinstance(outputs_data, Sequence)
-        and not isinstance(outputs_data, (str, bytes))
-        else None
-    )
+    outputs_list: list[str] | None = [str(x) for x in outputs_data] if isinstance(outputs_data, Sequence) and not isinstance(outputs_data, (str, bytes)) else None
     inits_raw = meta.get("initializers")
-    inits_dict: dict[str, InitializerValue] = (
-        {str(k): _coerce_initializer_value(v) for k, v in inits_raw.items()}
-        if isinstance(inits_raw, Mapping)
-        else {}
-    )
+    inits_dict: dict[str, InitializerValue] = {str(k): _coerce_initializer_value(v) for k, v in inits_raw.items()} if isinstance(inits_raw, Mapping) else {}
     graph = graph_cls(
         name=str(meta.get("name", "Model")),
         nodes=nodes,
@@ -879,13 +812,9 @@ def _stream_parse_graph(
         key, buf, pos = _decode_next_json_value(decoder, buf, pos, stream, chunk_size)
         buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS_COLON)
         if key == "nodes":
-            nodes, buf, pos = _stream_parse_nodes_section(
-                decoder, buf, pos, stream, chunk_size, graph_cls
-            )
+            nodes, buf, pos = _stream_parse_nodes_section(decoder, buf, pos, stream, chunk_size, graph_cls)
         else:
-            val, buf, pos = _decode_next_json_value(
-                decoder, buf, pos, stream, chunk_size
-            )
+            val, buf, pos = _decode_next_json_value(decoder, buf, pos, stream, chunk_size)
             meta[str(key)] = val
 
     return _build_graph_from_parsed_sections(graph_cls, nodes, meta)
@@ -928,13 +857,8 @@ def _serialize_node_dict(node: LogicalNode) -> dict[str, AttributeValue]:
         else:
             sub_dict[k] = copy.deepcopy(v)
 
-    sharding_dict: dict[str, tuple[PartitionAxisElement, ...]] | None = (
-        {"axes": node.sharding.axes} if node.sharding is not None else None
-    )
-    output_specs_list: list[dict[str, AttributeValue]] = [
-        {"dtype": spec.dtype, "shape": spec.shape, "sparsity": spec.sparsity}
-        for spec in node.output_specs
-    ]
+    sharding_dict: dict[str, tuple[PartitionAxisElement, ...]] | None = {"axes": node.sharding.axes} if node.sharding is not None else None
+    output_specs_list: list[dict[str, AttributeValue]] = [{"dtype": spec.dtype, "shape": spec.shape, "sparsity": spec.sparsity} for spec in node.output_specs]
 
     return {
         "attributes": copy.deepcopy(node.attributes),
@@ -976,24 +900,13 @@ def _stream_write_graph(
     mesh_val: dict[str, JsonValue] | None = (
         {
             "shape": dict(graph.mesh.shape),
-            "webrtc_topology": (
-                graph.mesh.webrtc_topology.to_dict()
-                if graph.mesh.webrtc_topology is not None
-                else None
-            ),
+            "webrtc_topology": (graph.mesh.webrtc_topology.to_dict() if graph.mesh.webrtc_topology is not None else None),
         }
         if graph.mesh is not None
         else None
     )
-    pipe_val = (
-        graph.pipeline_topology.to_dict()
-        if graph.pipeline_topology is not None
-        else None
-    )
-    input_specs_val: dict[str, dict[str, AttributeValue]] = {
-        k: {"dtype": v.dtype, "shape": v.shape, "sparsity": v.sparsity}
-        for k, v in sorted(graph.input_specs.items())
-    }
+    pipe_val = graph.pipeline_topology.to_dict() if graph.pipeline_topology is not None else None
+    input_specs_val: dict[str, dict[str, AttributeValue]] = {k: {"dtype": v.dtype, "shape": v.shape, "sparsity": v.sparsity} for k, v in sorted(graph.input_specs.items())}
     inits_val = dict(sorted(graph.initializers.items()))
 
     keys_order = [
@@ -1038,12 +951,8 @@ def _stream_write_graph(
                         "target_idx": edge.target_idx,
                         "value_name": edge.value_name,
                     }
-                    edge_str = json.dumps(
-                        edge_dict, sort_keys=True, indent=indent, default=str
-                    )
-                    fp.write(
-                        f"{pad2}{_indent_json_fragment(edge_str, pad2)}{e_comma}{_NL}"
-                    )
+                    edge_str = json.dumps(edge_dict, sort_keys=True, indent=indent, default=str)
+                    fp.write(f"{pad2}{_indent_json_fragment(edge_str, pad2)}{e_comma}{_NL}")
                 fp.write(f"{pad1}]{comma}{_NL}")
         elif key == "nodes" and graph.nodes:
             sorted_nids = sorted(graph.nodes.keys())
@@ -1051,17 +960,11 @@ def _stream_write_graph(
             for n_idx, nid in enumerate(sorted_nids):
                 n_comma = "," if n_idx < len(sorted_nids) - 1 else ""
                 node_dict = _serialize_node_dict(graph.nodes[nid])
-                node_str = json.dumps(
-                    node_dict, sort_keys=True, indent=indent, default=str
-                )
+                node_str = json.dumps(node_dict, sort_keys=True, indent=indent, default=str)
                 key_json = json.dumps(nid)
-                fp.write(
-                    f"{pad2}{key_json}: {_indent_json_fragment(node_str, pad2)}{n_comma}{_NL}"
-                )
+                fp.write(f"{pad2}{key_json}: {_indent_json_fragment(node_str, pad2)}{n_comma}{_NL}")
             fp.write(f"{pad1}}}{comma}{_NL}")
         else:
-            val_str = json.dumps(
-                val_map[key], sort_keys=True, indent=indent, default=str
-            )
+            val_str = json.dumps(val_map[key], sort_keys=True, indent=indent, default=str)
             fp.write(f"{_indent_json_fragment(val_str, pad1)}{comma}{_NL}")
     fp.write("}")

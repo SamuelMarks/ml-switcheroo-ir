@@ -36,9 +36,7 @@ def test_cli_compliance_verbose(
         ops.add("FakeOp")
         return ops
 
-    monkeypatch.setattr(
-        ml_switcheroo_ir.compliance, "get_dialect_ops", mock_get_dialect_ops
-    )
+    monkeypatch.setattr(ml_switcheroo_ir.compliance, "get_dialect_ops", mock_get_dialect_ops)
 
     # We just need to mock an incomplete dialect file so the verbose block triggers
     dialect_file = tmp_path / "my_dialect.py"
@@ -77,9 +75,7 @@ def test_cli_compliance_verbose_mapping(
 
     orig_import = importlib.import_module
 
-    def mock_import_module(
-        name: str, package: str | None = None
-    ) -> types.ModuleType | types.SimpleNamespace:
+    def mock_import_module(name: str, package: str | None = None) -> types.ModuleType | types.SimpleNamespace:
         """Mock import_module to avoid importing heavy third-party packages.
 
         Args:
@@ -113,9 +109,7 @@ def test_cli_compliance_verbose_mapping(
     with open(mapping_file, "w") as f:
         json.dump(mapping_data, f)
 
-    cli_main(
-        ["compliance", str(dialect_file), "--verbose", "--mapping", str(mapping_file)]
-    )
+    cli_main(["compliance", str(dialect_file), "--verbose", "--mapping", str(mapping_file)])
     captured = capsys.readouterr()
 
     assert "Verbose Missing Operations Report" in captured.out
@@ -124,9 +118,7 @@ def test_cli_compliance_verbose_mapping(
     assert "join" in captured.out
 
 
-def test_cli_compliance_verbose_mapping_empty(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_verbose_mapping_empty(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test compliance subcommand verbose output with empty mapping.
 
     Args:
@@ -142,9 +134,7 @@ def test_cli_compliance_verbose_mapping_empty(
     with open(mapping_file, "w") as f:
         json.dump({}, f)
 
-    cli_main(
-        ["compliance", str(dialect_file), "--verbose", "--mapping", str(mapping_file)]
-    )
+    cli_main(["compliance", str(dialect_file), "--verbose", "--mapping", str(mapping_file)])
     captured = capsys.readouterr()
 
     assert "Verbose Missing Operations Report" in captured.out
@@ -165,13 +155,13 @@ def test_cli_compliance_verbose_mapping_exception(
     """
     import inspect
     import json
-    import types
+    from collections.abc import Callable
 
-    def mock_getdoc(obj: types.FunctionType | type) -> str:
+    def mock_getdoc(obj: Callable[[str], str] | type) -> str:
         """Mock inspect.getdoc to raise a RuntimeError.
 
         Args:
-            obj (types.FunctionType | type): Inspected object.
+            obj (Callable[[str], str] | type): Inspected object.
 
         Raises:
             RuntimeError: Always raised to test error resilience.
@@ -191,9 +181,7 @@ def test_cli_compliance_verbose_mapping_exception(
     with open(mapping_file, "w") as f:
         json.dump(mapping_data, f)
 
-    cli_main(
-        ["compliance", str(dialect_file), "--verbose", "--mapping", str(mapping_file)]
-    )
+    cli_main(["compliance", str(dialect_file), "--verbose", "--mapping", str(mapping_file)])
     captured = capsys.readouterr()
 
     assert "Verbose Missing Operations Report" in captured.out

@@ -203,9 +203,7 @@ def test_validate_kind_unknown_ops_across_low_level_domains() -> None:
         assert "not found in domain" in errors[0].message
 
 
-def test_missing_schema_json_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_missing_schema_json_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify graceful handling when bundled low-level JSON schema files do not exist.
 
     Args:
@@ -219,7 +217,5 @@ def test_missing_schema_json_files(
     missing_path = tmp_path / "missing.json"
     rdna_mod._load_rdna_schemas(json_path=missing_path)
     sass_mod._load_sass_schemas(json_path=missing_path)
-    monkeypatch.setattr(
-        ll_mod, "find_schema_file", lambda filename, override=None: None
-    )
+    monkeypatch.setattr(ll_mod, "find_schema_file", lambda filename, override=None: None)
     assert ll_mod._load_schema_file("missing.json", "dummy") == {}

@@ -22,18 +22,11 @@ def test_parameter_translation_engine_defaults() -> None:
 
     # Reduction: dim -> axis, keepdim -> keepdims
     assert engine.translate_parameter("reduction", "dim", "torch", "jax") == "axis"
-    assert (
-        engine.translate_parameter("reduction", "keepdim", "torch", "numpy")
-        == "keepdims"
-    )
+    assert engine.translate_parameter("reduction", "keepdim", "torch", "numpy") == "keepdims"
 
     # Normalization: eps -> epsilon, weight -> scale
-    assert (
-        engine.translate_parameter("normalization", "eps", "torch", "tf") == "epsilon"
-    )
-    assert (
-        engine.translate_parameter("normalization", "weight", "torch", "jax") == "scale"
-    )
+    assert engine.translate_parameter("normalization", "eps", "torch", "tf") == "epsilon"
+    assert engine.translate_parameter("normalization", "weight", "torch", "jax") == "scale"
 
 
 def test_parameter_translation_engine_translate_attributes() -> None:
@@ -99,12 +92,8 @@ def test_parameter_translation_engine_error_branches(tmp_path: Path) -> None:
         engine_custom.translate_parameter("custom_op", "src_x", "torch", "jax")
 
     # Parameter not recognized in source framework
-    with pytest.raises(
-        KeyError, match="is not recognized as a valid 'torch' parameter"
-    ):
-        engine_custom.translate_parameter(
-            "custom_op", "unregistered_param", "torch", "jax"
-        )
+    with pytest.raises(KeyError, match="is not recognized as a valid 'torch' parameter"):
+        engine_custom.translate_parameter("custom_op", "unregistered_param", "torch", "jax")
 
     # Custom file loading branches
     valid_file = tmp_path / "valid_cmap.json"
@@ -211,7 +200,4 @@ def test_parameter_translation_engine_bundled_fallback() -> None:
         engine = ParameterTranslationEngine()
         assert "matmul" in engine.translations
         assert "normalization" in engine.translations
-        assert (
-            engine.translate_parameter("normalization", "eps", "torch", "tf")
-            == "epsilon"
-        )
+        assert engine.translate_parameter("normalization", "eps", "torch", "tf") == "epsilon"

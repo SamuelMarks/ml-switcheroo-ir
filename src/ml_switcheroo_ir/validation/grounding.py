@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
-from enum import Enum
 import gzip
 import json
 import logging
 import os
 import typing
-import typing_extensions
+from collections.abc import Collection, Mapping, Sequence
+from enum import Enum
+from pathlib import Path
 
 import pydantic
+import typing_extensions
 
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.ghost import ExtendedGhostRef
@@ -44,16 +45,7 @@ __all__ = [
 ]
 
 if typing.TYPE_CHECKING:
-    SnapshotManifestNode: typing_extensions.TypeAlias = (
-        str
-        | int
-        | float
-        | bool
-        | None
-        | Collection["SnapshotManifestNode"]
-        | Sequence["SnapshotManifestNode"]
-        | Mapping[str, "SnapshotManifestNode"]
-    )
+    SnapshotManifestNode: typing_extensions.TypeAlias = str | int | float | bool | None | Collection["SnapshotManifestNode"] | Sequence["SnapshotManifestNode"] | Mapping[str, "SnapshotManifestNode"]
 else:
     SnapshotManifestNode: typing_extensions.TypeAlias = JsonValue
 
@@ -81,14 +73,14 @@ class SupportsModelDumpProtocol(typing.Protocol):
 class TargetFileDiscovererProtocol(typing.Protocol):
     """Runtime-checkable protocol for grounding engines supporting _discover_target_files()."""
 
-    def _discover_target_files(self, target: str) -> Sequence[object]:
+    def _discover_target_files(self, target: str) -> Sequence[Path | str]:
         """Discover target snapshot files for a given domain/target.
 
         Args:
             target (str): Target framework or domain name.
 
         Returns:
-            Sequence[object]: Discovered target files.
+            Sequence[Path | str]: Discovered target files.
         """
 
 
@@ -106,9 +98,7 @@ class GroundingEngineProtocol(typing.Protocol):
             ExtendedGhostRef | None: Grounded symbol reference if found.
         """
 
-    def suggest_closest_symbol(
-        self, target: str, symbol: str, max_distance: int = 3
-    ) -> str | None:
+    def suggest_closest_symbol(self, target: str, symbol: str, max_distance: int = 3) -> str | None:
         """Suggest the closest matching symbol name in the target.
 
         Args:
@@ -184,9 +174,7 @@ class GroundingDiagnostic(pydantic.BaseModel):
         suggested_fix (str | None): Suggested replacement or typo correction.
     """
 
-    field: str = pydantic.Field(
-        description="The component, attribute, or operand evaluated."
-    )
+    field: str = pydantic.Field(description="The component, attribute, or operand evaluated.")
     message: str = pydantic.Field(description="Human-readable diagnostic explanation.")
     severity: DiagnosticSeverity = pydantic.Field(
         default=DiagnosticSeverity.ERROR,
@@ -209,13 +197,9 @@ class GroundingReport(pydantic.BaseModel):
         matched_ref (ExtendedGhostRef | None): Resolved ground-truth reference object if discovered.
     """
 
-    is_grounded: bool = pydantic.Field(
-        description="True if the symbol is grounded and valid without fatal errors."
-    )
+    is_grounded: bool = pydantic.Field(description="True if the symbol is grounded and valid without fatal errors.")
     target: str = pydantic.Field(description="Target framework, dialect, or ISA.")
-    symbol: str = pydantic.Field(
-        description="Queried symbol, mnemonic, or operation identifier."
-    )
+    symbol: str = pydantic.Field(description="Queried symbol, mnemonic, or operation identifier.")
     diagnostics: list[GroundingDiagnostic] = pydantic.Field(
         default_factory=list,
         description="Collection of diagnostics produced during verification.",
@@ -295,17 +279,11 @@ class GroundingValidator(Validator):
             search_dirs: list[str] = []
             if isinstance(target, str) and os.path.isdir(target):
                 search_dirs.append(target)
-            if (
-                snapshots_dir
-                and os.path.isdir(snapshots_dir)
-                and snapshots_dir not in search_dirs
-            ):
+            if snapshots_dir and os.path.isdir(snapshots_dir) and snapshots_dir not in search_dirs:
                 search_dirs.append(snapshots_dir)
             if os.path.isdir(default_dir) and default_dir not in search_dirs:
                 search_dirs.append(default_dir)
-            self._engine = GroundingEngine(
-                base_dirs=search_dirs if search_dirs else None
-            )
+            self._engine = GroundingEngine(base_dirs=search_dirs if search_dirs else None)
         except (ImportError, AttributeError, ValueError, OSError, RuntimeError) as exc:
             logger.debug("Failed initializing GroundingEngine: %s", exc)
             self._engine = None
@@ -315,9 +293,7 @@ class GroundingValidator(Validator):
         elif use_default_if_none and os.path.isdir(default_dir):
             self._load_directory(default_dir)
 
-    def _ingest_manifest_target(
-        self, target: SnapshotManifestType | SnapshotManifestNode
-    ) -> None:
+    def _ingest_manifest_target(self, target: SnapshotManifestType | SnapshotManifestNode) -> None:
         """Ingest snapshot manifest from diverse target types.
 
         Args:
@@ -331,14 +307,7 @@ class GroundingValidator(Validator):
         elif isinstance(target, Mapping):
             self._load_snapshot_data(target)
         elif isinstance(target, list):
-            if target and all(
-                isinstance(item, str)
-                or (
-                    isinstance(item, Mapping)
-                    and not ("api_path" in item or "name" in item or "mnemonic" in item)
-                )
-                for item in target
-            ):
+            if target and all(isinstance(item, str) or (isinstance(item, Mapping) and not ("api_path" in item or "name" in item or "mnemonic" in item)) for item in target):
                 for item in target:
                     self._ingest_manifest_target(item)
             else:
@@ -355,7 +324,7 @@ class GroundingValidator(Validator):
                 with gzip.open(filepath, "rt", encoding="utf-8") as f:
                     data = json.load(f)
             else:
-                with open(filepath, "r", encoding="utf-8") as f:
+                with open(filepath, encoding="utf-8") as f:
                     data = json.load(f)
             self._load_snapshot_data(data)
         except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError) as exc:
@@ -373,9 +342,7 @@ class GroundingValidator(Validator):
                 if fname.endswith((".json", ".json.gz")):
                     self._load_file(os.path.join(root, fname))
 
-    def _register_symbol_record(
-        self, item: Mapping[str, SnapshotManifestNode], default_key: str | None = None
-    ) -> None:
+    def _register_symbol_record(self, item: Mapping[str, SnapshotManifestNode], default_key: str | None = None) -> None:
         """Register an individual symbol record under primary and short keys.
 
         Args:
@@ -387,11 +354,7 @@ class GroundingValidator(Validator):
         name = item_dict.get("name")
         mnemonic = item_dict.get("mnemonic")
 
-        keys = [
-            str(k)
-            for k in [api_path, name, mnemonic, default_key]
-            if isinstance(k, str) and k
-        ]
+        keys = [str(k) for k in [api_path, name, mnemonic, default_key] if isinstance(k, str) and k]
         for k in keys:
             self.grounded_symbols[k] = item_dict
 
@@ -399,6 +362,42 @@ class GroundingValidator(Validator):
             unqualified = api_path.split(".")[-1]
             if unqualified not in self.grounded_symbols:
                 self.grounded_symbols[unqualified] = item_dict
+
+    def _load_snapshot_categories(self, raw_cats: Mapping[str, SnapshotManifestNode]) -> None:
+        """Register symbols from a ``categories`` mapping in a snapshot envelope.
+
+        Args:
+            raw_cats (Mapping[str, SnapshotManifestNode]): Categories dictionary.
+        """
+        for cat_list in raw_cats.values():
+            if isinstance(cat_list, list):
+                for item in cat_list:
+                    if isinstance(item, Mapping):
+                        self._register_symbol_record(item)
+            elif isinstance(cat_list, Mapping):
+                for item in cat_list.values():
+                    if isinstance(item, Mapping):
+                        self._register_symbol_record(item)
+
+    def _load_snapshot_flat_entries(self, data: Mapping[str, SnapshotManifestNode]) -> None:
+        """Register symbols and concept map entries from a flat snapshot dictionary.
+
+        Args:
+            data (Mapping[str, SnapshotManifestNode]): Flat snapshot dictionary.
+        """
+        known_fws = ("torch", "jax", "tensorflow", "tf", "stablehlo", "numpy")
+        for k, v in data.items():
+            if k == "_parameter_translations":
+                continue
+            if isinstance(v, Mapping):
+                v_dict = {str(vk): vv for vk, vv in v.items()}
+                if any(fw in v_dict for fw in known_fws):
+                    self.concept_map[str(k)] = v_dict
+                self._register_symbol_record(v_dict, default_key=str(k))
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, Mapping):
+                        self._register_symbol_record(item)
 
     def _load_snapshot_data(
         self,
@@ -413,7 +412,9 @@ class GroundingValidator(Validator):
             for item in data:
                 if isinstance(item, Mapping):
                     self._register_symbol_record(item)
-        elif isinstance(data, Mapping):
+            return
+
+        if isinstance(data, Mapping):
             raw_pt = data.get("_parameter_translations")
             if isinstance(raw_pt, Mapping):
                 for pk, pv in raw_pt.items():
@@ -421,38 +422,65 @@ class GroundingValidator(Validator):
 
             raw_cats = data.get("categories")
             if isinstance(raw_cats, Mapping):
-                for cat_list in raw_cats.values():
-                    if isinstance(cat_list, list):
-                        for item in cat_list:
-                            if isinstance(item, Mapping):
-                                self._register_symbol_record(item)
-                    elif isinstance(cat_list, Mapping):
-                        for item in cat_list.values():
-                            if isinstance(item, Mapping):
-                                self._register_symbol_record(item)
+                self._load_snapshot_categories(raw_cats)
             else:
-                for k, v in data.items():
-                    if k == "_parameter_translations":
-                        continue
-                    if isinstance(v, Mapping):
-                        v_dict = {str(vk): vv for vk, vv in v.items()}
-                        if any(
-                            fw in v_dict
-                            for fw in (
-                                "torch",
-                                "jax",
-                                "tensorflow",
-                                "tf",
-                                "stablehlo",
-                                "numpy",
-                            )
-                        ):
-                            self.concept_map[str(k)] = v_dict
-                        self._register_symbol_record(v_dict, default_key=str(k))
-                    elif isinstance(v, list):
-                        for item in v:
-                            if isinstance(item, Mapping):
-                                self._register_symbol_record(item)
+                self._load_snapshot_flat_entries(data)
+
+    def _search_domain_prefixed_symbol(self, op_type: str, domain: str) -> str | None:
+        """Search grounded symbols prefixed with ``domain.`` within edit distance 3.
+
+        Args:
+            op_type (str): Unqualified op type.
+            domain (str): Operator domain.
+
+        Returns:
+            str | None: Best domain-prefixed match or None.
+        """
+        if not domain:
+            return None
+        domain_prefix = f"{domain}."
+        full_candidate = f"{domain}.{op_type}"
+        best_match: str | None = None
+        best_dist = 4
+        for sym in self.grounded_symbols:
+            if not sym.startswith(domain_prefix):
+                continue
+            unqual = sym[len(domain_prefix) :]
+            if abs(len(op_type) - len(unqual)) >= best_dist and abs(len(full_candidate) - len(sym)) >= best_dist:
+                continue
+            d = min(
+                compute_levenshtein(op_type, unqual),
+                compute_levenshtein(full_candidate, sym),
+            )
+            if d < best_dist:
+                best_dist = d
+                best_match = sym
+        return best_match
+
+    def _query_engine_symbol_suggestion(self, op_type: str, domain: str) -> str | None:
+        """Query the external GroundingEngine for a closest symbol suggestion if available.
+
+        Args:
+            op_type (str): Ungrounded op type.
+            domain (str): Operator domain.
+
+        Returns:
+            str | None: Suggested symbol or None.
+        """
+        if self._engine is None or not domain or (isinstance(self._engine, TargetFileDiscovererProtocol) and not self._engine._discover_target_files(domain)):
+            return None
+        try:
+            engine_cand = self._engine.suggest_closest_symbol(domain, op_type, max_distance=3)
+            return engine_cand if engine_cand else None
+        except (
+            AttributeError,
+            KeyError,
+            ValueError,
+            RuntimeError,
+            TypeError,
+        ) as exc:
+            logger.debug("Failed symbol suggestion from engine: %s", exc)
+            return None
 
     def _find_best_symbol_match(self, op_type: str, domain: str) -> str | None:
         """Find the closest matching symbol in the snapshot within an edit distance threshold.
@@ -465,37 +493,15 @@ class GroundingValidator(Validator):
             str | None: Closest matching symbol name, or None.
         """
         synonym = KNOWN_SYNONYMS.get((domain, op_type))
-        if synonym and (
-            synonym in self.grounded_symbols
-            or synonym.split(".")[-1] in self.grounded_symbols
-        ):
+        if synonym and (synonym in self.grounded_symbols or synonym.split(".")[-1] in self.grounded_symbols):
             return synonym
+
+        prefixed = self._search_domain_prefixed_symbol(op_type, domain)
+        if prefixed is not None:
+            return prefixed
 
         best_match: str | None = None
         best_dist = 4
-        full_candidate = f"{domain}.{op_type}" if domain else op_type
-        domain_prefix = f"{domain}." if domain else ""
-
-        if domain_prefix:
-            for sym in self.grounded_symbols:
-                if sym.startswith(domain_prefix):
-                    unqual = sym[len(domain_prefix) :]
-                    if (
-                        abs(len(op_type) - len(unqual)) >= best_dist
-                        and abs(len(full_candidate) - len(sym)) >= best_dist
-                    ):
-                        continue
-                    d = min(
-                        compute_levenshtein(op_type, unqual),
-                        compute_levenshtein(full_candidate, sym),
-                    )
-                    if d < best_dist:
-                        best_dist = d
-                        best_match = sym
-
-        if best_match is not None:
-            return best_match
-
         for sym in self.grounded_symbols:
             if abs(len(op_type) - len(sym)) >= best_dist:
                 continue
@@ -504,31 +510,9 @@ class GroundingValidator(Validator):
                 best_dist = d
                 best_match = sym
 
-        if (
-            best_match is None
-            and self._engine is not None
-            and domain
-            and (
-                not isinstance(self._engine, TargetFileDiscovererProtocol)
-                or bool(self._engine._discover_target_files(domain))
-            )
-        ):
-            try:
-                engine_cand = self._engine.suggest_closest_symbol(
-                    domain, op_type, max_distance=3
-                )
-                if engine_cand:
-                    best_match = engine_cand
-            except (
-                AttributeError,
-                KeyError,
-                ValueError,
-                RuntimeError,
-                TypeError,
-            ) as exc:
-                logger.debug("Failed symbol suggestion from engine: %s", exc)
-
-        return best_match
+        if best_match is not None:
+            return best_match
+        return self._query_engine_symbol_suggestion(op_type, domain)
 
     def _find_best_attr_match(self, attr_key: str, candidates: set[str]) -> str | None:
         """Find closest matching attribute or parameter name.
@@ -551,6 +535,69 @@ class GroundingValidator(Validator):
                 best_match = cand
         return best_match
 
+    def _resolve_grounded_symbol_record(self, node: LogicalNode) -> Mapping[str, SnapshotManifestNode] | None:
+        """Look up a grounded symbol record in local symbols or the external GroundingEngine.
+
+        Args:
+            node (LogicalNode): Node to resolve.
+
+        Returns:
+            Mapping[str, SnapshotManifestNode] | None: Matched symbol dictionary or None.
+        """
+        full_path = f"{node.domain}.{node.op_type}"
+        match: Mapping[str, SnapshotManifestNode] | None = self.grounded_symbols.get(full_path) or self.grounded_symbols.get(node.op_type)
+        if match is None and self._engine is not None and node.domain and (not isinstance(self._engine, TargetFileDiscovererProtocol) or bool(self._engine._discover_target_files(node.domain))):
+            try:
+                ref = self._engine.get_symbol(node.domain, node.op_type)
+                if ref is not None:
+                    match = ref.model_dump()
+            except (
+                AttributeError,
+                KeyError,
+                ValueError,
+                RuntimeError,
+                TypeError,
+            ) as exc:
+                logger.debug("Failed symbol lookup from engine: %s", exc)
+        return match
+
+    @staticmethod
+    def _extract_names_from_entry_list(entries: SnapshotManifestNode, target: set[str]) -> None:
+        """Extract string names or ``item["name"]`` strings from a list of snapshot entries.
+
+        Args:
+            entries (SnapshotManifestNode): List of dicts or strings.
+            target (set[str]): Destination set of known parameter names.
+        """
+        if not isinstance(entries, list):
+            return
+        for item in entries:
+            if isinstance(item, str):
+                target.add(item)
+            elif isinstance(item, dict) and isinstance(item.get("name"), str):
+                target.add(str(item["name"]))
+
+    @classmethod
+    def _extract_grounded_known_params(cls, match: Mapping[str, SnapshotManifestNode]) -> set[str]:
+        """Extract all known parameter, attribute, operand, and kwarg names from a symbol record.
+
+        Args:
+            match (Mapping[str, SnapshotManifestNode]): Grounded symbol dictionary.
+
+        Returns:
+            set[str]: Set of allowed attribute/parameter names.
+        """
+        known_params: set[str] = set()
+        cls._extract_names_from_entry_list(match.get("params"), known_params)
+        attrs = match.get("attributes")
+        if isinstance(attrs, dict):
+            known_params.update(str(k) for k in attrs.keys())
+        else:
+            cls._extract_names_from_entry_list(attrs, known_params)
+        cls._extract_names_from_entry_list(match.get("operands"), known_params)
+        cls._extract_names_from_entry_list(match.get("accepted_kwargs") or match.get("kwargs"), known_params)
+        return known_params
+
     def validate_grounding(self, node: LogicalNode) -> list[ValidationError]:
         """Check if node corresponds to a grounded symbol in the snapshot.
 
@@ -560,44 +607,13 @@ class GroundingValidator(Validator):
         Returns:
             list[ValidationError]: Diagnostic errors if symbol is ungrounded.
         """
-        errors: list[ValidationError] = []
-        full_path = f"{node.domain}.{node.op_type}"
-
-        match: Mapping[str, SnapshotManifestNode] | None = self.grounded_symbols.get(
-            full_path
-        ) or self.grounded_symbols.get(node.op_type)
-        if (
-            match is None
-            and self._engine is not None
-            and node.domain
-            and (
-                not isinstance(self._engine, TargetFileDiscovererProtocol)
-                or bool(self._engine._discover_target_files(node.domain))
-            )
-        ):
-            try:
-                ref = self._engine.get_symbol(node.domain, node.op_type)
-                if ref is not None:
-                    match = (
-                        ref.model_dump()
-                        if isinstance(ref, SupportsModelDumpProtocol)
-                        else vars(ref)
-                    )
-            except (
-                AttributeError,
-                KeyError,
-                ValueError,
-                RuntimeError,
-                TypeError,
-            ) as exc:
-                logger.debug("Failed symbol lookup from engine: %s", exc)
-
+        match = self._resolve_grounded_symbol_record(node)
         if match is None:
             suggestion = self._find_best_symbol_match(node.op_type, node.domain)
             msg = f"Ungrounded symbol '{node.op_type}' in domain '{node.domain}'. Symbol not found in framework snapshot."
             if suggestion:
                 msg += f" Did you mean '{suggestion}'?"
-            errors.append(
+            return [
                 ValidationError(
                     node_id=node.id,
                     attribute="kind",
@@ -605,59 +621,26 @@ class GroundingValidator(Validator):
                     level=ValidationLevel.ERROR,
                     suggested_fix=suggestion,
                 )
-            )
-        else:
-            known_params: set[str] = set()
-            raw_params = match.get("params")
-            if isinstance(raw_params, list):
-                for p in raw_params:
-                    if isinstance(p, dict) and isinstance(p.get("name"), str):
-                        known_params.add(str(p["name"]))
+            ]
 
-            attrs = match.get("attributes")
-            if isinstance(attrs, dict):
-                known_params.update(str(k) for k in attrs.keys())
-            elif isinstance(attrs, list):
-                for a in attrs:
-                    if isinstance(a, dict) and isinstance(a.get("name"), str):
-                        known_params.add(str(a["name"]))
-                    elif isinstance(a, str):
-                        known_params.add(a)
-
-            operands = match.get("operands")
-            if isinstance(operands, list):
-                for op in operands:
-                    if isinstance(op, dict) and isinstance(op.get("name"), str):
-                        known_params.add(str(op["name"]))
-                    elif isinstance(op, str):
-                        known_params.add(op)
-
-            accepted_kwargs = match.get("accepted_kwargs") or match.get("kwargs")
-            if isinstance(accepted_kwargs, list):
-                for kw in accepted_kwargs:
-                    if isinstance(kw, str):
-                        known_params.add(kw)
-                    elif isinstance(kw, dict) and isinstance(kw.get("name"), str):
-                        known_params.add(str(kw["name"]))
-
-            if known_params:
-                for attr_key in node.attributes:
-                    if attr_key not in known_params:
-                        attr_suggestion = self._find_best_attr_match(
-                            attr_key, known_params
+        errors: list[ValidationError] = []
+        known_params = self._extract_grounded_known_params(match)
+        if known_params:
+            for attr_key in node.attributes:
+                if attr_key not in known_params:
+                    attr_suggestion = self._find_best_attr_match(attr_key, known_params)
+                    msg = f"Ungrounded attribute '{attr_key}' on '{node.op_type}'. Allowed attributes/params: {sorted(known_params)}."
+                    if attr_suggestion:
+                        msg += f" Did you mean '{attr_suggestion}'?"
+                    errors.append(
+                        ValidationError(
+                            node_id=node.id,
+                            attribute=attr_key,
+                            message=msg,
+                            level=ValidationLevel.ERROR,
+                            suggested_fix=attr_suggestion,
                         )
-                        msg = f"Ungrounded attribute '{attr_key}' on '{node.op_type}'. Allowed attributes/params: {sorted(known_params)}."
-                        if attr_suggestion:
-                            msg += f" Did you mean '{attr_suggestion}'?"
-                        errors.append(
-                            ValidationError(
-                                node_id=node.id,
-                                attribute=attr_key,
-                                message=msg,
-                                level=ValidationLevel.ERROR,
-                                suggested_fix=attr_suggestion,
-                            )
-                        )
+                    )
         return errors
 
     def audit_graph(self, graph: LogicalGraph) -> GroundingAuditReport:

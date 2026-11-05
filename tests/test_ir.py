@@ -199,9 +199,7 @@ def test_cli_main(capsys: pytest.CaptureFixture[str]) -> None:
     assert "n2 (Output)" in captured.out
 
 
-def test_cli_main_sys_argv(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_main_sys_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Test CLI main using sys.argv.
 
     Args:
@@ -250,9 +248,7 @@ def test_runpy_cli_module() -> None:
         runpy.run_module("ml_switcheroo_ir.cli", run_name="__main__")
 
 
-def test_cli_main_other_command(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_main_other_command(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Test CLI main with another mock command.
 
     Args:
@@ -266,9 +262,7 @@ def test_cli_main_other_command(
 
         command = "other"
 
-    monkeypatch.setattr(
-        "argparse.ArgumentParser.parse_args", lambda self, args: MockArgs()
-    )
+    monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self, args: MockArgs())
     cli_main(["other"])
 
 
@@ -285,9 +279,7 @@ def test_verify_backend_missing_file(capsys: pytest.CaptureFixture[str]) -> None
     assert "Compliance: 0%" in captured.out
 
 
-def test_verify_backend_spec_none(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_verify_backend_spec_none(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """Test verify-backend when importlib spec is None.
 
     Args:
@@ -359,9 +351,7 @@ def test_verify_backend_no_graph_arg(capsys: pytest.CaptureFixture[str]) -> None
 
     """
     with NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write(
-            "from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, wrong_arg):\n        pass"
-        )
+        f.write("from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, wrong_arg):\n        pass")
         fname = f.name
     cli_main(["verify-backend", fname, "MyClass"])
     captured = capsys.readouterr()
@@ -376,9 +366,7 @@ def test_verify_backend_perfect(capsys: pytest.CaptureFixture[str]) -> None:
 
     """
     with NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write(
-            "from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, graph):\n        pass"
-        )
+        f.write("from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, graph):\n        pass")
         fname = f.name
     cli_main(["verify-backend", fname, "MyClass"])
     captured = capsys.readouterr()
@@ -402,9 +390,7 @@ def test_verify_backend_class_not_inheriting(
     assert "Compliance: 40%" in captured.out
 
 
-def test_cli_tabulate_fallback(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_tabulate_fallback(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify CLI tabulate fallback formats rows when tabulate package is unavailable.
 
     Args:
@@ -435,9 +421,7 @@ def test_cli_main_invalid_command() -> None:
         cli_main(["invalid_command"])
 
 
-def test_cli_main_validate_valid(
-    capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
-) -> None:
+def test_cli_main_validate_valid(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Verify CLI validate subcommand exits with code 0 on a valid graph JSON file.
 
     Args:
@@ -454,9 +438,7 @@ def test_cli_main_validate_valid(
     assert "Graph is valid." in capsys.readouterr().out
 
 
-def test_cli_main_validate_invalid(
-    capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
-) -> None:
+def test_cli_main_validate_invalid(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Verify CLI validate subcommand exits with code 1 on an invalid operator node.
 
     Args:
@@ -473,9 +455,7 @@ def test_cli_main_validate_invalid(
     assert "ERROR" in capsys.readouterr().out
 
 
-def test_cli_main_validate_custom_ops(
-    capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
-) -> None:
+def test_cli_main_validate_custom_ops(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Verify CLI validate subcommand accepts user-provided --custom-ops schema JSON.
 
     Args:
@@ -535,9 +515,7 @@ def test_cli_compliance_not_found(capsys: pytest.CaptureFixture[str]) -> None:
     assert e.value.code == 1
 
 
-def test_cli_compliance_file(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_file(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify CLI compliance subcommand prints a report for a single Python file.
 
     Args:
@@ -553,9 +531,7 @@ def test_cli_compliance_file(
     assert "Compliance Report" in captured.out
 
 
-def test_cli_compliance_register_framework(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_register_framework(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify CLI compliance subcommand detects @register_framework adapters.
 
     Args:
@@ -565,17 +541,13 @@ def test_cli_compliance_register_framework(
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_fw.py"
-    f.write_text(
-        "@register_framework('my_fw')\nclass MyAdapter:\n    def definitions(self):\n        return {'Add': StandardMap()}\n"
-    )
+    f.write_text("@register_framework('my_fw')\nclass MyAdapter:\n    def definitions(self):\n        return {'Add': StandardMap()}\n")
     cli_main(["compliance", str(f)])
     captured = capsys.readouterr()
     assert "Compliance Report" in captured.out
 
 
-def test_cli_compliance_backend_frontend(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_backend_frontend(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify CLI compliance subcommand evaluates CompilerBackend and GraphFrontend classes.
 
     Args:
@@ -585,17 +557,13 @@ def test_cli_compliance_backend_frontend(
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_be.py"
-    f.write_text(
-        "class MyBackend(CompilerBackend):\n    def compile(self, graph):\n        pass\nclass MyFrontend(GraphFrontend):\n    def parse_to_graph(self, code):\n        pass"
-    )
+    f.write_text("class MyBackend(CompilerBackend):\n    def compile(self, graph):\n        pass\nclass MyFrontend(GraphFrontend):\n    def parse_to_graph(self, code):\n        pass")
     cli_main(["compliance", str(f)])
     captured = capsys.readouterr()
     assert "Compliance Report" in captured.out
 
 
-def test_cli_compliance_verbose(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_verbose(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify CLI compliance subcommand prints verbose missing operations report with -v.
 
     Args:
@@ -611,9 +579,7 @@ def test_cli_compliance_verbose(
     assert "Verbose Missing Operations Report" in captured.out
 
 
-def test_cli_compliance_no_targets(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_no_targets(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify CLI compliance subcommand reports when no targets are detected in an empty directory.
 
     Args:
@@ -630,9 +596,7 @@ def test_cli_compliance_no_targets(
     assert "No IR, FrameworkAdapter, or DIALECT targets detected" in captured.out
 
 
-def test_cli_compliance_directory(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_directory(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Verify CLI compliance subcommand scans directories while skipping excluded folders.
 
     Args:
@@ -644,17 +608,13 @@ def test_cli_compliance_directory(
     (tmp_path / "node_modules").mkdir()
     (tmp_path / ".venv").mkdir()
     f = tmp_path / "test_be.py"
-    f.write_text(
-        "class MyBackend(CompilerBackend):\n    def compile(self, graph):\n        pass\n"
-    )
+    f.write_text("class MyBackend(CompilerBackend):\n    def compile(self, graph):\n        pass\n")
     cli_main(["compliance", str(tmp_path)])
     captured = capsys.readouterr()
     assert "Compliance Report" in captured.out
 
 
-def test_cli_main_validate_warnings_only(
-    capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
-) -> None:
+def test_cli_main_validate_warnings_only(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Verify CLI validate subcommand exits 0 when only warnings are emitted.
 
     Args:
@@ -668,9 +628,7 @@ def test_cli_main_validate_warnings_only(
     # In validator, if node.kind is in registry but some attribute is missing and not strict, is it an error or warning?
     # Actually, missing required attribute is ERROR.
     # Unknown attribute is WARNING.
-    f.write_text(
-        '{"nodes": {"1": {"id": "1", "op_type": "Add", "attributes": {"unknown_attr": "val"}}}}'
-    )
+    f.write_text('{"nodes": {"1": {"id": "1", "op_type": "Add", "attributes": {"unknown_attr": "val"}}}}')
     import pytest
 
     with pytest.raises(SystemExit) as e:
@@ -715,9 +673,7 @@ def test_cli_compliance_json_exception(
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_fw.py"
-    f.write_text(
-        "class MyAdapter:\n    def definitions(self):\n        return 'my_adapter'"
-    )
+    f.write_text("class MyAdapter:\n    def definitions(self):\n        return 'my_adapter'")
     # Create invalid json file
     j = tmp_path / "my_adapter.json"
     j.write_text("invalid json")
@@ -847,6 +803,15 @@ def test_transforms_subgraphs_non_graph_branch() -> None:
     )
     g = LogicalGraph(nodes={"custom_node": node}, outputs=["custom_node"])
     cleaned = eliminate_dead_nodes(g)
-    assert (
-        cleaned.nodes["custom_node"].subgraphs["metadata_str"] == "not_a_logical_graph"
-    )
+    assert cleaned.nodes["custom_node"].subgraphs["metadata_str"] == "not_a_logical_graph"
+
+
+def test_logical_graph_attributes_and_loop_options() -> None:
+    """Verify LogicalGraph runtime attributes and loop_options properties."""
+    g = LogicalGraph(name="attr_test")
+    assert g.attributes == {}
+    g.attributes = {"schedule": 1}
+    assert g.attributes == {"schedule": 1}
+    assert g.loop_options is None
+    g.loop_options = {"max_iters": 10}
+    assert g.loop_options == {"max_iters": 10}

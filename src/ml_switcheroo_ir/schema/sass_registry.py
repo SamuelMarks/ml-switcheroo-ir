@@ -32,9 +32,7 @@ def _load_sass_schemas(json_path: Path | str | None = None) -> None:
             op_data (Mapping[str, JsonValue]): Raw operator definition dictionary.
         """
         raw_lat = op_data.get("execution_latency", 4)
-        SASS_PIPELINE_LATENCIES[str(op_data["name"])] = (
-            int(raw_lat) if isinstance(raw_lat, (int, str)) else 4
-        )
+        SASS_PIPELINE_LATENCIES[str(op_data["name"])] = int(raw_lat) if isinstance(raw_lat, (int, str)) else 4
 
     with REGISTRY_LOCK:
         loaded = load_op_schema_catalog(
@@ -55,9 +53,7 @@ def _load_sass_schemas(json_path: Path | str | None = None) -> None:
             )
 
             SASS_PIPELINE_LATENCIES.update(GHOST_LATENCIES)
-            SASS_REGISTRY.update(
-                build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="nvidia_sass")
-            )
+            SASS_REGISTRY.update(build_isa_primitive_schemas(GHOST_PRIMITIVES, domain="nvidia_sass"))
 
 
 _load_sass_schemas()

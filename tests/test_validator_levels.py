@@ -21,10 +21,7 @@ def test_validation_error_str() -> None:
         message="Missing required attribute",
         level=ValidationLevel.ERROR,
     )
-    assert (
-        "[ERROR] Node 'n1' attribute 'kernel_shape': Missing required attribute"
-        in str(err)
-    )
+    assert "[ERROR] Node 'n1' attribute 'kernel_shape': Missing required attribute" in str(err)
 
 
 def test_validator_init_levels_and_aliases() -> None:
@@ -148,27 +145,21 @@ def test_validator_grounding_integration() -> None:
         domain="ai.onnx",
     )
     errs_warn = v_warn.validate_node(node_ungrounded)
-    grounding_warns = [
-        e for e in errs_warn if "Symbol not found in framework snapshot" in e.message
-    ]
+    grounding_warns = [e for e in errs_warn if "Symbol not found in framework snapshot" in e.message]
     assert len(grounding_warns) == 1
     assert grounding_warns[0].level == ValidationLevel.WARNING
 
     # In STRICT mode: grounding error is promoted to ERROR
     v_strict = Validator(strict=True, grounding_validator=gv)
     errs_strict = v_strict.validate_node(node_ungrounded)
-    grounding_strict = [
-        e for e in errs_strict if "Symbol not found in framework snapshot" in e.message
-    ]
+    grounding_strict = [e for e in errs_strict if "Symbol not found in framework snapshot" in e.message]
     assert len(grounding_strict) == 1
     assert grounding_strict[0].level == ValidationLevel.ERROR
 
     # In LENIENT mode: non-fatal grounding warnings are omitted
     v_lenient = Validator(level=ValidationLevel.LENIENT, grounding_validator=gv)
     errs_lenient = v_lenient.validate_node(node_ungrounded)
-    grounding_lenient = [
-        e for e in errs_lenient if "Symbol not found in framework snapshot" in e.message
-    ]
+    grounding_lenient = [e for e in errs_lenient if "Symbol not found in framework snapshot" in e.message]
     assert len(grounding_lenient) == 0
 
 

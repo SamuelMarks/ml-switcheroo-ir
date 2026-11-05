@@ -133,9 +133,7 @@ _CANONICAL_MLIR_OPS: list[CustomOpSchema] = [
         domain="mlir.tensor",
         attributes=[
             CustomAttributeSchema(name="staticSizes", type="List[int]", required=False),
-            CustomAttributeSchema(
-                name="dynamicSizes", type="List[int]", required=False
-            ),
+            CustomAttributeSchema(name="dynamicSizes", type="List[int]", required=False),
         ],
         inputs=[],
         outputs=["result"],
@@ -179,12 +177,8 @@ _CANONICAL_MLIR_OPS: list[CustomOpSchema] = [
         name="linalg.generic",
         domain="mlir.linalg",
         attributes=[
-            CustomAttributeSchema(
-                name="indexing_maps", type="List[Any]", required=True
-            ),
-            CustomAttributeSchema(
-                name="iterator_types", type="List[str]", required=True
-            ),
+            CustomAttributeSchema(name="indexing_maps", type="List[Any]", required=True),
+            CustomAttributeSchema(name="iterator_types", type="List[str]", required=True),
         ],
         inputs=["inputs", "outputs"],
         outputs=["result"],

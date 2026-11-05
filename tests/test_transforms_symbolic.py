@@ -14,9 +14,7 @@ from ml_switcheroo_ir.shapes import SymInt, SymVar
 
 def test_propagate_unary_and_binary_ops() -> None:
     """Test shape propagation through elementwise unary and broadcasting binary operations."""
-    n_in1 = LogicalNode(
-        id="in1", op_type="Placeholder", shape_metadata=(SymInt("B"), 1, 64)
-    )
+    n_in1 = LogicalNode(id="in1", op_type="Placeholder", shape_metadata=(SymInt("B"), 1, 64))
     n_in2 = LogicalNode(id="in2", op_type="Placeholder", shape_metadata=(128, 64))
     n_relu = LogicalNode(id="relu1", op_type="Relu", inputs=["in1"])
     n_add = LogicalNode(id="add1", op_type="Add", inputs=["relu1", "in2"])
@@ -35,9 +33,7 @@ def test_propagate_unary_and_binary_ops() -> None:
 def test_propagate_matmul_and_gemm() -> None:
     """Test shape propagation through MatMul and Gemm operations with transA, transB, and bias."""
     # MatMul
-    n_a = LogicalNode(
-        id="a", op_type="Placeholder", shape_metadata=(SymInt("B"), 128, 64)
-    )
+    n_a = LogicalNode(id="a", op_type="Placeholder", shape_metadata=(SymInt("B"), 128, 64))
     n_b = LogicalNode(id="b", op_type="Placeholder", shape_metadata=(64, 256))
     n_matmul = LogicalNode(id="mm", op_type="MatMul", inputs=["a", "b"])
 
@@ -167,9 +163,7 @@ def test_propagate_concat_split_slice() -> None:
     assert evaluated.nodes["sl1"].shape_metadata == (2, 5, 8)
 
     # Concat rank mismatch error
-    n_bad_rank = LogicalNode(
-        id="bad_rank", op_type="Placeholder", shape_metadata=(2, 10)
-    )
+    n_bad_rank = LogicalNode(id="bad_rank", op_type="Placeholder", shape_metadata=(2, 10))
     n_bad_cat = LogicalNode(
         id="bad_cat",
         op_type="Concat",
@@ -194,14 +188,10 @@ def test_nanogpt_symbolic_shape_propagation() -> None:
     head_dim = c_embed // num_heads  # 64
 
     # Inputs: x is (B, T, 768)
-    n_x = LogicalNode(
-        id="x", op_type="Placeholder", shape_metadata=(si_b, si_t, c_embed)
-    )
+    n_x = LogicalNode(id="x", op_type="Placeholder", shape_metadata=(si_b, si_t, c_embed))
 
     # QKV projection: (B, T, 768) x (768, 3 * 768) -> (B, T, 2304)
-    n_w_qkv = LogicalNode(
-        id="w_qkv", op_type="Placeholder", shape_metadata=(c_embed, 3 * c_embed)
-    )
+    n_w_qkv = LogicalNode(id="w_qkv", op_type="Placeholder", shape_metadata=(c_embed, 3 * c_embed))
     n_qkv = LogicalNode(id="qkv", op_type="MatMul", inputs=["x", "w_qkv"])
 
     # Split Q, K, V -> each (B, T, 768)
@@ -312,9 +302,7 @@ def test_propagate_gemm_and_missing_inputs_branches() -> None:
 
     n_1d = LogicalNode(id="n1d", op_type="Placeholder", shape_metadata=(16,))
     n_gemm_bad_rank = LogicalNode(id="gbr", op_type="Gemm", inputs=["n1d", "gb"])
-    assert (
-        _propagate_gemm_op(n_gemm_bad_rank, {"n1d": n_1d, "gb": n_b}, tracker) is None
-    )
+    assert _propagate_gemm_op(n_gemm_bad_rank, {"n1d": n_1d, "gb": n_b}, tracker) is None
 
     assert _propagate_gemm_op(n_gemm, {"ga": n_a, "gb": n_b}, tracker) == (16, 64)
     n_gc_unshaped = LogicalNode(id="gc_un", op_type="Placeholder", shape_metadata=None)
@@ -351,9 +339,7 @@ def test_propagate_squeeze_and_unsqueeze_branches() -> None:
         4,
     )
 
-    n_sq_int = LogicalNode(
-        id="sq_int", op_type="Squeeze", inputs=["x"], attributes={"axes": 1}
-    )
+    n_sq_int = LogicalNode(id="sq_int", op_type="Squeeze", inputs=["x"], attributes={"axes": 1})
     assert _propagate_squeeze_op(n_sq_int, {"x": n_x}) == (2, 4)
 
     n_sq_no_ax = LogicalNode(id="sq_no_ax", op_type="Squeeze", inputs=["x"])
@@ -362,18 +348,14 @@ def test_propagate_squeeze_and_unsqueeze_branches() -> None:
     n_unsq_inp = LogicalNode(id="unsq", op_type="Unsqueeze", inputs=["x", "ax"])
     assert _propagate_unsqueeze_op(n_unsq_inp, processed_sq) == (2, 1, 1, 4)
 
-    n_unsq_ax_emp = LogicalNode(
-        id="unsq_emp", op_type="Unsqueeze", inputs=["x", "ax_emp"]
-    )
+    n_unsq_ax_emp = LogicalNode(id="unsq_emp", op_type="Unsqueeze", inputs=["x", "ax_emp"])
     assert _propagate_unsqueeze_op(n_unsq_ax_emp, {"x": n_x, "ax_emp": n_ax_empty}) == (
         2,
         1,
         4,
     )
 
-    n_unsq_int = LogicalNode(
-        id="unsq_int", op_type="Unsqueeze", inputs=["x"], attributes={"axes": 0}
-    )
+    n_unsq_int = LogicalNode(id="unsq_int", op_type="Unsqueeze", inputs=["x"], attributes={"axes": 0})
     assert _propagate_unsqueeze_op(n_unsq_int, {"x": n_x}) == (1, 2, 1, 4)
 
     n_unsq_no_ax = LogicalNode(id="unsq_no_ax", op_type="Unsqueeze", inputs=["x"])
@@ -381,9 +363,8 @@ def test_propagate_squeeze_and_unsqueeze_branches() -> None:
 
 
 def test_propagate_slice_split_flatten_concat_branches() -> None:
-    """Test helper branches for Slice, Split, Flatten, and Concat shape propagation."""
+    """Test helper branches for Slice, Split, and Flatten shape propagation."""
     from ml_switcheroo_ir.transforms import (
-        _propagate_concat_op,
         _propagate_flatten_op,
         _propagate_slice_op,
         _propagate_split_op,
@@ -449,12 +430,22 @@ def test_propagate_slice_split_flatten_concat_branches() -> None:
     res_fl = _propagate_flatten_op(n_fl_sym, {"sym_in": n_sym})
     assert res_fl == (SymVar("N"), 64)
 
-    n_cat_s1 = LogicalNode(
-        id="cat_s1", op_type="Placeholder", shape_metadata=(si_n, 32)
+
+def test_propagate_concat_and_slice_symbolic_negative_branches() -> None:
+    """Test symbolic Concat and Slice negative start/end/step propagation branches."""
+    from ml_switcheroo_ir.transforms import (
+        _propagate_concat_op,
+        _propagate_slice_op,
+        _propagate_split_op,
     )
-    n_cat_s2 = LogicalNode(
-        id="cat_s2", op_type="Placeholder", shape_metadata=(si_n, 32)
-    )
+
+    si_n = SymInt("N")
+    si_t = SymInt("T")
+    n_sym = LogicalNode(id="sym_in", op_type="Placeholder", shape_metadata=(si_n, 64))
+    n_sym_t = LogicalNode(id="sym_t", op_type="Placeholder", shape_metadata=(si_t,))
+
+    n_cat_s1 = LogicalNode(id="cat_s1", op_type="Placeholder", shape_metadata=(si_n, 32))
+    n_cat_s2 = LogicalNode(id="cat_s2", op_type="Placeholder", shape_metadata=(si_n, 32))
     n_cat_sym = LogicalNode(
         id="cat_sym",
         op_type="Concat",
@@ -529,10 +520,7 @@ def test_propagate_slice_split_flatten_concat_branches() -> None:
         ("u9", "Split"),
         ("u10", "Slice"),
     ]
-    unshaped_nodes = {
-        nid: LogicalNode(id=nid, op_type=op, inputs=["missing"])
-        for nid, op in unshaped_ops
-    }
+    unshaped_nodes = {nid: LogicalNode(id=nid, op_type=op, inputs=["missing"]) for nid, op in unshaped_ops}
     g_unshaped = LogicalGraph(
         nodes=unshaped_nodes,
         inputs=[],

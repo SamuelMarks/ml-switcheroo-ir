@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import re
+from collections.abc import Sequence
 
 from ml_switcheroo_ir.graph import LogicalNode
 from ml_switcheroo_ir.schema.ghost import (
@@ -100,39 +100,21 @@ def _extract_sass_registers(node: LogicalNode, role: str = "src") -> list[str]:
     Returns:
         list[str]: Normalized register names.
     """
-    regs: list[str] = []
-    if role == "dst":
-        dst = node.attributes.get("dst_reg")
-        if dst is None:
-            dst = node.attributes.get("dst")
-        if isinstance(dst, list):
-            for d in dst:
-                regs.append(str(d).upper())
-        elif dst is not None:
-            regs.append(str(dst).upper())
-        for out in node.outputs:
-            for reg in re.findall(r"^R\d+$", str(out), re.IGNORECASE):
-                regs.append(reg.upper())
-    else:
-        srcs = node.attributes.get("src_regs")
-        if srcs is None:
-            srcs = node.attributes.get("srcs")
-        if isinstance(srcs, list):
-            for s in srcs:
-                regs.append(str(s).upper())
-        elif srcs is not None:
-            regs.append(str(srcs).upper())
-        for inp in node.inputs:
-            for reg in re.findall(r"^R\d+$", str(inp), re.IGNORECASE):
-                regs.append(reg.upper())
+    primary_key, alt_key, ports = ("dst_reg", "dst", node.outputs) if role == "dst" else ("src_regs", "srcs", node.inputs)
+    raw = node.attributes.get(primary_key)
+    if raw is None:
+        raw = node.attributes.get(alt_key)
 
-    seen: set[str] = set()
-    unique_regs: list[str] = []
-    for r in regs:
-        if r not in seen:
-            seen.add(r)
-            unique_regs.append(r)
-    return unique_regs
+    regs: list[str] = []
+    if isinstance(raw, list):
+        regs.extend(str(item).upper() for item in raw)
+    elif raw is not None:
+        regs.append(str(raw).upper())
+
+    for port in ports:
+        regs.extend(reg.upper() for reg in re.findall(r"^R\d+$", str(port), re.IGNORECASE))
+
+    return list(dict.fromkeys(regs))
 
 
 def validate_vopd_pairing(
@@ -233,23 +215,12 @@ def validate_vopd_pairing(
     for bank in range(4):
         bank_x_regs = {r for r in src_x if r % 4 == bank}
         bank_y_regs = {r for r in src_y if r % 4 == bank}
-        if (
-            bank_x_regs
-            and bank_y_regs
-            and (
-                bank_x_regs != bank_y_regs
-                or len(bank_x_regs) > 1
-                or len(bank_y_regs) > 1
-            )
-        ):
+        if bank_x_regs and bank_y_regs and (bank_x_regs != bank_y_regs or len(bank_x_regs) > 1 or len(bank_y_regs) > 1):
             errors.append(
                 ValidationError(
                     node_id=opX.id,
                     attribute="vopd_bank_conflict",
-                    message=(
-                        f"VOPD register bank conflict on bank {bank}: "
-                        f"opX reads VGPRs {sorted(bank_x_regs)} and opY reads VGPRs {sorted(bank_y_regs)}."
-                    ),
+                    message=(f"VOPD register bank conflict on bank {bank}: opX reads VGPRs {sorted(bank_x_regs)} and opY reads VGPRs {sorted(bank_y_regs)}."),
                     level=ValidationLevel.ERROR,
                 )
             )
@@ -257,9 +228,7 @@ def validate_vopd_pairing(
     return errors
 
 
-def _validate_rdna_isa(
-    node: LogicalNode, level: ValidationLevel
-) -> list[ValidationError]:
+def _validate_rdna_isa(node: LogicalNode, level: ValidationLevel) -> list[ValidationError]:
     """Validate AMD RDNA ISA attributes on a node.
 
     Args:
@@ -299,17 +268,69 @@ def _validate_rdna_isa(
     if isinstance(vgpr_indices, list) and len(vgpr_indices) >= 2:
         banks = [idx % 4 for idx in vgpr_indices if isinstance(idx, int)]
         if len(banks) != len(set(banks)):
-            lvl = (
-                ValidationLevel.ERROR
-                if level == ValidationLevel.STRICT
-                else ValidationLevel.WARNING
-            )
+            lvl = ValidationLevel.ERROR if level == ValidationLevel.STRICT else ValidationLevel.WARNING
             errors.append(
                 ValidationError(
                     node_id=node.id,
                     attribute="vgpr_operands",
                     message=f"VGPR bank conflict detected in instruction '{node.op_type}': operands map to same bank ({banks}).",
                     level=lvl,
+                )
+            )
+    return errors
+
+
+def _validate_sass_barrier_attributes(node: LogicalNode) -> list[ValidationError]:
+    """Validate SASS read_barrier, write_barrier, and wait_barrier_mask attributes.
+
+    Args:
+        node (LogicalNode): SASS instruction node.
+
+    Returns:
+        list[ValidationError]: Detected barrier mask errors.
+    """
+    errors: list[ValidationError] = []
+    for barrier_key in ("read_barrier", "write_barrier", "wait_barrier_mask"):
+        b_val = node.attributes.get(barrier_key)
+        if b_val is None:
+            continue
+        if isinstance(b_val, int) and not isinstance(b_val, bool):
+            if not (0 <= b_val <= 63):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute=barrier_key,
+                        message=f"Invalid SASS barrier mask '{b_val}'. Must be in range 0..63.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif isinstance(b_val, list):
+            if not all(isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5 for x in b_val):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute=barrier_key,
+                        message=f"Invalid SASS barrier list '{b_val}'. Entries must be barrier indices 0..5.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        elif isinstance(b_val, str):
+            if len(b_val) > 6 or not set(b_val).issubset({"0", "1", "2", "3", "4", "5", "-", " "}):
+                errors.append(
+                    ValidationError(
+                        node_id=node.id,
+                        attribute=barrier_key,
+                        message=f"Invalid SASS barrier mask string '{b_val}'.",
+                        level=ValidationLevel.ERROR,
+                    )
+                )
+        else:
+            errors.append(
+                ValidationError(
+                    node_id=node.id,
+                    attribute=barrier_key,
+                    message=f"Invalid SASS barrier mask type for '{barrier_key}'.",
+                    level=ValidationLevel.ERROR,
                 )
             )
     return errors
@@ -326,11 +347,7 @@ def _validate_sass_isa(node: LogicalNode) -> list[ValidationError]:
     """
     errors: list[ValidationError] = []
     barrier = node.attributes.get("barrier_predicate")
-    if (
-        barrier is not None
-        and isinstance(barrier, str)
-        and not (barrier.startswith(("@P", "@!P")) or barrier in ("@PT", "@!PT"))
-    ):
+    if barrier is not None and isinstance(barrier, str) and not (barrier.startswith(("@P", "@!P")) or barrier in ("@PT", "@!PT")):
         errors.append(
             ValidationError(
                 node_id=node.id,
@@ -352,26 +369,19 @@ def _validate_sass_isa(node: LogicalNode) -> list[ValidationError]:
         )
 
     mem_space = node.attributes.get("memory_space")
-    if mem_space is not None:
-        valid_spaces = {"global", "shared", "constant", "local"}
-        if mem_space not in valid_spaces:
-            errors.append(
-                ValidationError(
-                    node_id=node.id,
-                    attribute="memory_space",
-                    message=f"Invalid SASS memory space '{mem_space}', expected one of {valid_spaces}.",
-                    level=ValidationLevel.ERROR,
-                )
+    valid_spaces = {"global", "shared", "constant", "local"}
+    if mem_space is not None and mem_space not in valid_spaces:
+        errors.append(
+            ValidationError(
+                node_id=node.id,
+                attribute="memory_space",
+                message=f"Invalid SASS memory space '{mem_space}', expected one of {valid_spaces}.",
+                level=ValidationLevel.ERROR,
             )
+        )
 
-    stall = (
-        node.attributes.get("stall_count")
-        if "stall_count" in node.attributes
-        else node.attributes.get("stall")
-    )
-    if stall is not None and (
-        not isinstance(stall, int) or isinstance(stall, bool) or not (0 <= stall <= 15)
-    ):
+    stall = node.attributes.get("stall_count") if "stall_count" in node.attributes else node.attributes.get("stall")
+    if stall is not None and (not isinstance(stall, int) or isinstance(stall, bool) or not (0 <= stall <= 15)):
         errors.append(
             ValidationError(
                 node_id=node.id,
@@ -381,79 +391,27 @@ def _validate_sass_isa(node: LogicalNode) -> list[ValidationError]:
             )
         )
 
-    yield_val = (
-        node.attributes.get("yield_flag")
-        if "yield_flag" in node.attributes
-        else node.attributes.get("yield")
-    )
-    if yield_val is not None:
-        if isinstance(yield_val, str):
-            if yield_val not in ("Y", "-", "yield", "noyield"):
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute="yield_flag",
-                        message=f"Invalid SASS yield flag '{yield_val}'. Expected 'Y' or '-'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
-        elif not isinstance(yield_val, bool):
-            errors.append(
-                ValidationError(
-                    node_id=node.id,
-                    attribute="yield_flag",
-                    message=f"Invalid SASS yield flag '{yield_val}'.",
-                    level=ValidationLevel.ERROR,
-                )
+    yield_val = node.attributes.get("yield_flag") if "yield_flag" in node.attributes else node.attributes.get("yield")
+    if isinstance(yield_val, str) and yield_val not in ("Y", "-", "yield", "noyield"):
+        errors.append(
+            ValidationError(
+                node_id=node.id,
+                attribute="yield_flag",
+                message=f"Invalid SASS yield flag '{yield_val}'. Expected 'Y' or '-'.",
+                level=ValidationLevel.ERROR,
             )
+        )
+    elif yield_val is not None and not isinstance(yield_val, (str, bool)):
+        errors.append(
+            ValidationError(
+                node_id=node.id,
+                attribute="yield_flag",
+                message=f"Invalid SASS yield flag '{yield_val}'.",
+                level=ValidationLevel.ERROR,
+            )
+        )
 
-    for barrier_key in ("read_barrier", "write_barrier", "wait_barrier_mask"):
-        b_val = node.attributes.get(barrier_key)
-        if b_val is not None:
-            if isinstance(b_val, int) and not isinstance(b_val, bool):
-                if not (0 <= b_val <= 63):
-                    errors.append(
-                        ValidationError(
-                            node_id=node.id,
-                            attribute=barrier_key,
-                            message=f"Invalid SASS barrier mask '{b_val}'. Must be in range 0..63.",
-                            level=ValidationLevel.ERROR,
-                        )
-                    )
-            elif isinstance(b_val, list):
-                if not all(
-                    isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5
-                    for x in b_val
-                ):
-                    errors.append(
-                        ValidationError(
-                            node_id=node.id,
-                            attribute=barrier_key,
-                            message=f"Invalid SASS barrier list '{b_val}'. Entries must be barrier indices 0..5.",
-                            level=ValidationLevel.ERROR,
-                        )
-                    )
-            elif isinstance(b_val, str):
-                if len(b_val) > 6 or not set(b_val).issubset(
-                    {"0", "1", "2", "3", "4", "5", "-", " "}
-                ):
-                    errors.append(
-                        ValidationError(
-                            node_id=node.id,
-                            attribute=barrier_key,
-                            message=f"Invalid SASS barrier mask string '{b_val}'.",
-                            level=ValidationLevel.ERROR,
-                        )
-                    )
-            else:
-                errors.append(
-                    ValidationError(
-                        node_id=node.id,
-                        attribute=barrier_key,
-                        message=f"Invalid SASS barrier mask type for '{barrier_key}'.",
-                        level=ValidationLevel.ERROR,
-                    )
-                )
+    errors.extend(_validate_sass_barrier_attributes(node))
     return errors
 
 
@@ -468,14 +426,7 @@ def _validate_wgsl_isa(node: LogicalNode) -> list[ValidationError]:
     """
     errors: list[ValidationError] = []
     wg_size = node.attributes.get("workgroup_size")
-    if wg_size is not None and (
-        not isinstance(wg_size, (list, tuple))
-        or len(wg_size) < 1
-        or len(wg_size) > 3
-        or not all(
-            isinstance(x, int) and not isinstance(x, bool) and x > 0 for x in wg_size
-        )
-    ):
+    if wg_size is not None and (not isinstance(wg_size, (list, tuple)) or len(wg_size) < 1 or len(wg_size) > 3 or not all(isinstance(x, int) and not isinstance(x, bool) and x > 0 for x in wg_size)):
         errors.append(
             ValidationError(
                 node_id=node.id,
@@ -506,14 +457,8 @@ def _validate_wgsl_isa(node: LogicalNode) -> list[ValidationError]:
             )
 
     if qualifier == "uniform":
-        align = (
-            node.attributes.get("struct_alignment")
-            if "struct_alignment" in node.attributes
-            else node.attributes.get("alignment")
-        )
-        if align is not None and (
-            not isinstance(align, int) or isinstance(align, bool) or align % 16 != 0
-        ):
+        align = node.attributes.get("struct_alignment") if "struct_alignment" in node.attributes else node.attributes.get("alignment")
+        if align is not None and (not isinstance(align, int) or isinstance(align, bool) or align % 16 != 0):
             errors.append(
                 ValidationError(
                     node_id=node.id,
@@ -524,9 +469,7 @@ def _validate_wgsl_isa(node: LogicalNode) -> list[ValidationError]:
             )
 
         stride = node.attributes.get("array_stride")
-        if stride is not None and (
-            not isinstance(stride, int) or isinstance(stride, bool) or stride % 16 != 0
-        ):
+        if stride is not None and (not isinstance(stride, int) or isinstance(stride, bool) or stride % 16 != 0):
             errors.append(
                 ValidationError(
                     node_id=node.id,
@@ -547,10 +490,7 @@ def _validate_wgsl_isa(node: LogicalNode) -> list[ValidationError]:
             )
         )
 
-    if qualifier in ("storage, read", "storage_read") and (
-        node.op_type in WGSL_MUTATING_OPS
-        or bool(node.attributes.get("is_mutating", False))
-    ):
+    if qualifier in ("storage, read", "storage_read") and (node.op_type in WGSL_MUTATING_OPS or bool(node.attributes.get("is_mutating", False))):
         errors.append(
             ValidationError(
                 node_id=node.id,
@@ -562,9 +502,7 @@ def _validate_wgsl_isa(node: LogicalNode) -> list[ValidationError]:
     return errors
 
 
-def validate_isa_instruction_node(
-    node: LogicalNode, level: ValidationLevel = ValidationLevel.WARNING
-) -> list[ValidationError]:
+def validate_isa_instruction_node(node: LogicalNode, level: ValidationLevel = ValidationLevel.WARNING) -> list[ValidationError]:
     """Validate GPU accelerator ISA instructions (AMD RDNA, NVIDIA SASS, and WebGPU WGSL).
 
     Args:
@@ -583,6 +521,28 @@ def validate_isa_instruction_node(
     return []
 
 
+def _parse_wait_barrier_mask(node: LogicalNode) -> set[int]:
+    """Extract cleared scoreboard barrier indices from a SASS node's ``wait_barrier_mask``.
+
+    Args:
+        node (LogicalNode): SASS instruction node.
+
+    Returns:
+        set[int]: Set of cleared barrier indices ``0..5``.
+    """
+    wait_mask = node.attributes.get("wait_barrier_mask")
+    cleared: set[int] = set()
+    if isinstance(wait_mask, int) and not isinstance(wait_mask, bool):
+        for b_idx in range(6):
+            if (wait_mask >> b_idx) & 1:
+                cleared.add(b_idx)
+    elif isinstance(wait_mask, list):
+        cleared.update(b for b in wait_mask if isinstance(b, int) and not isinstance(b, bool))
+    elif isinstance(wait_mask, str):
+        cleared.update(int(ch) for ch in wait_mask if ch in {"0", "1", "2", "3", "4", "5"})
+    return cleared
+
+
 def validate_sass_scoreboarding_sequence(
     nodes: Sequence[LogicalNode],
     level: ValidationLevel = ValidationLevel.WARNING,
@@ -598,65 +558,32 @@ def validate_sass_scoreboarding_sequence(
     """
     errors: list[ValidationError] = []
     pending_writes: dict[str, tuple[str, str, int, int | None]] = {}
+    lvl = ValidationLevel.ERROR if level == ValidationLevel.STRICT else ValidationLevel.WARNING
 
     for node in nodes:
         if node.domain not in ("nvidia_sass", "sass"):
             continue
 
-        wait_mask = node.attributes.get("wait_barrier_mask")
-        cleared_barriers: set[int] = set()
-        if isinstance(wait_mask, int) and not isinstance(wait_mask, bool):
-            for b_idx in range(6):
-                if (wait_mask >> b_idx) & 1:
-                    cleared_barriers.add(b_idx)
-        elif isinstance(wait_mask, list):
-            cleared_barriers.update(
-                b for b in wait_mask if isinstance(b, int) and not isinstance(b, bool)
-            )
-        elif isinstance(wait_mask, str):
-            cleared_barriers.update(
-                int(ch) for ch in wait_mask if ch in {"0", "1", "2", "3", "4", "5"}
-            )
-
+        cleared_barriers = _parse_wait_barrier_mask(node)
         if cleared_barriers:
-            pending_writes = {
-                r: info
-                for r, info in pending_writes.items()
-                if info[3] not in cleared_barriers
-            }
+            pending_writes = {r: info for r, info in pending_writes.items() if info[3] not in cleared_barriers}
 
-        src_regs = _extract_sass_registers(node, role="src")
-        for reg in src_regs:
+        for reg in _extract_sass_registers(node, role="src"):
             if reg in pending_writes:
                 prod_id, prod_op, rem_cycles, _ = pending_writes[reg]
-                lvl = (
-                    ValidationLevel.ERROR
-                    if level == ValidationLevel.STRICT
-                    else ValidationLevel.WARNING
-                )
                 errors.append(
                     ValidationError(
                         node_id=node.id,
                         attribute="scoreboarding",
-                        message=(
-                            f"Scoreboard dependency hazard: consumer '{node.id}' ({node.op_type}) "
-                            f"reads register '{reg}' produced by '{prod_id}' ({prod_op}) "
-                            f"before pipeline latency satisfied ({rem_cycles} stall cycles remaining) "
-                            f"without barrier synchronization."
-                        ),
+                        message=(f"Scoreboard dependency hazard: consumer '{node.id}' ({node.op_type}) reads register '{reg}' produced by '{prod_id}' ({prod_op}) before pipeline latency satisfied ({rem_cycles} stall cycles remaining) without barrier synchronization."),
                         level=lvl,
                     )
                 )
 
-        dst_regs = _extract_sass_registers(node, role="dst")
         producer_latency = SASS_PIPELINE_LATENCIES.get(node.op_type, 4)
         wb_attr = node.attributes.get("write_barrier")
-        wb_id: int | None = (
-            wb_attr
-            if isinstance(wb_attr, int) and not isinstance(wb_attr, bool)
-            else None
-        )
-        for reg in dst_regs:
+        wb_id: int | None = wb_attr if isinstance(wb_attr, int) and not isinstance(wb_attr, bool) else None
+        for reg in _extract_sass_registers(node, role="dst"):
             pending_writes[reg] = (
                 node.id,
                 node.op_type,
@@ -667,15 +594,7 @@ def validate_sass_scoreboarding_sequence(
         stall = node.attributes.get("stall_count")
         if stall is None:
             stall = node.attributes.get("stall", 0)
-        stall_cycles = (
-            stall if isinstance(stall, int) and not isinstance(stall, bool) else 0
-        )
-
-        new_pending: dict[str, tuple[str, str, int, int | None]] = {}
-        for r, (p_id, p_op, rem, wb) in pending_writes.items():
-            updated_rem = max(0, rem - stall_cycles)
-            if updated_rem > 0:
-                new_pending[r] = (p_id, p_op, updated_rem, wb)
-        pending_writes = new_pending
+        stall_cycles = stall if isinstance(stall, int) and not isinstance(stall, bool) else 0
+        pending_writes = {r: (p_id, p_op, rem - stall_cycles, wb) for r, (p_id, p_op, rem, wb) in pending_writes.items() if rem - stall_cycles > 0}
 
     return errors

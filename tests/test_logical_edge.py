@@ -153,9 +153,7 @@ def test_add_edge_multi_port_value_name_and_nodedict_mutations() -> None:
         op_type="If",
         subgraphs={"then_branch": sub_graph, "attr_meta": "scalar_meta"},
     )
-    graph = LogicalGraph(
-        nodes={"split": split_node, "add": add_node, "if_node": if_node}
-    )
+    graph = LogicalGraph(nodes={"split": split_node, "add": add_node, "if_node": if_node})
 
     graph.add_edge("split", "add", source_idx=1, target_idx=0, value_name="s1")
     graph.add_edge("ext_src", "add", source_idx=0, target_idx=1, value_name="ext_ssa")

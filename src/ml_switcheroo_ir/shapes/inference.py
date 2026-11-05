@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
 import typing
+from collections.abc import Iterable, Mapping, Sequence
+
 import typing_extensions
 
 if typing.TYPE_CHECKING:
@@ -119,16 +120,12 @@ def broadcast_dimension(
         return dim_a
 
     if isinstance(val_a, int) and isinstance(val_b, int):
-        raise ShapeMismatchError(
-            f"Incompatible dimensions for broadcasting: {val_a} and {val_b}"
-        )
+        raise ShapeMismatchError(f"Incompatible dimensions for broadcasting: {val_a} and {val_b}")
 
     if tracker is not None:
         return tracker.unify(dim_a, dim_b)
 
-    raise ShapeMismatchError(
-        f"Incompatible dimensions for broadcasting: {dim_a} and {dim_b}"
-    )
+    raise ShapeMismatchError(f"Incompatible dimensions for broadcasting: {dim_a} and {dim_b}")
 
 
 def broadcast_shapes(
@@ -149,9 +146,7 @@ def broadcast_shapes(
     max_len = max(len(shape_a), len(shape_b))
     pad_a = (1,) * (max_len - len(shape_a)) + tuple(shape_a)
     pad_b = (1,) * (max_len - len(shape_b)) + tuple(shape_b)
-    return tuple(
-        broadcast_dimension(a, b, tracker=tracker) for a, b in zip(pad_a, pad_b)
-    )
+    return tuple(broadcast_dimension(a, b, tracker=tracker) for a, b in zip(pad_a, pad_b))
 
 
 def matmul_shape(shape_a: ShapeType, shape_b: ShapeType) -> tuple[DimensionType, ...]:
@@ -178,18 +173,14 @@ def matmul_shape(shape_a: ShapeType, shape_b: ShapeType) -> tuple[DimensionType,
 
     if len_a == 1 and len_b == 1:
         if not SymbolicSolver.is_consistent(shape_a[0], shape_b[0]):
-            raise ShapeMismatchError(
-                f"Incompatible 1D dot product shapes: {shape_a[0]} and {shape_b[0]}"
-            )
+            raise ShapeMismatchError(f"Incompatible 1D dot product shapes: {shape_a[0]} and {shape_b[0]}")
         return ()
 
     if len_a == 1:
         k_a = shape_a[0]
         k_b = shape_b[-2]
         if not SymbolicSolver.is_consistent(k_a, k_b):
-            raise ShapeMismatchError(
-                f"Incompatible inner dimensions for matmul: {k_a} and {k_b}"
-            )
+            raise ShapeMismatchError(f"Incompatible inner dimensions for matmul: {k_a} and {k_b}")
         batch = shape_b[:-2]
         n_dim = shape_b[-1]
         return tuple(batch) + (n_dim,)
@@ -198,9 +189,7 @@ def matmul_shape(shape_a: ShapeType, shape_b: ShapeType) -> tuple[DimensionType,
         k_a = shape_a[-1]
         k_b = shape_b[0]
         if not SymbolicSolver.is_consistent(k_a, k_b):
-            raise ShapeMismatchError(
-                f"Incompatible inner dimensions for matmul: {k_a} and {k_b}"
-            )
+            raise ShapeMismatchError(f"Incompatible inner dimensions for matmul: {k_a} and {k_b}")
         batch = shape_a[:-2]
         m_dim = shape_a[-2]
         return tuple(batch) + (m_dim,)
@@ -208,9 +197,7 @@ def matmul_shape(shape_a: ShapeType, shape_b: ShapeType) -> tuple[DimensionType,
     k_a = shape_a[-1]
     k_b = shape_b[-2]
     if not SymbolicSolver.is_consistent(k_a, k_b):
-        raise ShapeMismatchError(
-            f"Incompatible inner dimensions for matmul: {k_a} and {k_b}"
-        )
+        raise ShapeMismatchError(f"Incompatible inner dimensions for matmul: {k_a} and {k_b}")
 
     batch_a = shape_a[:-2]
     batch_b = shape_b[:-2]
@@ -354,11 +341,7 @@ class ShapeTracker:
         for node_id, shape_val in raw_shapes.items():
             concrete_tuple = tuple(int(dim) for dim in shape_val)
             resolved[str(node_id)] = concrete_tuple
-            if (
-                tracker is not None
-                and len(concrete_tuple) == 1
-                and not str(node_id).isdigit()
-            ):
+            if tracker is not None and len(concrete_tuple) == 1 and not str(node_id).isdigit():
                 tracker.record_equality(str(node_id), concrete_tuple[0])
 
         return resolved
@@ -435,9 +418,7 @@ class ShapeTracker:
         resolved_bounds: dict[str, int] = {}
 
         raw_nodes = graph.nodes
-        node_iterable: Iterable[ShapeNodeProtocol] = (
-            raw_nodes.values() if isinstance(raw_nodes, Mapping) else raw_nodes
-        )
+        node_iterable: Iterable[ShapeNodeProtocol] = raw_nodes.values() if isinstance(raw_nodes, Mapping) else raw_nodes
 
         for node in node_iterable:
             node_id = str(node.id)
@@ -449,18 +430,11 @@ class ShapeTracker:
 
             if isinstance(shape_meta, (tuple, list)):
                 if strict_rank and len(observed_shape) != len(shape_meta):
-                    raise ShapeMismatchError(
-                        f"Node '{node_id}' observed rank {len(observed_shape)} mismatches "
-                        f"symbolic shape rank {len(shape_meta)}."
-                    )
+                    raise ShapeMismatchError(f"Node '{node_id}' observed rank {len(observed_shape)} mismatches symbolic shape rank {len(shape_meta)}.")
                 new_shape: list[int] = []
                 for idx, dim in enumerate(shape_meta):
-                    concrete_val = (
-                        observed_shape[idx] if idx < len(observed_shape) else 1
-                    )
-                    ShapeTracker._record_dynamic_dim_bound(
-                        dim, concrete_val, resolved_bounds, tracker
-                    )
+                    concrete_val = observed_shape[idx] if idx < len(observed_shape) else 1
+                    ShapeTracker._record_dynamic_dim_bound(dim, concrete_val, resolved_bounds, tracker)
                     new_shape.append(concrete_val)
 
                 resolved_tuple = tuple(new_shape)

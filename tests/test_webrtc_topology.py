@@ -78,10 +78,7 @@ def test_webrtc_signaling_topology_and_mesh_integration() -> None:
     g_restored = LogicalGraph.from_dict(g_dict)
     assert g_restored.mesh is not None
     assert g_restored.mesh.webrtc_topology is not None
-    assert (
-        g_restored.mesh.webrtc_topology.signaling_url
-        == "wss://coordinator.switcheroo.ai:8443"
-    )
+    assert g_restored.mesh.webrtc_topology.signaling_url == "wss://coordinator.switcheroo.ai:8443"
     assert len(g_restored.mesh.webrtc_topology.peers) == 2
 
     plain_graph = LogicalGraph(

@@ -36,10 +36,7 @@ def test_wgsl_uniform_buffer_alignment_validation() -> None:
         },
     )
     errs = v.validate_node(node_bad_align)
-    assert any(
-        "uniform buffer struct alignment must be a multiple of 16 bytes" in e.message
-        for e in errs
-    )
+    assert any("uniform buffer struct alignment must be a multiple of 16 bytes" in e.message for e in errs)
 
     # Invalid array stride (not multiple of 16)
     node_bad_stride = LogicalNode(
@@ -53,10 +50,7 @@ def test_wgsl_uniform_buffer_alignment_validation() -> None:
         },
     )
     errs = v.validate_node(node_bad_stride)
-    assert any(
-        "uniform buffer array stride must be a multiple of 16 bytes" in e.message
-        for e in errs
-    )
+    assert any("uniform buffer array stride must be a multiple of 16 bytes" in e.message for e in errs)
 
 
 def test_wgsl_compute_builtins_validation() -> None:
@@ -106,11 +100,7 @@ def test_wgsl_storage_buffer_access_modes() -> None:
         attributes={"address_space": "storage, read"},
     )
     errs = v.validate_node(store_node)
-    assert any(
-        "Mutating operation 'storageStore' is illegal on read-only storage buffer"
-        in e.message
-        for e in errs
-    )
+    assert any("Mutating operation 'storageStore' is illegal on read-only storage buffer" in e.message for e in errs)
 
     # Atomic op on read-only storage buffer is illegal
     atomic_node = LogicalNode(
@@ -121,11 +111,7 @@ def test_wgsl_storage_buffer_access_modes() -> None:
         attributes={"address_space": "storage_read"},
     )
     errs = v.validate_node(atomic_node)
-    assert any(
-        "Mutating operation 'atomicAdd' is illegal on read-only storage buffer"
-        in e.message
-        for e in errs
-    )
+    assert any("Mutating operation 'atomicAdd' is illegal on read-only storage buffer" in e.message for e in errs)
 
     # Custom mutating flag on read-only storage buffer
     custom_mutating = LogicalNode(
@@ -136,10 +122,7 @@ def test_wgsl_storage_buffer_access_modes() -> None:
         attributes={"address_space": "storage, read", "is_mutating": True},
     )
     errs = v.validate_node(custom_mutating)
-    assert any(
-        "Mutating operation 'dot' is illegal on read-only storage buffer" in e.message
-        for e in errs
-    )
+    assert any("Mutating operation 'dot' is illegal on read-only storage buffer" in e.message for e in errs)
 
     # Mutating op on read_write storage buffer is legal
     store_rw_node = LogicalNode(

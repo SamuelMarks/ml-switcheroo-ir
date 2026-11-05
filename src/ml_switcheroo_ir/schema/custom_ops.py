@@ -7,10 +7,20 @@ from pathlib import Path
 
 from ml_switcheroo_ir.schema.base import (
     REGISTRY_LOCK,
+)
+from ml_switcheroo_ir.schema.base import (
     CustomAttributeSchema as CustomAttributeSchema,
+)
+from ml_switcheroo_ir.schema.base import (
     CustomOpSchema as CustomOpSchema,
+)
+from ml_switcheroo_ir.schema.base import (
     OpSchema as OpSchema,
+)
+from ml_switcheroo_ir.schema.base import (
     load_op_schema_catalog as load_op_schema_catalog,
+)
+from ml_switcheroo_ir.schema.base import (
     parse_op_schema_entry as parse_op_schema_entry,
 )
 
@@ -53,7 +63,7 @@ class Registry:
         Args:
             file_path (str): The path to the JSON file.
         """
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             data = json.load(f)
 
         for op_data in data.get("ops", []):

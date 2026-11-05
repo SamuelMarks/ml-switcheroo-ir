@@ -11,7 +11,11 @@ from ml_switcheroo_ir import (
 )
 from ml_switcheroo_ir.sentinels import (
     NoTangent as NoTangentFromSentinels,
+)
+from ml_switcheroo_ir.sentinels import (
     ZeroTangent as ZeroTangentFromSentinels,
+)
+from ml_switcheroo_ir.sentinels import (
     verify_sentinel_protocol,
 )
 from ml_switcheroo_ir.validator import Validator

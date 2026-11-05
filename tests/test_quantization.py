@@ -140,10 +140,7 @@ def test_dequantize_grouped_int4_validation() -> None:
         },
     )
     errs_scale = v.validate_node(scale_mismatch_node)
-    assert any(
-        "Scales shape dimension 0 (15) does not match expected groups 16" in e.message
-        for e in errs_scale
-    )
+    assert any("Scales shape dimension 0 (15) does not match expected groups 16" in e.message for e in errs_scale)
 
 
 def test_quantization_registry_and_errors() -> None:
@@ -168,9 +165,7 @@ def test_quantization_registry_and_errors() -> None:
         attributes={"quant_dtype": "fp8_e4m3fn"},
     )
     errs_attr = v.validate_required_attributes(missing_attr_node)
-    assert any(
-        "block_size" in e.message and "missing" in e.message.lower() for e in errs_attr
-    )
+    assert any("block_size" in e.message and "missing" in e.message.lower() for e in errs_attr)
 
 
 def test_quantization_edge_cases() -> None:
@@ -178,9 +173,7 @@ def test_quantization_edge_cases() -> None:
     v = Validator(level=ValidationLevel.WARNING)
 
     # 1. Unknown op in validate_quantization
-    unk_node = LogicalNode(
-        id="unk_q", op_type="unknown_quant_op", domain="quantization"
-    )
+    unk_node = LogicalNode(id="unk_q", op_type="unknown_quant_op", domain="quantization")
     assert v.validate_quantization(unk_node) == []
 
     # 2. block_quantize without shape_metadata and with out-of-bounds axis

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -100,9 +100,7 @@ const graph: LogicalGraph = {
         text=True,
         check=False,
     )
-    assert result.returncode == 0, (
-        f"tsc validation failed: {result.stdout} {result.stderr}"
-    )
+    assert result.returncode == 0, f"tsc validation failed: {result.stdout} {result.stderr}"
 
 
 def test_typescript_definitions_compile(tmp_path: Path) -> None:
@@ -114,9 +112,7 @@ def test_typescript_definitions_compile(tmp_path: Path) -> None:
     _verify_ts_compilation(tmp_path)
 
 
-def test_typescript_missing_tsc_and_structural_parity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_typescript_missing_tsc_and_structural_parity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test missing tsc failure handling and verify TypeScript/Python field parity across all IR models.
 
     Args:
@@ -152,7 +148,5 @@ def test_typescript_missing_tsc_and_structural_parity(
             assert field_name in ts_defs
 
     monkeypatch.setattr(shutil, "which", lambda cmd: None)
-    with pytest.raises(
-        pytest.fail.Exception, match="TypeScript compiler .* is required"
-    ):
+    with pytest.raises(pytest.fail.Exception, match="TypeScript compiler .* is required"):
         _verify_ts_compilation(tmp_path)

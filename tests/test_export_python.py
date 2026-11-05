@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import typing
-
 import pytest
 
 import ml_switcheroo_ir as sw_ir
@@ -13,6 +11,35 @@ from ml_switcheroo_ir.export import (
     _format_tensor_spec,
     export_to_python,
 )
+
+
+def _eval_exported_code(code: str, fn_name: str = "build_graph") -> sw_ir.LogicalGraph:
+    """Load exported Python code as a temporary module and invoke its builder function.
+
+    Args:
+        code (str): Generated Python source code.
+        fn_name (str): Builder function name to invoke.
+
+    Returns:
+        sw_ir.LogicalGraph: Reconstructed graph.
+    """
+    import importlib.util
+    import inspect
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".py", encoding="utf-8") as tmp:
+        tmp.write(code)
+        tmp.flush()
+        spec = importlib.util.spec_from_file_location("_exported_ir_mod", tmp.name)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        members = dict(inspect.getmembers(module))
+        builder = members[fn_name]
+        assert callable(builder)
+        graph = builder()
+        assert isinstance(graph, sw_ir.LogicalGraph)
+        return graph
 
 
 def test_export_to_python_basic_roundtrip() -> None:
@@ -54,11 +81,7 @@ def test_export_to_python_basic_roundtrip() -> None:
     assert "def create_linear_graph() -> sw_ir.LogicalGraph:" in code
     assert 'if __name__ == "__main__":' in code
 
-    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
-    exec(code, scope)  # noqa: S102
-    builder_fn = scope["create_linear_graph"]
-    assert callable(builder_fn)
-    reconstructed = builder_fn()
+    reconstructed = _eval_exported_code(code, "create_linear_graph")
 
     assert isinstance(reconstructed, sw_ir.LogicalGraph)
     assert reconstructed.name == graph.name
@@ -79,11 +102,7 @@ def test_export_to_python_default_node_fields() -> None:
     assert "dtype=None" in code
     assert "output_specs=[]" in code
 
-    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
-    exec(code, scope)  # noqa: S102
-    builder = scope["build_graph"]
-    assert callable(builder)
-    reconstructed = builder()
+    reconstructed = _eval_exported_code(code, "build_graph")
     assert reconstructed.nodes["default_node"].sharding is None
     assert reconstructed.nodes["default_node"].dtype is None
     assert reconstructed.nodes["default_node"].output_specs == []
@@ -97,11 +116,7 @@ def test_export_to_python_empty_graph() -> None:
     assert "def build_graph() -> sw_ir.LogicalGraph:" in code
     assert '__name__ == "__main__"' not in code
 
-    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
-    exec(code, scope)  # noqa: S102
-    builder = scope["build_graph"]
-    assert callable(builder)
-    reconstructed = builder()
+    reconstructed = _eval_exported_code(code, "build_graph")
     assert reconstructed == graph
 
 
@@ -121,11 +136,7 @@ def test_export_to_python_autodiff_sentinels() -> None:
     assert "sw_ir.ZeroTangent(" in code
     assert "sw_ir.NoTangent(" in code
 
-    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
-    exec(code, scope)  # noqa: S102
-    builder = scope["build_ad_graph"]
-    assert callable(builder)
-    reconstructed = builder()
+    reconstructed = _eval_exported_code(code, "build_ad_graph")
 
     assert isinstance(reconstructed.nodes["zero_grad"], sw_ir.ZeroTangent)
     assert isinstance(reconstructed.nodes["no_grad"], sw_ir.NoTangent)
@@ -148,16 +159,10 @@ def test_export_to_python_distributed_topologies() -> None:
     mesh = sw_ir.LogicalMesh(shape={"data": 2, "model": 4}, webrtc_topology=webrtc)
 
     pipeline = sw_ir.PipelineTopologyConfig(
-        microbatch_splitting=sw_ir.MicrobatchSplittingConfig(
-            strategy="adaptive", num_microbatches=8
-        ),
+        microbatch_splitting=sw_ir.MicrobatchSplittingConfig(strategy="adaptive", num_microbatches=8),
         mesh_mapping=sw_ir.MeshMappingConfig(devices_per_stage=2),
         stage_communication=sw_ir.StageCommunicationConfig(protocol="webrtc"),
-        dependencies=[
-            sw_ir.DependencyConfig(
-                source_stage="stage_0", target_stage="stage_1", offset_mb=0
-            )
-        ],
+        dependencies=[sw_ir.DependencyConfig(source_stage="stage_0", target_stage="stage_1", offset_mb=0)],
         schedule=sw_ir.PipelineScheduleConfig(
             phases=[
                 sw_ir.SchedulePhaseConfig(
@@ -180,17 +185,11 @@ def test_export_to_python_distributed_topologies() -> None:
     assert "webrtc_topology = sw_ir.WebRTCSignalingTopology.from_dict(" in code
     assert "mesh = sw_ir.LogicalMesh(" in code
 
-    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
-    exec(code, scope)  # noqa: S102
-    builder = scope["build_distributed"]
-    assert callable(builder)
-    reconstructed = builder()
+    reconstructed = _eval_exported_code(code, "build_distributed")
     assert reconstructed == graph
     assert reconstructed.mesh is not None
     assert reconstructed.mesh.webrtc_topology is not None
-    assert (
-        reconstructed.mesh.webrtc_topology.peers[0].peer_id == webrtc.peers[0].peer_id
-    )
+    assert reconstructed.mesh.webrtc_topology.peers[0].peer_id == webrtc.peers[0].peer_id
     assert reconstructed.pipeline_topology is not None
     assert reconstructed.pipeline_topology.microbatch_splitting.num_microbatches == 8
 
@@ -210,16 +209,10 @@ def test_export_to_python_sym_nodes() -> None:
 
     assert _format_sym_node(var_b) == "sw_ir.SymVar('B')"
     assert _format_sym_node(c2) == "sw_ir.SymConst(2)"
-    assert (
-        _format_sym_node(bin_op)
-        == "sw_ir.SymBinaryOp('+', sw_ir.SymVar('B'), sw_ir.SymConst(2))"
-    )
+    assert _format_sym_node(bin_op) == "sw_ir.SymBinaryOp('+', sw_ir.SymVar('B'), sw_ir.SymConst(2))"
     assert _format_sym_node(un_op) == "sw_ir.SymUnaryOp('-', sw_ir.SymVar('T'))"
     assert _format_sym_node(sym_int) == "sw_ir.SymInt(sw_ir.SymVar('B'))"
-    assert (
-        _format_sym_node(piecewise)
-        == "sw_ir.SymPiecewise(cases=[('B > 0', sw_ir.SymVar('B'))], default=sw_ir.SymConst(2))"
-    )
+    assert _format_sym_node(piecewise) == "sw_ir.SymPiecewise(cases=[('B > 0', sw_ir.SymVar('B'))], default=sw_ir.SymConst(2))"
 
     # Test single-dimension shape tuple formatting
     assert _format_shape_tuple(None) == "None"
@@ -241,11 +234,7 @@ def test_export_to_python_mesh_without_webrtc() -> None:
     )
     code = export_to_python(graph)
     assert 'mesh = sw_ir.LogicalMesh(shape={"data": 4})' in code
-    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
-    exec(code, scope)  # noqa: S102
-    builder = scope["build_graph"]
-    assert callable(builder)
-    assert builder() == graph
+    assert _eval_exported_code(code, "build_graph") == graph
 
 
 def test_export_to_python_subgraphs_and_missing_black(
@@ -276,11 +265,7 @@ def test_export_to_python_subgraphs_and_missing_black(
 
     code = export_to_python(graph)
     assert "LogicalGraph.from_dict(" in code
-    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
-    exec(code, scope)  # noqa: S102
-    builder = scope["build_graph"]
-    assert callable(builder)
-    reconstructed = builder()
+    reconstructed = _eval_exported_code(code, "build_graph")
     body_sub = reconstructed.nodes["scan_op"].subgraphs["body"]
     assert isinstance(body_sub, sw_ir.LogicalGraph)
     assert body_sub.name == "BodySubgraph"
@@ -305,12 +290,7 @@ def test_export_to_python_special_characters_and_sanitization() -> None:
     )
 
     code_digit = export_to_python(graph, function_name="123-my.func!")
-    compiled = compile(code_digit, "<exported>", "exec")
-    scope: dict[str, typing.Callable[[], sw_ir.LogicalGraph]] = {}
-    exec(compiled, scope)  # noqa: S102
-    builder = scope["_123_my_func"]
-    assert callable(builder)
-    reconstructed = builder()
+    reconstructed = _eval_exported_code(code_digit, "_123_my_func")
     assert reconstructed == graph
 
     code_kw = export_to_python(sw_ir.LogicalGraph(name=""), function_name="return")

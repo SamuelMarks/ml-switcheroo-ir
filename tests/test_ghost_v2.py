@@ -27,16 +27,16 @@ from ml_switcheroo_ir.validator import ValidationLevel, Validator
 
 def test_ghost_v2_enums_and_results() -> None:
     """Test OperandDirection, IRParameterRole, and GhostResult instantiation."""
-    assert OperandDirection.READ == "READ"
-    assert OperandDirection.WRITE == "WRITE"
-    assert OperandDirection.READ_WRITE == "READ_WRITE"
-    assert OperandDirection.PREDICATE == "PREDICATE"
+    assert OperandDirection.READ.value == "READ"
+    assert OperandDirection.WRITE.value == "WRITE"
+    assert OperandDirection.READ_WRITE.value == "READ_WRITE"
+    assert OperandDirection.PREDICATE.value == "PREDICATE"
 
-    assert IRParameterRole.OPERAND == "OPERAND"
-    assert IRParameterRole.ATTRIBUTE == "ATTRIBUTE"
-    assert IRParameterRole.RESULT == "RESULT"
-    assert IRParameterRole.SUCCESSOR == "SUCCESSOR"
-    assert IRParameterRole.REGION == "REGION"
+    assert IRParameterRole.OPERAND.value == "OPERAND"
+    assert IRParameterRole.ATTRIBUTE.value == "ATTRIBUTE"
+    assert IRParameterRole.RESULT.value == "RESULT"
+    assert IRParameterRole.SUCCESSOR.value == "SUCCESSOR"
+    assert IRParameterRole.REGION.value == "REGION"
 
     res = GhostResult(
         name="out0",
@@ -622,22 +622,29 @@ def test_grounding_diagnostic_and_report_models() -> None:
     assert diag.severity == DiagnosticSeverity.ERROR
     assert diag.suggested_fix == "add"
 
+    def _status(rep: GroundingReport) -> tuple[bool, bool]:
+        """Return (has_errors, is_grounded) for a GroundingReport.
+
+        Args:
+            rep (GroundingReport): Report to inspect.
+
+        Returns:
+            tuple[bool, bool]: ``(rep.has_errors, rep.is_grounded)``.
+        """
+        return rep.has_errors, rep.is_grounded
+
     report = GroundingReport(
         is_grounded=True,
         target="stablehlo",
         symbol="stablehlo.add",
     )
-    assert not report.has_errors
-    assert report.is_grounded
+    assert _status(report) == (False, True)
 
     report.add_diagnostic("info_field", "Informational note", DiagnosticSeverity.INFO)
-    assert not report.has_errors
-    assert report.is_grounded
+    assert _status(report) == (False, True)
 
     report.add_diagnostic("warn_field", "Warning message", DiagnosticSeverity.WARNING)
-    assert not report.has_errors
-    assert report.is_grounded
+    assert _status(report) == (False, True)
 
     report.add_diagnostic("err_field", "Error message", DiagnosticSeverity.ERROR)
-    assert report.has_errors
-    assert not report.is_grounded
+    assert _status(report) == (True, False)

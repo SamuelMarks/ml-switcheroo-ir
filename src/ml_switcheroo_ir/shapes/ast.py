@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
 import typing
-import typing_extensions
+from collections.abc import Callable, Sequence
 
 import pydantic
 import pydantic_core
+import typing_extensions
+from pydantic_core import core_schema
 
 from ml_switcheroo_ir.shapes.polynomial import Polynomial, _poly_to_symnode
 
@@ -29,11 +30,11 @@ class SymNode:
     """Base class for all symbolic expression tree nodes."""
 
     @classmethod
-    def to_node(cls, val: object) -> SymNode:
+    def to_node(cls, val: int | float | str | SymNode | SymInt | None) -> SymNode:
         """Convert an int, str, SymNode, or SymInt into a SymNode.
 
         Args:
-            val (object): Value to convert.
+            val (int | float | str | SymNode | SymInt | None): Value to convert.
 
         Returns:
             SymNode: Structured symbolic expression node.
@@ -98,9 +99,7 @@ class SymNode:
         simplified = self.simplify()
         if simplified is not self:
             return simplified.eval(env)
-        raise NotImplementedError(
-            f"Evaluation not implemented for node of type {type(self).__name__}"
-        )
+        raise NotImplementedError(f"Evaluation not implemented for node of type {type(self).__name__}")
 
     def evaluate(self, bindings: dict[str, int]) -> int:
         """Evaluate expression given runtime variable bindings.
@@ -118,7 +117,7 @@ class SymNode:
         cls,
         source_type: type[SymNode],
         handler: pydantic.GetCoreSchemaHandler | None = None,
-    ) -> pydantic_core.CoreSchema | None:
+    ) -> pydantic_core.CoreSchema:
         """Generate Pydantic core schema for SymNode serializing as string or integer.
 
         Args:
@@ -126,21 +125,16 @@ class SymNode:
             handler (pydantic.GetCoreSchemaHandler | None): Schema generation handler.
 
         Returns:
-            pydantic_core.CoreSchema | None: Pydantic core schema representation.
+            pydantic_core.CoreSchema: Pydantic core schema representation.
         """
         del source_type, handler
-        try:
-            from pydantic_core import core_schema
-
-            return core_schema.union_schema(
-                [
-                    core_schema.int_schema(),
-                    core_schema.str_schema(),
-                    core_schema.is_instance_schema(cls),
-                ]
-            )
-        except ImportError:
-            return None
+        return core_schema.union_schema(
+            [
+                core_schema.int_schema(),
+                core_schema.str_schema(),
+                core_schema.is_instance_schema(cls),
+            ]
+        )
 
     @property
     def is_constant(self) -> bool:
@@ -521,9 +515,7 @@ class SymBinaryOp(SymNode):
         self.right: SymNode = right
 
     @staticmethod
-    def _simplify_constants(
-        op: str, s_left: SymConst, s_right: SymConst
-    ) -> SymNode | None:
+    def _simplify_constants(op: str, s_left: SymConst, s_right: SymConst) -> SymNode | None:
         """Fold two constant operands if the operator is statically evaluable.
 
         Args:
@@ -535,22 +527,20 @@ class SymBinaryOp(SymNode):
             SymNode | None: Folded SymConst or None if division by zero or unknown op.
         """
         v1, v2 = s_left.value, s_right.value
-        if op == "+":
-            return SymConst(v1 + v2)
-        if op == "-":
-            return SymConst(v1 - v2)
-        if op == "*":
-            return SymConst(v1 * v2)
+        table: dict[str, Callable[[int, int], int]] = {
+            "+": lambda a, b: a + b,
+            "-": lambda a, b: a - b,
+            "*": lambda a, b: a * b,
+            "**": lambda a, b: int(a**b),
+            "min": min,
+            "max": max,
+        }
+        if op in table:
+            return SymConst(table[op](v1, v2))
         if op == "//" and v2 != 0:
             return SymConst(v1 // v2)
         if op == "%" and v2 != 0:
             return SymConst(v1 % v2)
-        if op == "**":
-            return SymConst(int(v1**v2))
-        if op == "min":
-            return SymConst(min(v1, v2))
-        if op == "max":
-            return SymConst(max(v1, v2))
         return None
 
     @staticmethod
@@ -616,6 +606,36 @@ class SymBinaryOp(SymNode):
         return None
 
     @staticmethod
+    def _cancel_floordiv_mul_factor(s_left: SymBinaryOp, s_right: SymNode) -> SymNode | None:
+        """Cancel a common multiplicative factor when left operand is a multiplication node.
+
+        Args:
+            s_left (SymBinaryOp): Left multiplication expression node.
+            s_right (SymNode): Right divisor node.
+
+        Returns:
+            SymNode | None: Cancelled expression or None.
+        """
+        if s_left.right == s_right:
+            return s_left.left
+        if s_left.left == s_right:
+            return s_left.right
+        if isinstance(s_right, SymConst) and s_right.value != 0:
+            if isinstance(s_left.right, SymConst) and s_left.right.value % s_right.value == 0:
+                return SymBinaryOp(
+                    "*",
+                    s_left.left,
+                    SymConst(s_left.right.value // s_right.value),
+                ).simplify()
+            if isinstance(s_left.left, SymConst) and s_left.left.value % s_right.value == 0:
+                return SymBinaryOp(
+                    "*",
+                    s_left.right,
+                    SymConst(s_left.left.value // s_right.value),
+                ).simplify()
+        return None
+
+    @staticmethod
     def _simplify_floordiv(s_left: SymNode, s_right: SymNode) -> SymNode | None:
         """Apply floor-division identity and factor cancellation rules.
 
@@ -630,34 +650,10 @@ class SymBinaryOp(SymNode):
             return s_left
         if isinstance(s_left, SymConst) and s_left.value == 0:
             return SymConst(0)
-        if s_left == s_right and not (
-            isinstance(s_right, SymConst) and s_right.value == 0
-        ):
+        if s_left == s_right and not (isinstance(s_right, SymConst) and s_right.value == 0):
             return SymConst(1)
         if isinstance(s_left, SymBinaryOp) and s_left.op == "*":
-            if s_left.right == s_right:
-                return s_left.left
-            if s_left.left == s_right:
-                return s_left.right
-            if isinstance(s_right, SymConst) and s_right.value != 0:
-                if (
-                    isinstance(s_left.right, SymConst)
-                    and s_left.right.value % s_right.value == 0
-                ):
-                    return SymBinaryOp(
-                        "*",
-                        s_left.left,
-                        SymConst(s_left.right.value // s_right.value),
-                    ).simplify()
-                if (
-                    isinstance(s_left.left, SymConst)
-                    and s_left.left.value % s_right.value == 0
-                ):
-                    return SymBinaryOp(
-                        "*",
-                        s_left.right,
-                        SymConst(s_left.left.value // s_right.value),
-                    ).simplify()
+            return SymBinaryOp._cancel_floordiv_mul_factor(s_left, s_right)
         return None
 
     @staticmethod
@@ -675,9 +671,7 @@ class SymBinaryOp(SymNode):
             return SymConst(0)
         if isinstance(s_left, SymConst) and s_left.value == 0:
             return SymConst(0)
-        if s_left == s_right and not (
-            isinstance(s_right, SymConst) and s_right.value == 0
-        ):
+        if s_left == s_right and not (isinstance(s_right, SymConst) and s_right.value == 0):
             return SymConst(0)
         return None
 
@@ -718,17 +712,9 @@ class SymBinaryOp(SymNode):
         """
         if s_left == s_right:
             return s_left
-        if (
-            isinstance(s_left, SymBinaryOp)
-            and s_left.op == op
-            and (s_left.left == s_right or s_left.right == s_right)
-        ):
+        if isinstance(s_left, SymBinaryOp) and s_left.op == op and (s_left.left == s_right or s_left.right == s_right):
             return s_left
-        if (
-            isinstance(s_right, SymBinaryOp)
-            and s_right.op == op
-            and (s_right.left == s_left or s_right.right == s_left)
-        ):
+        if isinstance(s_right, SymBinaryOp) and s_right.op == op and (s_right.left == s_left or s_right.right == s_left):
             return s_right
         return None
 
@@ -806,12 +792,22 @@ class SymBinaryOp(SymNode):
         """
         v1 = self.left.eval(env)
         v2 = self.right.eval(env)
-        if self.op == "+":
-            return v1 + v2
-        if self.op == "-":
-            return v1 - v2
-        if self.op == "*":
-            return v1 * v2
+        table: dict[str, Callable[[int, int], int]] = {
+            "+": lambda a, b: a + b,
+            "-": lambda a, b: a - b,
+            "*": lambda a, b: a * b,
+            "**": lambda a, b: int(a**b),
+            "min": min,
+            "max": max,
+            "==": lambda a, b: int(a == b),
+            "!=": lambda a, b: int(a != b),
+            "<": lambda a, b: int(a < b),
+            "<=": lambda a, b: int(a <= b),
+            ">": lambda a, b: int(a > b),
+            ">=": lambda a, b: int(a >= b),
+        }
+        if self.op in table:
+            return table[self.op](v1, v2)
         if self.op == "//":
             if v2 == 0:
                 raise ZeroDivisionError("Division by zero in symbolic evaluation.")
@@ -820,24 +816,6 @@ class SymBinaryOp(SymNode):
             if v2 == 0:
                 raise ZeroDivisionError("Modulo by zero in symbolic evaluation.")
             return v1 % v2
-        if self.op == "**":
-            return int(v1**v2)
-        if self.op == "min":
-            return min(v1, v2)
-        if self.op == "max":
-            return max(v1, v2)
-        if self.op == "==":
-            return int(v1 == v2)
-        if self.op == "!=":
-            return int(v1 != v2)
-        if self.op == "<":
-            return int(v1 < v2)
-        if self.op == "<=":
-            return int(v1 <= v2)
-        if self.op == ">":
-            return int(v1 > v2)
-        if self.op == ">=":
-            return int(v1 >= v2)
         raise ValueError(f"Unsupported operator '{self.op}'.")
 
     def free_vars(self) -> set[str]:
@@ -875,11 +853,7 @@ class SymBinaryOp(SymNode):
         """
         if not isinstance(other, SymBinaryOp):
             return False
-        return (
-            self.op == other.op
-            and self.left == other.left
-            and self.right == other.right
-        )
+        return self.op == other.op and self.left == other.left and self.right == other.right
 
     def __hash__(self) -> int:
         """Compute hash for binary operation.
@@ -1190,7 +1164,7 @@ class SymInt:
         cls,
         source_type: type[SymInt],
         handler: pydantic.GetCoreSchemaHandler | None = None,
-    ) -> pydantic_core.CoreSchema | None:
+    ) -> pydantic_core.CoreSchema:
         """Generate Pydantic core schema for SymInt serializing as string or integer.
 
         Args:
@@ -1198,21 +1172,16 @@ class SymInt:
             handler (pydantic.GetCoreSchemaHandler | None): Schema generation handler.
 
         Returns:
-            pydantic_core.CoreSchema | None: Pydantic core schema representation.
+            pydantic_core.CoreSchema: Pydantic core schema representation.
         """
         del source_type, handler
-        try:
-            from pydantic_core import core_schema
-
-            return core_schema.union_schema(
-                [
-                    core_schema.int_schema(),
-                    core_schema.str_schema(),
-                    core_schema.is_instance_schema(cls),
-                ]
-            )
-        except ImportError:
-            return None
+        return core_schema.union_schema(
+            [
+                core_schema.int_schema(),
+                core_schema.str_schema(),
+                core_schema.is_instance_schema(cls),
+            ]
+        )
 
     @property
     def is_constant(self) -> bool:
@@ -1431,6 +1400,4 @@ class SymInt:
 
 DimensionType: typing_extensions.TypeAlias = typing.Union[int, str, SymNode, SymInt]
 ShapeType: typing_extensions.TypeAlias = Sequence[DimensionType]
-SymCondition: typing_extensions.TypeAlias = typing.Union[
-    Callable[[dict[str, int]], bool], SymNode, bool, str
-]
+SymCondition: typing_extensions.TypeAlias = typing.Union[Callable[[dict[str, int]], bool], SymNode, bool, str]

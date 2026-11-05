@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import builtins
+import typing
 from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
-import typing
-import typing_extensions
 
 import pydantic
 import pydantic_core
+import typing_extensions
 
 from ml_switcheroo_ir.shapes import (
     DimensionType,
@@ -38,15 +38,7 @@ JsonScalar: typing_extensions.TypeAlias = typing.Union[str, int, float, bool, No
 JsonValue: typing_extensions.TypeAlias = pydantic.JsonValue
 
 if typing.TYPE_CHECKING:
-    InitializerValue: typing_extensions.TypeAlias = (
-        int
-        | float
-        | bool
-        | str
-        | bytes
-        | list["InitializerValue"]
-        | dict[str, "InitializerValue"]
-    )
+    InitializerValue: typing_extensions.TypeAlias = int | float | bool | str | bytes | list["InitializerValue"] | dict[str, "InitializerValue"]
 else:
     InitializerValue: typing_extensions.TypeAlias = typing.Union[
         int,
@@ -270,16 +262,12 @@ class DType(str, Enum):
 
 
 def _validate_dimension_tuple(
-    dims: tuple[DimensionType, ...]
-    | Sequence[DimensionType]
-    | Iterable[DimensionType]
-    | TensorShape
-    | DimensionType,
+    dims: (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType | float),
 ) -> tuple[DimensionType, ...]:
-    """Validate and normalize dimensions into a tuple of DimensionType.
+    """Validate and normalize dimensions for TensorShape.
 
     Args:
-        dims (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType):
+        dims (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType | float):
             Input dimensions.
 
     Returns:
@@ -289,7 +277,7 @@ def _validate_dimension_tuple(
         TypeError: If any dimension is a boolean or not a valid DimensionType.
     """
     if isinstance(dims, TensorShape):
-        raw_dims: Sequence[DimensionType] = dims.dims
+        raw_dims: Sequence[DimensionType | float] = dims.dims
     elif isinstance(dims, (int, str, SymNode, SymInt)):
         raw_dims = (dims,)
     else:
@@ -298,13 +286,9 @@ def _validate_dimension_tuple(
     validated: list[DimensionType] = []
     for d in raw_dims:
         if isinstance(d, bool):
-            raise TypeError(
-                f"Boolean value {d!r} is not a valid tensor dimension in TensorShape."
-            )
+            raise TypeError(f"Boolean value {d!r} is not a valid tensor dimension in TensorShape.")
         if not isinstance(d, (int, str, SymNode, SymInt)):
-            raise TypeError(
-                f"Value {d!r} of type {type(d).__name__} is not a valid DimensionType."
-            )
+            raise TypeError(f"Value {d!r} of type {type(d).__name__} is not a valid DimensionType.")
         validated.append(d)
     return tuple(validated)
 
@@ -322,11 +306,7 @@ class TensorShape(pydantic.BaseModel):
 
     def __init__(
         self,
-        dims: tuple[DimensionType, ...]
-        | Sequence[DimensionType]
-        | Iterable[DimensionType]
-        | TensorShape
-        | DimensionType = (),
+        dims: tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType = (),
     ) -> None:
         """Initialize TensorShape normalizing inputs into a tuple.
 
@@ -391,9 +371,7 @@ class TensorShape(pydantic.BaseModel):
             ValueError: If the shape contains dynamic or symbolic dimensions.
         """
         if self.is_dynamic:
-            raise ValueError(
-                f"Shape {self.dims} contains dynamic or symbolic dimensions."
-            )
+            raise ValueError(f"Shape {self.dims} contains dynamic or symbolic dimensions.")
         res: list[int] = []
         for d in self.dims:
             if isinstance(d, (SymNode, SymInt)):
@@ -425,9 +403,7 @@ class TensorShape(pydantic.BaseModel):
                 res.append(SymNode.to_node(d).evaluate(bindings))
         return tuple(res)
 
-    def broadcast_with(
-        self, other: TensorShape | Sequence[DimensionType]
-    ) -> TensorShape:
+    def broadcast_with(self, other: TensorShape | Sequence[DimensionType]) -> TensorShape:
         """Broadcast this shape with another shape using NumPy-compliant broadcasting.
 
         Args:
@@ -471,9 +447,7 @@ class TensorShape(pydantic.BaseModel):
         """
 
     @typing.overload
-    def __getitem__(
-        self, idx: builtins.slice[int | None, int | None, int | None]
-    ) -> tuple[DimensionType, ...]:
+    def __getitem__(self, idx: builtins.slice[int | None, int | None, int | None]) -> tuple[DimensionType, ...]:
         """Retrieve a slice of dimensions.
 
         Args:
@@ -483,9 +457,7 @@ class TensorShape(pydantic.BaseModel):
             tuple[DimensionType, ...]: Sliced tuple of dimensions.
         """
 
-    def __getitem__(
-        self, idx: int | builtins.slice[int | None, int | None, int | None]
-    ) -> DimensionType | tuple[DimensionType, ...]:
+    def __getitem__(self, idx: int | builtins.slice[int | None, int | None, int | None]) -> DimensionType | tuple[DimensionType, ...]:
         """Retrieve dimension size by index or slice.
 
         Args:
@@ -611,6 +583,18 @@ class TensorSpec(pydantic.BaseModel):
         )
 
 
+def _validate_attribute_value(val: AttributeValue) -> AttributeValue:
+    """Return an AttributeValue instance untouched during Pydantic validation.
+
+    Args:
+        val (AttributeValue): Input attribute value.
+
+    Returns:
+        AttributeValue: Validated attribute value.
+    """
+    return val
+
+
 class _AttributeValuePydanticAnnotation:
     """Custom Pydantic annotation preserving AttributeValue dictionaries, lists, tuples, and IR types without coercion."""
 
@@ -620,7 +604,7 @@ class _AttributeValuePydanticAnnotation:
         source_type: type[AttributeValue],
         handler: pydantic.GetCoreSchemaHandler,
     ) -> pydantic_core.CoreSchema:
-        """Return core_schema.any_schema() for runtime AttributeValue preservation.
+        """Return a plain validator schema for runtime AttributeValue preservation.
 
         Args:
             source_type (type[AttributeValue]): Annotated type.
@@ -630,26 +614,28 @@ class _AttributeValuePydanticAnnotation:
             pydantic_core.CoreSchema: Pydantic CoreSchema instance.
         """
         del source_type, handler
-        return pydantic_core.core_schema.any_schema()
+        return pydantic_core.core_schema.no_info_plain_validator_function(_validate_attribute_value)
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema_obj: pydantic_core.CoreSchema,
+        handler: pydantic.GetJsonSchemaHandler,
+    ) -> dict[str, JsonValue]:
+        """Return an unconstrained JSON Schema object for AttributeValue fields.
+
+        Args:
+            core_schema_obj (pydantic_core.CoreSchema): Core schema object.
+            handler (pydantic.GetJsonSchemaHandler): JSON schema handler.
+
+        Returns:
+            dict[str, JsonValue]: Empty JSON Schema dictionary.
+        """
+        del core_schema_obj, handler
+        return {}
 
 
 if typing.TYPE_CHECKING:
-    AttributeValue: typing_extensions.TypeAlias = (
-        int
-        | float
-        | str
-        | bool
-        | bytes
-        | None
-        | SymNode
-        | SymInt
-        | DType
-        | TensorShape
-        | TensorSpec
-        | Sequence["AttributeValue"]
-        | Mapping[str, "AttributeValue"]
-    )
+    AttributeValue: typing_extensions.TypeAlias = int | float | str | bool | bytes | None | SymNode | SymInt | DType | TensorShape | TensorSpec | Sequence["AttributeValue"] | Mapping[str, "AttributeValue"]
 else:
-    AttributeValue: typing_extensions.TypeAlias = typing.Annotated[
-        JsonValue, _AttributeValuePydanticAnnotation
-    ]
+    AttributeValue: typing_extensions.TypeAlias = typing.Annotated[JsonValue, _AttributeValuePydanticAnnotation]

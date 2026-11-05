@@ -73,9 +73,7 @@ def test_validate_edges_and_graph() -> None:
     n1.inputs = ["missing_source"]
     edge_errors = v.validate_edges(invalid_edge_graph)
     edge_messages = [e.message for e in edge_errors]
-    assert any(
-        "Node input 'missing_source' does not exist." in m for m in edge_messages
-    )
+    assert any("Node input 'missing_source' does not exist." in m for m in edge_messages)
 
 
 def test_validate_kind_unrecognized_domain() -> None:
@@ -91,9 +89,7 @@ def test_validate_kind_unrecognized_domain() -> None:
 def test_validate_kind_custom_missing_op() -> None:
     """Test validating a node with ml.switcheroo.custom domain but missing op."""
     v = Validator()
-    node = LogicalNode(
-        id="n1", op_type="NonExistentCustomOp", domain="ml.switcheroo.custom"
-    )
+    node = LogicalNode(id="n1", op_type="NonExistentCustomOp", domain="ml.switcheroo.custom")
     errors = v.validate_kind(node)
     assert len(errors) == 1
     assert errors[0].attribute == "kind"

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
 import typing
+from collections.abc import Callable, Mapping, Sequence
 
 if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.validation.grounding import GroundingValidator
@@ -159,14 +159,8 @@ _ATTRIBUTE_TYPE_CHECKERS: dict[str, Callable[[AttributeValue], bool]] = {
     "float": lambda v: isinstance(v, (float, int)) and not isinstance(v, bool),
     "str": lambda v: isinstance(v, str),
     "dict": lambda v: isinstance(v, dict),
-    "List[int]": lambda v: (
-        isinstance(v, list)
-        and all(isinstance(x, int) and not isinstance(x, bool) for x in v)
-    ),
-    "List[float]": lambda v: (
-        isinstance(v, list)
-        and all(isinstance(x, (float, int)) and not isinstance(x, bool) for x in v)
-    ),
+    "List[int]": lambda v: isinstance(v, list) and all(isinstance(x, int) and not isinstance(x, bool) for x in v),
+    "List[float]": lambda v: isinstance(v, list) and all(isinstance(x, (float, int)) and not isinstance(x, bool) for x in v),
     "List[str]": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
     "bool": lambda v: isinstance(v, bool),
 }
@@ -204,16 +198,10 @@ class Validator:
             grounding_validator (GroundingValidator | None): Optional grounding validator for snapshot verification.
         """
         self.registry = ONNX_REGISTRY if registry is None else registry
-        self.custom_registry = (
-            CUSTOM_OPS_REGISTRY if custom_registry is None else custom_registry
-        )
-        self.stablehlo_registry = (
-            STABLEHLO_REGISTRY if stablehlo_registry is None else stablehlo_registry
-        )
+        self.custom_registry = CUSTOM_OPS_REGISTRY if custom_registry is None else custom_registry
+        self.stablehlo_registry = STABLEHLO_REGISTRY if stablehlo_registry is None else stablehlo_registry
         self.mlir_registry = MLIR_REGISTRY if mlir_registry is None else mlir_registry
-        self.state_registry = (
-            STATE_OPS_REGISTRY if state_registry is None else state_registry
-        )
+        self.state_registry = STATE_OPS_REGISTRY if state_registry is None else state_registry
         self.collective_registry = COLLECTIVE_OPS_REGISTRY
         self.quantization_registry = QUANTIZATION_OPS_REGISTRY
 
@@ -353,6 +341,46 @@ class Validator:
                 )
         return errors
 
+    def _validate_secondary_domain_kind(self, node: LogicalNode, secondary: Mapping[str, OpSchema]) -> list[ValidationError]:
+        """Validate node kind against a secondary domain registry and hardware primitive table.
+
+        Args:
+            node (LogicalNode): Node to validate.
+            secondary (Mapping[str, OpSchema]): Secondary domain registry.
+
+        Returns:
+            list[ValidationError]: Validation error list (empty if valid).
+        """
+        extra_primitives: Mapping[str, RdnaPrimitiveSpec] | Mapping[str, SassPrimitiveSpec] | Mapping[str, WgslPrimitiveSpec] = {}
+        if node.domain in ("amd_rdna", "rdna"):
+            extra_primitives = RDNA_INSTRUCTION_PRIMITIVES
+        elif node.domain in ("nvidia_sass", "sass"):
+            extra_primitives = SASS_INSTRUCTION_PRIMITIVES
+        elif node.domain in ("webgpu_wgsl", "wgsl"):
+            extra_primitives = WGSL_PRIMITIVE_SIGNATURES
+
+        if node.op_type in secondary or node.op_type in extra_primitives or node.op_type in self.registry:
+            return []
+
+        lvl = ValidationLevel.WARNING if node.domain == "ml.switcheroo.custom" and self.level != ValidationLevel.STRICT else ValidationLevel.ERROR
+        custom_labels = {
+            "collective": "collective registry.",
+            "ml.switcheroo.collective": "collective registry.",
+            "quantization": "quantization registry.",
+            "ml.switcheroo.quantization": "quantization registry.",
+            "state": "state registry.",
+            "ml.switcheroo.state": "state registry.",
+        }
+        target_desc = custom_labels.get(node.domain, f"domain '{node.domain}'.")
+        return [
+            ValidationError(
+                node_id=node.id,
+                attribute="kind",
+                message=f"Operator '{node.op_type}' not found in {target_desc}",
+                level=lvl,
+            )
+        ]
+
     def validate_kind(self, node: LogicalNode) -> list[ValidationError]:
         """Validate that the node's kind exists in the registry for its domain.
 
@@ -366,8 +394,8 @@ class Validator:
             return []
 
         if node.domain == "ai.onnx":
-            if node.op_type not in self.registry:
-                return [
+            return (
+                [
                     ValidationError(
                         node_id=node.id,
                         attribute="kind",
@@ -375,11 +403,13 @@ class Validator:
                         level=ValidationLevel.ERROR,
                     )
                 ]
-            return []
+                if node.op_type not in self.registry
+                else []
+            )
 
         if node.domain in ("ad", "ml.switcheroo.ad"):
-            if node.op_type not in ("ZeroTangent", "NoTangent"):
-                return [
+            return (
+                [
                     ValidationError(
                         node_id=node.id,
                         attribute="kind",
@@ -387,61 +417,19 @@ class Validator:
                         level=ValidationLevel.ERROR,
                     )
                 ]
-            return []
+                if node.op_type not in ("ZeroTangent", "NoTangent")
+                else []
+            )
 
         secondary = self._get_domain_registry(node.domain)
         if secondary is not None:
-            extra_primitives: (
-                Mapping[str, RdnaPrimitiveSpec]
-                | Mapping[str, SassPrimitiveSpec]
-                | Mapping[str, WgslPrimitiveSpec]
-            ) = {}
-            if node.domain in ("amd_rdna", "rdna"):
-                extra_primitives = RDNA_INSTRUCTION_PRIMITIVES
-            elif node.domain in ("nvidia_sass", "sass"):
-                extra_primitives = SASS_INSTRUCTION_PRIMITIVES
-            elif node.domain in ("webgpu_wgsl", "wgsl"):
-                extra_primitives = WGSL_PRIMITIVE_SIGNATURES
-
-            if (
-                node.op_type in secondary
-                or node.op_type in extra_primitives
-                or node.op_type in self.registry
-            ):
-                return []
-
-            lvl = (
-                ValidationLevel.WARNING
-                if node.domain == "ml.switcheroo.custom"
-                and self.level != ValidationLevel.STRICT
-                else ValidationLevel.ERROR
-            )
-            custom_labels = {
-                "collective": "collective registry.",
-                "ml.switcheroo.collective": "collective registry.",
-                "quantization": "quantization registry.",
-                "ml.switcheroo.quantization": "quantization registry.",
-                "state": "state registry.",
-                "ml.switcheroo.state": "state registry.",
-            }
-            target_desc = custom_labels.get(node.domain, f"domain '{node.domain}'.")
-            return [
-                ValidationError(
-                    node_id=node.id,
-                    attribute="kind",
-                    message=f"Operator '{node.op_type}' not found in {target_desc}",
-                    level=lvl,
-                )
-            ]
+            return self._validate_secondary_domain_kind(node, secondary)
 
         if node.domain in CORE_MLIR_DIALECTS:
             return self._validate_core_mlir_dialect(node)
 
-        if (
-            node.domain not in ("ai.custom", "custom")
-            and node.op_type not in self.registry
-        ):
-            return [
+        return (
+            [
                 ValidationError(
                     node_id=node.id,
                     attribute="domain",
@@ -449,7 +437,9 @@ class Validator:
                     level=ValidationLevel.ERROR,
                 )
             ]
-        return []
+            if node.domain not in ("ai.custom", "custom") and node.op_type not in self.registry
+            else []
+        )
 
     def validate_required_attributes(self, node: LogicalNode) -> list[ValidationError]:
         """Validate that all required attributes for the node's kind are present.
@@ -497,11 +487,7 @@ class Validator:
             if key not in schema.attributes:
                 if key in allowed_isa_keys:
                     continue
-                lvl = (
-                    ValidationLevel.ERROR
-                    if self.level == ValidationLevel.STRICT
-                    else ValidationLevel.WARNING
-                )
+                lvl = ValidationLevel.ERROR if self.level == ValidationLevel.STRICT else ValidationLevel.WARNING
                 errors.append(
                     ValidationError(
                         node_id=node.id,
@@ -529,9 +515,7 @@ class Validator:
 
         return errors
 
-    def validate_sharding(
-        self, node: LogicalNode, mesh: LogicalMesh | None
-    ) -> list[ValidationError]:
+    def validate_sharding(self, node: LogicalNode, mesh: LogicalMesh | None) -> list[ValidationError]:
         """Validate that node sharding specification is compatible with the logical mesh.
 
         Args:
@@ -554,11 +538,7 @@ class Validator:
             return
 
         for attr_name, attr_schema in schema.attributes.items():
-            if (
-                not attr_schema.required
-                and attr_schema.default is not None
-                and attr_name not in node.attributes
-            ):
+            if not attr_schema.required and attr_schema.default is not None and attr_name not in node.attributes:
                 node.attributes[attr_name] = attr_schema.default
 
     def validate_isa_instruction(self, node: LogicalNode) -> list[ValidationError]:
@@ -613,18 +593,10 @@ class Validator:
             "wgsl",
         ):
             errors.extend(self.validate_isa_instruction(node))
-        if (
-            node.domain in ("quantization", "ml.switcheroo.quantization")
-            or node.op_type.startswith("quantization.")
-            or node.op_type in ("block_quantize", "dequantize_grouped_int4")
-        ):
+        if node.domain in ("quantization", "ml.switcheroo.quantization") or node.op_type.startswith("quantization.") or node.op_type in ("block_quantize", "dequantize_grouped_int4"):
             errors.extend(self.validate_quantization(node))
 
-        if (
-            self.level == ValidationLevel.STRICT
-            and node.shape_metadata is None
-            and node.op_type != "NoTangent"
-        ):
+        if self.level == ValidationLevel.STRICT and node.shape_metadata is None and node.op_type != "NoTangent":
             errors.append(
                 ValidationError(
                     node_id=node.id,
@@ -678,17 +650,11 @@ class Validator:
         errors: list[ValidationError] = []
 
         for node in graph.nodes.values():
-            errors.extend(
-                self.validate_node(
-                    node, graph.mesh, populate_defaults=populate_defaults
-                )
-            )
+            errors.extend(self.validate_node(node, graph.mesh, populate_defaults=populate_defaults))
 
         errors.extend(self.validate_edges(graph))
 
-        sass_nodes = [
-            n for n in graph.nodes.values() if n.domain in ("nvidia_sass", "sass")
-        ]
+        sass_nodes = [n for n in graph.nodes.values() if n.domain in ("nvidia_sass", "sass")]
         if sass_nodes:
             errors.extend(self.validate_sass_scoreboarding(sass_nodes))
 
@@ -697,9 +663,7 @@ class Validator:
 
         return self._filter_by_level(errors)
 
-    def validate_vopd_pairing(
-        self, opX: LogicalNode, opY: LogicalNode
-    ) -> list[ValidationError]:
+    def validate_vopd_pairing(self, opX: LogicalNode, opY: LogicalNode) -> list[ValidationError]:
         """Validate AMD RDNA3 / GFX11 dual-issue VOPD instruction pairing rules.
 
         Args:
@@ -711,9 +675,7 @@ class Validator:
         """
         return validate_vopd_pairing(opX, opY)
 
-    def validate_sass_scoreboarding(
-        self, nodes: Sequence[LogicalNode]
-    ) -> list[ValidationError]:
+    def validate_sass_scoreboarding(self, nodes: Sequence[LogicalNode]) -> list[ValidationError]:
         """Validate NVIDIA SASS scoreboard dependency latencies between consecutive instructions.
 
         Args:
@@ -724,9 +686,7 @@ class Validator:
         """
         return validate_sass_scoreboarding_sequence(nodes, self.level)
 
-    def validate_sharding_propagation(
-        self, graph: LogicalGraph
-    ) -> list[ValidationError]:
+    def validate_sharding_propagation(self, graph: LogicalGraph) -> list[ValidationError]:
         """Validate SPaDe/GSPMD sharding propagation invariants across graph operations.
 
         Args:
@@ -737,9 +697,7 @@ class Validator:
         """
         return validate_sharding_propagation_graph(graph, self.level)
 
-    def validate_pipeline_and_checkpointing(
-        self, graph: LogicalGraph
-    ) -> list[ValidationError]:
+    def validate_pipeline_and_checkpointing(self, graph: LogicalGraph) -> list[ValidationError]:
         """Validate pipeline parallel stage orderings, boundary markers, and activation checkpointing tags.
 
         Args:
@@ -750,9 +708,7 @@ class Validator:
         """
         return validate_pipeline_and_checkpointing_graph(graph)
 
-    def estimate_communication_volume(
-        self, node: LogicalNode, mesh: LogicalMesh | None = None
-    ) -> int:
+    def estimate_communication_volume(self, node: LogicalNode, mesh: LogicalMesh | None = None) -> int:
         """Calculate analytical communication volume in bytes for a collective communication node.
 
         Args:
@@ -764,9 +720,7 @@ class Validator:
         """
         return estimate_communication_volume(node, mesh)
 
-    def estimate_graph_communication_volume(
-        self, graph: LogicalGraph
-    ) -> CommunicationVolumeReport:
+    def estimate_graph_communication_volume(self, graph: LogicalGraph) -> CommunicationVolumeReport:
         """Aggregate analytical communication volume across all collective operators in a graph.
 
         Args:
@@ -829,12 +783,7 @@ class Validator:
 
         for node_id, node in graph.nodes.items():
             for inp in node.inputs:
-                if (
-                    inp not in node_ids
-                    and graph.get_output_producer(inp) is None
-                    and inp not in graph.inputs
-                    and inp not in graph.initializers
-                ):
+                if inp not in node_ids and graph.get_output_producer(inp) is None and inp not in graph.inputs and inp not in graph.initializers:
                     errors.append(
                         ValidationError(
                             node_id=node_id,
@@ -852,22 +801,13 @@ class Validator:
                     producer = prod_tuple[0]
 
             if producer is not None and producer.has_multiple_outputs:
-                num_outputs = (
-                    len(producer.outputs)
-                    if len(producer.outputs) > 1
-                    else len(producer.output_specs)
-                )
-                if edge.source_idx is not None and (
-                    edge.source_idx < 0 or edge.source_idx >= num_outputs
-                ):
+                num_outputs = len(producer.outputs) if len(producer.outputs) > 1 else len(producer.output_specs)
+                if edge.source_idx is not None and (edge.source_idx < 0 or edge.source_idx >= num_outputs):
                     errors.append(
                         ValidationError(
                             node_id=edge.target,
                             attribute="edges",
-                            message=(
-                                f"Edge references invalid source_idx {edge.source_idx} "
-                                f"(out of bounds) for multi-output node '{producer.id}' (has {num_outputs} outputs)."
-                            ),
+                            message=(f"Edge references invalid source_idx {edge.source_idx} (out of bounds) for multi-output node '{producer.id}' (has {num_outputs} outputs)."),
                             level=ValidationLevel.ERROR,
                         )
                     )

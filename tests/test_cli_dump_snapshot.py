@@ -24,7 +24,7 @@ def test_cli_dump_snapshot(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     assert f"Dumped snapshot to {out_file}" in captured.out
     assert out_file.exists()
 
-    with open(out_file, "r", encoding="utf-8") as f:
+    with open(out_file, encoding="utf-8") as f:
         data = json.load(f)
 
     # Verify both ONNX and Custom operators are present

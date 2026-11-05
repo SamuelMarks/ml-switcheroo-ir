@@ -7,9 +7,7 @@ import pytest
 from ml_switcheroo_ir.cli import main as cli_main
 
 
-def test_cli_compliance_framework_adapter(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_compliance_framework_adapter(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test compliance subcommand scanning mock framework adapters.
 
     Args:
@@ -93,7 +91,8 @@ class Adapter: pass
 def register_op(a, b): return lambda f: f
 def load_definitions(a): pass
 
-class NormalClass(object): pass
+class NormalClass:
+    pass
 
 my_var = "Abs"
 @register_op("fw", my_var)

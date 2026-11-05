@@ -31,10 +31,7 @@ def test_find_schema_file_branches() -> None:
 
         # 1. Override path exists
         assert find_schema_file("dummy_ops.json", override_path=test_file) == test_file
-        assert (
-            find_schema_file("dummy_ops.json", override_path=str(test_file))
-            == test_file
-        )
+        assert find_schema_file("dummy_ops.json", override_path=str(test_file)) == test_file
 
         # 2. Override path does not exist
         non_existent = tmppath / "missing.json"
@@ -45,9 +42,7 @@ def test_find_schema_file_branches() -> None:
         snap_sub.mkdir(parents=True, exist_ok=True)
         cand_file = snap_sub / "cand_ops.json"
         cand_file.write_text("{}", encoding="utf-8")
-        with mock.patch(
-            "ml_switcheroo_ir.snapshots.DEFAULT_SNAPSHOT_DIR", str(snap_sub)
-        ):
+        with mock.patch("ml_switcheroo_ir.snapshots.DEFAULT_SNAPSHOT_DIR", str(snap_sub)):
             assert find_schema_file("cand_ops.json") == cand_file
 
             # 4. Parent candidate path exists in DEFAULT_SNAPSHOT_DIR.parent

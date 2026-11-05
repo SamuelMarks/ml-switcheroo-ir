@@ -280,9 +280,7 @@ def test_streaming_and_compressed_file_io(tmp_path: Path) -> None:
     assert loaded_explicit_zst.name == "TestStreaming"
 
 
-def test_file_io_error_handling(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_file_io_error_handling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test error handling for unsupported compression and missing libraries.
 
     Args:
@@ -293,9 +291,7 @@ def test_file_io_error_handling(
 
     from ml_switcheroo_ir import _load_zstandard
 
-    graph = LogicalGraph(
-        name="ErrGraph", nodes={"x": LogicalNode(id="x", op_type="Input")}
-    )
+    graph = LogicalGraph(name="ErrGraph", nodes={"x": LogicalNode(id="x", op_type="Input")})
 
     # Unsupported compression format
     with pytest.raises(ValueError, match="Unsupported compression format"):
@@ -368,9 +364,7 @@ def test_benchmark_10000_node_transformer_throughput(tmp_path: Path) -> None:
     t_start = time.perf_counter()
     graph.to_file(gz_path)
     to_gz_time = time.perf_counter() - t_start
-    print(
-        f"to_file(gz): {to_gz_time:.3f}s (size: {gz_path.stat().st_size / 1024:.1f} KB)"
-    )
+    print(f"to_file(gz): {to_gz_time:.3f}s (size: {gz_path.stat().st_size / 1024:.1f} KB)")
 
     t_start = time.perf_counter()
     loaded_gz = LogicalGraph.from_file(gz_path)
@@ -383,9 +377,7 @@ def test_benchmark_10000_node_transformer_throughput(tmp_path: Path) -> None:
     t_start = time.perf_counter()
     graph.to_file(zst_path)
     to_zst_time = time.perf_counter() - t_start
-    print(
-        f"to_file(zst): {to_zst_time:.3f}s (size: {zst_path.stat().st_size / 1024:.1f} KB)"
-    )
+    print(f"to_file(zst): {to_zst_time:.3f}s (size: {zst_path.stat().st_size / 1024:.1f} KB)")
 
     t_start = time.perf_counter()
     loaded_zst = LogicalGraph.from_file(zst_path)

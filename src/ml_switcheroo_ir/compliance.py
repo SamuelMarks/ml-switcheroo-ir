@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Sequence
 import json
 import os
 import sys
+from collections.abc import Sequence
 
 import pydantic
 
@@ -99,11 +99,7 @@ def collect_files(targets: list[str]) -> list[str]:
                 if ".venv" in dirs:
                     dirs.remove(".venv")
                 for file in files:
-                    if (
-                        (file.endswith((".py", ".json")))
-                        and not file.startswith("test_")
-                        and file != "__init__.py"
-                    ):
+                    if (file.endswith((".py", ".json"))) and not file.startswith("test_") and file != "__init__.py":
                         collected_files.append(os.path.join(root, file))
     return collected_files
 
@@ -129,7 +125,7 @@ def parse_json_file(filepath: str, dialect_ops: set[str]) -> set[str]:
     """
     implemented = set()
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
                 for k in data:
@@ -140,9 +136,7 @@ def parse_json_file(filepath: str, dialect_ops: set[str]) -> set[str]:
     return implemented
 
 
-def extract_dynamic_definitions(
-    tree: ast.AST, filepath: str, dialect_ops: set[str]
-) -> set[str]:
+def extract_dynamic_definitions(tree: ast.AST, filepath: str, dialect_ops: set[str]) -> set[str]:
     """Extract dynamically loaded JSON definitions based on load_definitions call.
 
     Args:
@@ -157,21 +151,11 @@ def extract_dynamic_definitions(
     loaded_definitions_fw = None
 
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "load_definitions"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-        ):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "load_definitions" and node.args and isinstance(node.args[0], ast.Constant):
             loaded_definitions_fw = node.args[0].value
 
     if loaded_definitions_fw is not None:
-        fw_name = (
-            loaded_definitions_fw.decode("utf-8", errors="replace")
-            if isinstance(loaded_definitions_fw, bytes)
-            else str(loaded_definitions_fw)
-        )
+        fw_name = loaded_definitions_fw.decode("utf-8", errors="replace") if isinstance(loaded_definitions_fw, bytes) else str(loaded_definitions_fw)
         # Try adjacent or nearby definitions/ folder
         base_dir = os.path.dirname(filepath)
         possible_paths = [
@@ -191,6 +175,27 @@ def extract_dynamic_definitions(
     return implemented
 
 
+def _extract_decorator_dialect_ops(decorator_list: list[ast.expr], dialect_ops: set[str]) -> set[str]:
+    """Extract dialect operator names from @register_op decorators on an AST node.
+
+    Args:
+        decorator_list (list[ast.expr]): List of decorator AST expressions.
+        dialect_ops (set[str]): Canonical dialect operator names.
+
+    Returns:
+        set[str]: Matched dialect operator names from decorators.
+    """
+    matched: set[str] = set()
+    for dec in decorator_list:
+        if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name) and dec.func.id == "register_op" and len(dec.args) >= 2 and isinstance(dec.args[1], ast.Constant):
+            op_name = str(dec.args[1].value)
+            if op_name in dialect_ops:
+                matched.add(op_name)
+            elif op_name.capitalize() in dialect_ops:
+                matched.add(op_name.capitalize())
+    return matched
+
+
 def _extract_ast_dialect_ops(tree: ast.AST, dialect_ops: set[str]) -> set[str]:
     """Scan an AST for function/class definitions, @register_op decorators, and dict keys matching dialect ops.
 
@@ -206,28 +211,10 @@ def _extract_ast_dialect_ops(tree: ast.AST, dialect_ops: set[str]) -> set[str]:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if node.name in dialect_ops:
                 implemented.add(node.name)
-
-            for dec in node.decorator_list:
-                if (
-                    isinstance(dec, ast.Call)
-                    and isinstance(dec.func, ast.Name)
-                    and dec.func.id == "register_op"
-                    and len(dec.args) >= 2
-                    and isinstance(dec.args[1], ast.Constant)
-                ):
-                    op_name = str(dec.args[1].value)
-                    if op_name in dialect_ops:
-                        implemented.add(op_name)
-                    elif op_name.capitalize() in dialect_ops:
-                        implemented.add(op_name.capitalize())
-
+            implemented.update(_extract_decorator_dialect_ops(node.decorator_list, dialect_ops))
         if isinstance(node, ast.Dict):
             for key in node.keys:
-                if (
-                    isinstance(key, ast.Constant)
-                    and isinstance(key.value, str)
-                    and key.value in dialect_ops
-                ):
+                if isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value in dialect_ops:
                     implemented.add(key.value)
     return implemented
 
@@ -245,13 +232,8 @@ def _score_ir_classes(tree: ast.AST) -> tuple[bool, tuple[int, int]]:
     best_req_met = 2
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
-            is_backend = any(
-                isinstance(b, ast.Name) and b.id == "CompilerBackend"
-                for b in node.bases
-            )
-            is_frontend = any(
-                isinstance(b, ast.Name) and b.id == "GraphFrontend" for b in node.bases
-            )
+            is_backend = any(isinstance(b, ast.Name) and b.id == "CompilerBackend" for b in node.bases)
+            is_frontend = any(isinstance(b, ast.Name) and b.id == "GraphFrontend" for b in node.bases)
             if is_backend or is_frontend:
                 is_ir = True
                 current_met = 3
@@ -280,16 +262,7 @@ def _score_fw_adapters(tree: ast.AST) -> tuple[bool, tuple[int, int]]:
     is_fw = False
     best_req_met = 2
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and (
-            "Adapter" in node.name
-            or "Importer" in node.name
-            or any(
-                isinstance(d, ast.Call)
-                and isinstance(d.func, ast.Name)
-                and d.func.id == "register_framework"
-                for d in node.decorator_list
-            )
-        ):
+        if isinstance(node, ast.ClassDef) and ("Adapter" in node.name or "Importer" in node.name or any(isinstance(d, ast.Call) and isinstance(d.func, ast.Name) and d.func.id == "register_framework" for d in node.decorator_list)):
             is_fw = True
             current_met = 2
             methods = [n.name for n in node.body if isinstance(n, ast.FunctionDef)]
@@ -312,7 +285,7 @@ def analyze_python_file(filepath: str, dialect_ops: set[str]) -> FileComplianceR
         FileComplianceResult: Model with compliance findings.
     """
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             source = f.read()
         tree = ast.parse(source)
     except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
@@ -330,6 +303,58 @@ def analyze_python_file(filepath: str, dialect_ops: set[str]) -> FileComplianceR
         fw_score=fw_score,
         implemented_ops=implemented,
     )
+
+
+def _resolve_mapped_api_row(raw_api_path: str) -> list[str]:
+    """Resolve framework, namespace, symbol, signature, and docstring for a mapped API path.
+
+    Args:
+        raw_api_path (str): Raw API path string from a mapping JSON file.
+
+    Returns:
+        list[str]: Row cells ``["[ ]", framework, namespace, symbol, fqn, signature, docstring]``.
+    """
+    import importlib
+    import inspect
+
+    api_path = raw_api_path
+    if api_path.startswith("jnp."):
+        api_path = api_path.replace("jnp.", "jax.numpy.", 1)
+    elif api_path.startswith("tf."):
+        api_path = api_path.replace("tf.", "tensorflow.", 1)
+
+    parts = api_path.split(".")
+    framework = parts[0]
+    symbol = parts[-1]
+    namespace = ".".join(parts[:-1]) if len(parts) > 1 else framework
+    signature = "Unknown"
+    docstring = "No docstring available."
+
+    try:
+        module = importlib.import_module(namespace)
+        obj = dict(inspect.getmembers(module))[symbol]
+        try:
+            signature = str(inspect.signature(obj))
+        except (ValueError, TypeError):
+            signature = "Class/Type" if isinstance(obj, type) else "Built-in / No signature"
+
+        doc = inspect.getdoc(obj)
+        if doc:
+            docstring = doc.strip().split("\n\n")[0].replace("\n", " ")
+            if len(docstring) > 150:
+                docstring = docstring[:147] + "..."
+    except (
+        ImportError,
+        AttributeError,
+        KeyError,
+        OSError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+    ):
+        pass
+
+    return ["[ ]", framework, namespace, symbol, api_path, signature, docstring]
 
 
 def _render_verbose_missing_report(
@@ -350,64 +375,10 @@ def _render_verbose_missing_report(
     dialect_ops_map = {k.split(".")[-1]: v for k, v in ONNX_REGISTRY.items()}
 
     if mapping_file and os.path.exists(mapping_file):
-        import importlib
-        import inspect
-
-        with open(mapping_file, "r", encoding="utf-8") as f:
+        with open(mapping_file, encoding="utf-8") as f:
             mapping_data = json.load(f)
 
-        table_data = []
-        for op in missing_ops_list:
-            if op in mapping_data and "api" in mapping_data[op]:
-                api_path = mapping_data[op]["api"]
-
-                if api_path.startswith("jnp."):
-                    api_path = api_path.replace("jnp.", "jax.numpy.", 1)
-                elif api_path.startswith("tf."):
-                    api_path = api_path.replace("tf.", "tensorflow.", 1)
-
-                parts = api_path.split(".")
-                framework = parts[0]
-                symbol = parts[-1]
-                namespace = ".".join(parts[:-1]) if len(parts) > 1 else framework
-                fqn = api_path
-
-                signature = "Unknown"
-                docstring = "No docstring available."
-
-                try:
-                    module = importlib.import_module(namespace)
-                    obj = module.__dict__[symbol]
-
-                    try:
-                        sig = inspect.signature(obj)
-                        signature = str(sig)
-                    except (ValueError, TypeError):
-                        signature = (
-                            "Class/Type"
-                            if isinstance(obj, type)
-                            else "Built-in / No signature"
-                        )
-
-                    doc = inspect.getdoc(obj)
-                    if doc:
-                        docstring = doc.strip().split("\n\n")[0].replace("\n", " ")
-                        if len(docstring) > 150:
-                            docstring = docstring[:147] + "..."
-                except (
-                    ImportError,
-                    AttributeError,
-                    KeyError,
-                    OSError,
-                    ValueError,
-                    TypeError,
-                    RuntimeError,
-                ):
-                    pass
-
-                table_data.append(
-                    ["[ ]", framework, namespace, symbol, fqn, signature, docstring]
-                )
+        table_data = [_resolve_mapped_api_row(mapping_data[op]["api"]) for op in missing_ops_list if op in mapping_data and "api" in mapping_data[op]]
 
         if table_data:
             print(f"\n### {target_label} (Mapped API targets)")
@@ -428,30 +399,103 @@ def _render_verbose_missing_report(
             )
         else:
             print(f"\n### {target_label} (No mappings found in {mapping_file})")
-    else:
-        print(f"\n### {target_label}")
-        for op in missing_ops_list:
-            if op in dialect_ops_map:
-                schema = dialect_ops_map[op]
-                schema_dict = {
-                    "domain": schema.domain,
-                    "version": schema.version,
-                    "inputs": schema.inputs,
-                    "outputs": schema.outputs,
-                    "attributes": {
-                        name: {
-                            "type": attr.type,
-                            "required": attr.required,
-                            "default": attr.default,
-                        }
-                        for name, attr in schema.attributes.items()
-                    },
-                }
-                print(f"- [ ] **{op}**")
-                print("  ```json")
-                for line in json.dumps(schema_dict, indent=2).splitlines():
-                    print(f"  {line}")
-                print("  ```")
+        return
+
+    print(f"\n### {target_label}")
+    for op in missing_ops_list:
+        if op in dialect_ops_map:
+            schema = dialect_ops_map[op]
+            schema_dict = {
+                "domain": schema.domain,
+                "version": schema.version,
+                "inputs": schema.inputs,
+                "outputs": schema.outputs,
+                "attributes": {
+                    name: {
+                        "type": attr.type,
+                        "required": attr.required,
+                        "default": attr.default,
+                    }
+                    for name, attr in schema.attributes.items()
+                },
+            }
+            print(f"- [ ] **{op}**")
+            print("  ```json")
+            for line in json.dumps(schema_dict, indent=2).splitlines():
+                print(f"  {line}")
+            print("  ```")
+
+
+def _aggregate_compliance_results(
+    files: list[str],
+    targets: list[str],
+    dialect_ops: set[str],
+) -> tuple[bool, tuple[int, int], bool, tuple[int, int], set[str], bool]:
+    """Aggregate IR, FrameworkAdapter, and Dialect compliance scores across analyzed files.
+
+    Args:
+        files (list[str]): Collected file paths to analyze.
+        targets (list[str]): Original CLI target paths.
+        dialect_ops (set[str]): Canonical dialect operator set.
+
+    Returns:
+        tuple[bool, tuple[int, int], bool, tuple[int, int], set[str], bool]:
+            ``(found_any_ir, best_ir_score, found_any_fw, best_fw_score, aggregated_dialect_ops, found_any_dialect_targets)``.
+    """
+    best_ir_score = (0, 5)
+    best_fw_score = (0, 4)
+    found_any_ir = False
+    found_any_fw = False
+    aggregated_dialect_ops: set[str] = set()
+    found_any_dialect_targets = False
+    explicit_files = {os.path.abspath(t) for t in targets if os.path.isfile(t)}
+
+    for filepath in files:
+        if filepath.endswith(".json"):
+            ops = parse_json_file(filepath, dialect_ops)
+            aggregated_dialect_ops.update(ops)
+            found_any_dialect_targets = found_any_dialect_targets or bool(ops)
+            continue
+
+        res = analyze_python_file(filepath, dialect_ops)
+        if res.is_ir:
+            found_any_ir = True
+            if res.ir_score[0] > best_ir_score[0]:
+                best_ir_score = res.ir_score
+        if res.is_fw:
+            found_any_fw = True
+            if res.fw_score[0] > best_fw_score[0]:
+                best_fw_score = res.fw_score
+        if res.implemented_ops:
+            aggregated_dialect_ops.update(res.implemented_ops)
+            found_any_dialect_targets = True
+        if not res.is_ir and not res.is_fw and filepath in explicit_files:
+            found_any_dialect_targets = True
+
+    return (
+        found_any_ir,
+        best_ir_score,
+        found_any_fw,
+        best_fw_score,
+        aggregated_dialect_ops,
+        found_any_dialect_targets,
+    )
+
+
+def _format_target_label(targets: list[str]) -> str:
+    """Compute the display label for a list of compliance targets.
+
+    Args:
+        targets (list[str]): Target file or directory paths.
+
+    Returns:
+        str: Formatted target label.
+    """
+    if len(targets) == 1 and os.path.isfile(targets[0]):
+        return os.path.basename(targets[0])
+    if len(targets) == 1:
+        return os.path.basename(os.path.abspath(targets[0])) + " (Directory)"
+    return f"Multiple Targets ({len(targets)})"
 
 
 def run_compliance_check(
@@ -476,54 +520,18 @@ def run_compliance_check(
 
     dialect_ops = get_dialect_ops()
     total_dialect_ops = len(dialect_ops)
-
-    best_ir_score = (0, 5)
-    best_fw_score = (0, 4)
-    found_any_ir = False
-    found_any_fw = False
-
-    aggregated_dialect_ops: set[str] = set()
-    found_any_dialect_targets = False
-
-    for filepath in files:
-        if filepath.endswith(".json"):
-            ops = parse_json_file(filepath, dialect_ops)
-            aggregated_dialect_ops.update(ops)
-            found_any_dialect_targets = found_any_dialect_targets or bool(ops)
-            continue
-
-        res = analyze_python_file(filepath, dialect_ops)
-
-        if res.is_ir:
-            found_any_ir = True
-            if res.ir_score[0] > best_ir_score[0]:
-                best_ir_score = res.ir_score
-
-        if res.is_fw:
-            found_any_fw = True
-            if res.fw_score[0] > best_fw_score[0]:
-                best_fw_score = res.fw_score
-
-        if res.implemented_ops:
-            aggregated_dialect_ops.update(res.implemented_ops)
-            found_any_dialect_targets = True
-
-        if (
-            not res.is_ir
-            and not res.is_fw
-            and filepath in [os.path.abspath(t) for t in targets if os.path.isfile(t)]
-        ):
-            found_any_dialect_targets = True
+    (
+        found_any_ir,
+        best_ir_score,
+        found_any_fw,
+        best_fw_score,
+        aggregated_dialect_ops,
+        found_any_dialect_targets,
+    ) = _aggregate_compliance_results(files, targets, dialect_ops)
 
     print("\nCompliance Report")
     print("=================")
-
-    if len(targets) == 1 and os.path.isfile(targets[0]):
-        target_label = os.path.basename(targets[0])
-    elif len(targets) == 1:
-        target_label = os.path.basename(os.path.abspath(targets[0])) + " (Directory)"
-    else:
-        target_label = f"Multiple Targets ({len(targets)})"
+    target_label = _format_target_label(targets)
 
     if found_any_ir:
         pct = (best_ir_score[0] / best_ir_score[1]) * 100
@@ -537,9 +545,7 @@ def run_compliance_check(
             ]
         ]
         print("\nIR Compliance (CompilerBackend / GraphFrontend):")
-        print(
-            tabulate(report, headers=["Target", "Compliance %", "Reqs Met", "Status"])
-        )
+        print(tabulate(report, headers=["Target", "Compliance %", "Reqs Met", "Status"]))
 
     if found_any_fw:
         pct = (best_fw_score[0] / best_fw_score[1]) * 100
@@ -553,14 +559,11 @@ def run_compliance_check(
             ]
         ]
         print("\nFrameworkAdapter Compliance:")
-        print(
-            tabulate(report, headers=["Target", "Compliance %", "Reqs Met", "Status"])
-        )
+        print(tabulate(report, headers=["Target", "Compliance %", "Reqs Met", "Status"]))
 
     if found_any_dialect_targets:
         pct = (len(aggregated_dialect_ops) / total_dialect_ops) * 100
         status = "PASS" if pct == 100 else "FAIL"
-
         dialect_report = [
             [
                 target_label,
@@ -570,7 +573,6 @@ def run_compliance_check(
                 total_dialect_ops - len(aggregated_dialect_ops),
             ]
         ]
-
         print(f"\nDIALECT Compliance (ONNX Superset, {total_dialect_ops} total ops):")
         print(
             tabulate(
@@ -586,9 +588,7 @@ def run_compliance_check(
         )
 
     if not found_any_ir and not found_any_dialect_targets and not found_any_fw:
-        print(
-            "\nNo IR, FrameworkAdapter, or DIALECT targets detected in the specified path."
-        )
+        print("\nNo IR, FrameworkAdapter, or DIALECT targets detected in the specified path.")
 
     if verbose and found_any_dialect_targets:
         missing_ops_list = sorted(dialect_ops - aggregated_dialect_ops)

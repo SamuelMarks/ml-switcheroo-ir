@@ -86,9 +86,7 @@ def test_to_json_deterministic() -> None:
         sharding=spec,
         shape_metadata=(16, 64),
     )
-    graph = LogicalGraph(
-        name="DeterministicGraph", nodes={"n1": n1, "n2": n2}, mesh=mesh
-    )
+    graph = LogicalGraph(name="DeterministicGraph", nodes={"n1": n1, "n2": n2}, mesh=mesh)
 
     json1 = graph.to_json(indent=2)
     json2 = graph.to_json(indent=2)

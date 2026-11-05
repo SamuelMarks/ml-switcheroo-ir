@@ -238,9 +238,7 @@ _CANONICAL_ARRAY_API_OPS: list[CustomOpSchema] = [
 ]
 
 
-def _load_framework_schema_file(
-    filename: str, domain_default: str, json_path: Path | str | None = None
-) -> dict[str, OpSchema]:
+def _load_framework_schema_file(filename: str, domain_default: str, json_path: Path | str | None = None) -> dict[str, OpSchema]:
     """Load operator schemas from a JSON file into OpSchema mappings.
 
     Args:
@@ -260,9 +258,7 @@ def _load_framework_schema_file(
         """
         raw_dialects = op_data.get("dialects")
         if isinstance(raw_dialects, Mapping):
-            ODL_DIALECT_MAPPINGS[str(op_data["name"])] = {
-                str(k): str(v) for k, v in raw_dialects.items()
-            }
+            ODL_DIALECT_MAPPINGS[str(op_data["name"])] = {str(k): str(v) for k, v in raw_dialects.items()}
 
     return load_op_schema_catalog(
         filename,
@@ -282,9 +278,7 @@ def _initialize_framework_registries() -> None:
                 loaded_aten[s.name] = s.to_op_schema()
         ATEN_REGISTRY.update(loaded_aten)
 
-        loaded_array_api = _load_framework_schema_file(
-            "array_api_ops.json", "array_api"
-        )
+        loaded_array_api = _load_framework_schema_file("array_api_ops.json", "array_api")
         if not loaded_array_api:
             for s in _CANONICAL_ARRAY_API_OPS:
                 loaded_array_api[s.name] = s.to_op_schema()

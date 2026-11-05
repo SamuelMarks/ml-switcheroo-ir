@@ -6,9 +6,10 @@ Common Subexpression Elimination (CSE), and Shape Propagation / Constant Folding
 
 from __future__ import annotations
 
+import typing
 from collections import deque
 from collections.abc import Mapping, Sequence
-import typing
+
 import typing_extensions
 
 from ml_switcheroo_ir.graph import (
@@ -36,13 +37,9 @@ from ml_switcheroo_ir.shapes import (
 from ml_switcheroo_ir.types import AttributeValue, DType, InitializerValue, TensorSpec
 
 if typing.TYPE_CHECKING:
-    HashableAttrKey: typing_extensions.TypeAlias = (
-        str | int | float | bool | None | tuple["HashableAttrKey", ...]
-    )
+    HashableAttrKey: typing_extensions.TypeAlias = str | int | float | bool | None | tuple["HashableAttrKey", ...]
 else:
-    HashableAttrKey: typing_extensions.TypeAlias = typing.Union[
-        str, int, float, bool, None, tuple
-    ]
+    HashableAttrKey: typing_extensions.TypeAlias = typing.Union[str, int, float, bool, None, tuple[typing.Union[str, int, float, bool, None], ...]]
 NodeCseSignatureKey: typing_extensions.TypeAlias = tuple[
     str,
     str,
@@ -175,6 +172,58 @@ def _is_ssa_live(
     return producer is not None and producer.id in live_nodes
 
 
+def _enqueue_ssa_target(
+    ssa_or_id: str,
+    graph: LogicalGraph,
+    live_nodes: set[str],
+    queue: deque[str],
+) -> None:
+    """Resolve an SSA value or node ID to its producer node and enqueue if not yet live.
+
+    Args:
+        ssa_or_id (str): Node ID or output SSA value name.
+        graph (LogicalGraph): Computational graph.
+        live_nodes (set[str]): Set of discovered live node IDs.
+        queue (deque[str]): BFS worklist queue.
+    """
+    target_id: str | None = ssa_or_id if ssa_or_id in graph.nodes else None
+    if target_id is None:
+        producer = graph.get_output_producer(ssa_or_id)
+        if producer is not None and producer.id in graph.nodes:
+            target_id = producer.id
+    if target_id is not None and target_id not in live_nodes:
+        live_nodes.add(target_id)
+        queue.append(target_id)
+
+
+def _collect_live_nodes(graph: LogicalGraph) -> set[str]:
+    """Perform backward BFS from outputs and side-effecting nodes to collect live node IDs.
+
+    Args:
+        graph (LogicalGraph): Input computational graph.
+
+    Returns:
+        set[str]: Set of reachable live node IDs.
+    """
+    live_nodes: set[str] = set()
+    queue: deque[str] = deque()
+
+    for out_id in graph.outputs:
+        _enqueue_ssa_target(out_id, graph, live_nodes, queue)
+
+    for node_id, node in graph.nodes.items():
+        if _is_side_effecting_node(node) and node_id not in live_nodes:
+            live_nodes.add(node_id)
+            queue.append(node_id)
+
+    while queue:
+        curr_id = queue.popleft()
+        for inp_id in graph.nodes[curr_id].inputs:
+            _enqueue_ssa_target(inp_id, graph, live_nodes, queue)
+
+    return live_nodes
+
+
 def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
     """Eliminate non-output reachable and dead subgraphs from a LogicalGraph.
 
@@ -186,64 +235,14 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
     Returns:
         LogicalGraph: Cleaned graph containing only live reachable nodes.
     """
-    # 1. Identify live roots: outputs and side-effecting operations
-    live_nodes: set[str] = set()
-    queue: deque[str] = deque()
+    live_nodes = _collect_live_nodes(graph)
 
-    # Add graph explicit outputs
-    for out_id in graph.outputs:
-        if out_id in graph.nodes and out_id not in live_nodes:
-            live_nodes.add(out_id)
-            queue.append(out_id)
-        else:
-            producer = graph.get_output_producer(out_id)
-            if (
-                producer is not None
-                and producer.id in graph.nodes
-                and producer.id not in live_nodes
-            ):
-                live_nodes.add(producer.id)
-                queue.append(producer.id)
-
-    # Add nodes marked with side-effects or known mutating ops
-    for node_id, node in graph.nodes.items():
-        if _is_side_effecting_node(node) and node_id not in live_nodes:
-            live_nodes.add(node_id)
-            queue.append(node_id)
-
-    # 2. Backward BFS traversal along node inputs (including multi-output SSA names)
-    while queue:
-        curr_id = queue.popleft()
-        curr_node = graph.nodes[curr_id]
-        for inp_id in curr_node.inputs:
-            if inp_id in graph.nodes:
-                if inp_id not in live_nodes:
-                    live_nodes.add(inp_id)
-                    queue.append(inp_id)
-            else:
-                producer = graph.get_output_producer(inp_id)
-                if (
-                    producer is not None
-                    and producer.id in graph.nodes
-                    and producer.id not in live_nodes
-                ):
-                    live_nodes.add(producer.id)
-                    queue.append(producer.id)
-
-    # 3. Filter surviving nodes and recursively process nested subgraphs
     new_nodes: dict[str, LogicalNode] = {}
     for nid, node in graph.nodes.items():
         if nid in live_nodes:
-            transformed_subgraphs: dict[str, LogicalGraph | AttributeValue] = {}
-            for sub_k, sub_v in node.subgraphs.items():
-                if isinstance(sub_v, LogicalGraph):
-                    transformed_subgraphs[sub_k] = eliminate_dead_nodes(sub_v)
-                else:
-                    transformed_subgraphs[sub_k] = sub_v
-
+            transformed_subgraphs: dict[str, LogicalGraph | AttributeValue] = {sub_k: (eliminate_dead_nodes(sub_v) if isinstance(sub_v, LogicalGraph) else sub_v) for sub_k, sub_v in node.subgraphs.items()}
             new_nodes[nid] = node.clone(subgraphs=transformed_subgraphs)
 
-    # 4. Filter surviving edges
     new_edges: list[LogicalEdge] = [
         LogicalEdge(
             source=edge.source,
@@ -272,13 +271,7 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
 
 
 def _serialize_attr_for_key(
-    val: (
-        AttributeValue
-        | InitializerValue
-        | LogicalGraph
-        | Mapping[str, LogicalGraph | AttributeValue]
-        | Mapping[str, AttributeValue | dict[str, InitializerValue]]
-    ),
+    val: (AttributeValue | InitializerValue | LogicalGraph | Mapping[str, LogicalGraph | AttributeValue] | Mapping[str, AttributeValue | dict[str, InitializerValue]]),
 ) -> HashableAttrKey:
     """Normalize attribute values for deterministic equivalence hashing.
 
@@ -292,9 +285,7 @@ def _serialize_attr_for_key(
     if isinstance(val, LogicalGraph):
         return _serialize_attr_for_key(val.to_dict())
     if isinstance(val, Mapping):
-        return tuple(
-            sorted((str(k), _serialize_attr_for_key(v)) for k, v in val.items())
-        )
+        return tuple(sorted((str(k), _serialize_attr_for_key(v)) for k, v in val.items()))
     if isinstance(val, (list, tuple)):
         return tuple(_serialize_attr_for_key(v) for v in val)
     return repr(val)
@@ -322,16 +313,8 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
         has_effect = _is_side_effecting_node(node, include_sources=True)
 
         if not has_effect:
-            attr_key = tuple(
-                sorted(
-                    (k, _serialize_attr_for_key(v)) for k, v in node.attributes.items()
-                )
-            )
-            shape_key = (
-                tuple(node.shape_metadata)
-                if isinstance(node.shape_metadata, (list, tuple))
-                else None
-            )
+            attr_key = tuple(sorted((k, _serialize_attr_for_key(v)) for k, v in node.attributes.items()))
+            shape_key = tuple(node.shape_metadata) if isinstance(node.shape_metadata, (list, tuple)) else None
             subgraph_key = _serialize_attr_for_key(node.subgraphs)
             sig = (
                 node.domain,
@@ -351,9 +334,7 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
                 canonical_node = surviving_nodes[canonical_id]
                 for out_idx, out_name in enumerate(node.outputs):
                     alias_map[out_name] = canonical_node.get_output_name(out_idx)
-                    alias_map[f"{node.id}:{out_idx}"] = canonical_node.get_output_name(
-                        out_idx
-                    )
+                    alias_map[f"{node.id}:{out_idx}"] = canonical_node.get_output_name(out_idx)
                 continue
 
             sig_map[sig] = node.id
@@ -398,9 +379,7 @@ def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:
     )
 
 
-def _propagate_unary_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_unary_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate shape for elementwise unary operations.
 
     Args:
@@ -438,9 +417,7 @@ def _propagate_binary_op(
     return None
 
 
-def _propagate_matmul_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_matmul_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for matrix multiplication operations.
 
     Args:
@@ -479,14 +456,7 @@ def _propagate_gemm_op(
     if len(node.inputs) >= 2:
         inp_a = new_nodes.get(node.inputs[0])
         inp_b = new_nodes.get(node.inputs[1])
-        if (
-            inp_a is not None
-            and inp_b is not None
-            and isinstance(inp_a.shape_metadata, (list, tuple))
-            and isinstance(inp_b.shape_metadata, (list, tuple))
-            and len(inp_a.shape_metadata) == 2
-            and len(inp_b.shape_metadata) == 2
-        ):
+        if inp_a is not None and inp_b is not None and isinstance(inp_a.shape_metadata, (list, tuple)) and isinstance(inp_b.shape_metadata, (list, tuple)) and len(inp_a.shape_metadata) == 2 and len(inp_b.shape_metadata) == 2:
             trans_a = bool(node.attributes.get("transA", 0))
             trans_b = bool(node.attributes.get("transB", 0))
             s_a = inp_a.shape_metadata
@@ -498,24 +468,18 @@ def _propagate_gemm_op(
             n = s_b[0] if trans_b else s_b[1]
 
             if not SymbolicSolver.is_consistent(k_a, k_b):
-                raise ValueError(
-                    f"Gemm inner contraction dimension mismatch: {k_a} vs {k_b} in node '{node.id}'."
-                )
+                raise ValueError(f"Gemm inner contraction dimension mismatch: {k_a} vs {k_b} in node '{node.id}'.")
 
             out_shape: tuple[DimensionType, ...] = (m, n)
             if len(node.inputs) > 2 and node.inputs[2] in new_nodes:
                 inp_c = new_nodes[node.inputs[2]]
                 if isinstance(inp_c.shape_metadata, (list, tuple)):
-                    out_shape = broadcast_shapes(
-                        out_shape, inp_c.shape_metadata, tracker=tracker
-                    )
+                    out_shape = broadcast_shapes(out_shape, inp_c.shape_metadata, tracker=tracker)
             return out_shape
     return None
 
 
-def _propagate_squeeze_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_squeeze_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for Squeeze operations removing specified or size-1 axes.
 
     Args:
@@ -538,11 +502,7 @@ def _propagate_squeeze_op(
                     axes = axes_node.attributes["value"]
 
             if axes is not None:
-                raw_list: Sequence[AttributeValue] = (
-                    [axes]
-                    if isinstance(axes, int)
-                    else (axes if isinstance(axes, (list, tuple)) else [])
-                )
+                raw_list: Sequence[AttributeValue] = [axes] if isinstance(axes, int) else (axes if isinstance(axes, (list, tuple)) else [])
                 norm_axes = set(
                     normalize_axis(
                         [int(a) for a in raw_list if isinstance(a, (int, str))],
@@ -554,9 +514,7 @@ def _propagate_squeeze_op(
     return None
 
 
-def _propagate_unsqueeze_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_unsqueeze_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for Unsqueeze operations inserting size-1 dimensions.
 
     Args:
@@ -579,11 +537,7 @@ def _propagate_unsqueeze_op(
                     axes = axes_node.attributes["value"]
 
             if axes is not None:
-                raw_list: Sequence[AttributeValue] = (
-                    [axes]
-                    if isinstance(axes, int)
-                    else (axes if isinstance(axes, (list, tuple)) else [])
-                )
+                raw_list: Sequence[AttributeValue] = [axes] if isinstance(axes, int) else (axes if isinstance(axes, (list, tuple)) else [])
                 raw_axes = [int(a) for a in raw_list if isinstance(a, (int, str))]
                 target_rank = len(s) + len(raw_axes)
                 norm_axes = sorted([normalize_axis(a, target_rank) for a in raw_axes])
@@ -594,9 +548,7 @@ def _propagate_unsqueeze_op(
     return None
 
 
-def _propagate_flatten_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_flatten_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for Flatten operations collapsing into a 2D tensor.
 
     Args:
@@ -628,18 +580,14 @@ def _propagate_flatten_op(
                     if isinstance(d, int) and isinstance(total, int):
                         total = total * d
                     else:
-                        total = SymBinaryOp(
-                            "*", SymNode.to_node(total), SymNode.to_node(d)
-                        ).simplify()
+                        total = SymBinaryOp("*", SymNode.to_node(total), SymNode.to_node(d)).simplify()
                 return total
 
             return (_prod(s[:norm_axis]), _prod(s[norm_axis:]))
     return None
 
 
-def _propagate_concat_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_concat_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for Concat operations joining tensors along an axis.
 
     Args:
@@ -667,16 +615,12 @@ def _propagate_concat_op(
         concat_dim: DimensionType = 0
         for s in shapes:
             if len(s) != rank:
-                raise ValueError(
-                    f"Concat rank mismatch in node '{node.id}': expected rank {rank}, got {len(s)}."
-                )
+                raise ValueError(f"Concat rank mismatch in node '{node.id}': expected rank {rank}, got {len(s)}.")
             d = s[norm_axis]
             if isinstance(d, int) and isinstance(concat_dim, int):
                 concat_dim += d
             else:
-                concat_dim = SymBinaryOp(
-                    "+", SymNode.to_node(concat_dim), SymNode.to_node(d)
-                ).simplify()
+                concat_dim = SymBinaryOp("+", SymNode.to_node(concat_dim), SymNode.to_node(d)).simplify()
 
         out_s = list(shapes[0])
         out_s[norm_axis] = concat_dim
@@ -684,9 +628,7 @@ def _propagate_concat_op(
     return None
 
 
-def _propagate_split_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_split_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for Split operations slicing tensor along an axis.
 
     Args:
@@ -706,42 +648,59 @@ def _propagate_split_op(
             axis = int(axis_val) if isinstance(axis_val, (int, str)) else 0
             norm_axis = normalize_axis(axis, len(s))
             split = node.attributes.get("split")
-            num_outputs_val = (
-                node.attributes.get("num_outputs") or len(node.outputs or []) or 2
-            )
-            num_outputs = (
-                int(num_outputs_val) if isinstance(num_outputs_val, (int, str)) else 2
-            )
+            num_outputs_val = node.attributes.get("num_outputs") or len(node.outputs or []) or 2
+            num_outputs = int(num_outputs_val) if isinstance(num_outputs_val, (int, str)) else 2
             first_split: DimensionType
             if isinstance(split, (list, tuple)) and len(split) > 0:
                 raw_first = split[0]
-                first_split = (
-                    raw_first
-                    if isinstance(raw_first, (int, str, SymNode, SymInt))
-                    else int(str(raw_first))
-                )
+                first_split = raw_first if isinstance(raw_first, (int, str, SymNode, SymInt)) else int(str(raw_first))
             else:
                 dim_val = s[norm_axis]
                 if isinstance(dim_val, int):
                     if dim_val % num_outputs != 0:
-                        raise ValueError(
-                            f"Split dimension {dim_val} along axis {norm_axis} in node '{node.id}' "
-                            f"is not evenly divisible by num_outputs={num_outputs}."
-                        )
+                        raise ValueError(f"Split dimension {dim_val} along axis {norm_axis} in node '{node.id}' is not evenly divisible by num_outputs={num_outputs}.")
                     first_split = dim_val // num_outputs
                 else:
-                    first_split = SymBinaryOp(
-                        "//", SymNode.to_node(dim_val), SymConst(num_outputs)
-                    ).simplify()
+                    first_split = SymBinaryOp("//", SymNode.to_node(dim_val), SymConst(num_outputs)).simplify()
             out_s = list(s)
             out_s[norm_axis] = first_split
             return tuple(out_s)
     return None
 
 
-def _propagate_slice_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _compute_sliced_dim(dim_len: DimensionType, st: int, en: int, sp: int) -> DimensionType:
+    """Compute the sliced length along a single axis for integer or symbolic dimension.
+
+    Args:
+        dim_len (DimensionType): Original dimension size.
+        st (int): Slice start index.
+        en (int): Slice end index.
+        sp (int): Slice step stride.
+
+    Returns:
+        DimensionType: Sliced dimension size.
+    """
+    if sp == 0:
+        return 0
+    if isinstance(dim_len, int):
+        st_norm = max(0, min(dim_len, st + dim_len if st < 0 else st))
+        en_norm = max(0, min(dim_len, en + dim_len if en < 0 else en))
+        if sp > 0:
+            return max(0, (en_norm - st_norm + sp - 1) // sp)
+        abs_sp = -sp
+        return max(0, (st_norm - en_norm + abs_sp - 1) // abs_sp)
+
+    sym_dim = SymNode.to_node(dim_len)
+    st_sym = SymBinaryOp("+", sym_dim, SymConst(st)).simplify() if st < 0 else SymConst(st)
+    en_sym = SymBinaryOp("+", sym_dim, SymConst(en)).simplify() if en < 0 else SymConst(en)
+    abs_sp = sp if sp > 0 else -sp
+    span = SymBinaryOp("-", en_sym, st_sym) if sp > 0 else SymBinaryOp("-", st_sym, en_sym)
+    diff_node = SymBinaryOp("+", span, SymConst(abs_sp - 1)).simplify()
+    res_sym = SymBinaryOp("//", diff_node, SymConst(abs_sp)).simplify()
+    return max(0, res_sym.value) if isinstance(res_sym, SymConst) else res_sym
+
+
+def _propagate_slice_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for Slice operations given starts, ends, axes, steps.
 
     Args:
@@ -751,98 +710,29 @@ def _propagate_slice_op(
     Returns:
         tuple[DimensionType, ...] | None: Sliced shape or None if unshaped.
     """
-    if node.inputs:
-        inp = new_nodes.get(node.inputs[0])
-        if inp is not None and isinstance(inp.shape_metadata, (list, tuple)):
-            s = list(inp.shape_metadata)
-            starts = node.attributes.get("starts")
-            ends = node.attributes.get("ends")
-            axes = node.attributes.get("axes")
-            steps = node.attributes.get("steps")
-            if isinstance(starts, (list, tuple)) and isinstance(ends, (list, tuple)):
-                axes_list = (
-                    list(axes)
-                    if isinstance(axes, (list, tuple))
-                    else list(range(len(starts)))
-                )
-                steps_list = (
-                    list(steps)
-                    if isinstance(steps, (list, tuple))
-                    else [1] * len(starts)
-                )
-                for st, en, ax, sp in zip(starts, ends, axes_list, steps_list):
-                    ax_int = int(ax) if isinstance(ax, (int, str)) else 0
-                    norm_ax = normalize_axis(ax_int, len(s))
-                    dim_len = s[norm_ax]
-                    if (
-                        isinstance(st, int)
-                        and isinstance(en, int)
-                        and isinstance(sp, int)
-                    ):
-                        if isinstance(dim_len, int):
-                            st_norm = st + dim_len if st < 0 else st
-                            en_norm = en + dim_len if en < 0 else en
-                            st_norm = max(0, min(dim_len, st_norm))
-                            en_norm = max(0, min(dim_len, en_norm))
-                            if sp > 0:
-                                s[norm_ax] = max(0, (en_norm - st_norm + sp - 1) // sp)
-                            elif sp < 0:
-                                abs_sp = -sp
-                                s[norm_ax] = max(
-                                    0, (st_norm - en_norm + abs_sp - 1) // abs_sp
-                                )
-                            else:
-                                s[norm_ax] = 0
-                        else:
-                            sym_dim = SymNode.to_node(dim_len)
-                            st_sym: SymNode = (
-                                SymBinaryOp("+", sym_dim, SymConst(st)).simplify()
-                                if st < 0
-                                else SymConst(st)
-                            )
-                            en_sym: SymNode = (
-                                SymBinaryOp("+", sym_dim, SymConst(en)).simplify()
-                                if en < 0
-                                else SymConst(en)
-                            )
-                            if sp > 0:
-                                diff_node = SymBinaryOp(
-                                    "+",
-                                    SymBinaryOp("-", en_sym, st_sym),
-                                    SymConst(sp - 1),
-                                ).simplify()
-                                res_sym = SymBinaryOp(
-                                    "//", diff_node, SymConst(sp)
-                                ).simplify()
-                                s[norm_ax] = (
-                                    max(0, res_sym.value)
-                                    if isinstance(res_sym, SymConst)
-                                    else res_sym
-                                )
-                            elif sp < 0:
-                                abs_sp = -sp
-                                diff_node = SymBinaryOp(
-                                    "+",
-                                    SymBinaryOp("-", st_sym, en_sym),
-                                    SymConst(abs_sp - 1),
-                                ).simplify()
-                                res_sym = SymBinaryOp(
-                                    "//", diff_node, SymConst(abs_sp)
-                                ).simplify()
-                                s[norm_ax] = (
-                                    max(0, res_sym.value)
-                                    if isinstance(res_sym, SymConst)
-                                    else res_sym
-                                )
-                            else:
-                                s[norm_ax] = 0
-                return tuple(s)
-    return None
+    if not node.inputs:
+        return None
+    inp = new_nodes.get(node.inputs[0])
+    if inp is None or not isinstance(inp.shape_metadata, (list, tuple)):
+        return None
+    s = list(inp.shape_metadata)
+    starts = node.attributes.get("starts")
+    ends = node.attributes.get("ends")
+    if not isinstance(starts, (list, tuple)) or not isinstance(ends, (list, tuple)):
+        return None
+    axes = node.attributes.get("axes")
+    steps = node.attributes.get("steps")
+    axes_list = list(axes) if isinstance(axes, (list, tuple)) else list(range(len(starts)))
+    steps_list = list(steps) if isinstance(steps, (list, tuple)) else [1] * len(starts)
+    for st, en, ax, sp in zip(starts, ends, axes_list, steps_list):
+        ax_int = int(ax) if isinstance(ax, (int, str)) else 0
+        norm_ax = normalize_axis(ax_int, len(s))
+        if isinstance(st, int) and isinstance(en, int) and isinstance(sp, int):
+            s[norm_ax] = _compute_sliced_dim(s[norm_ax], st, en, sp)
+    return tuple(s)
 
 
-def _propagate_shape_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_shape_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for Shape operator returning 1D rank tensor.
 
     Args:
@@ -859,9 +749,63 @@ def _propagate_shape_op(
     return None
 
 
-def _propagate_reshape_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _compute_concrete_numel(shape: Sequence[DimensionType]) -> tuple[int, bool]:
+    """Compute product of concrete positive integer dimensions and whether all dims are concrete.
+
+    Args:
+        shape (Sequence[DimensionType]): Input shape tuple.
+
+    Returns:
+        tuple[int, bool]: ``(product_numel, all_concrete)``.
+    """
+    numel = 1
+    for d in shape:
+        if isinstance(d, int) and not isinstance(d, bool) and d > 0:
+            numel *= d
+        else:
+            return numel, False
+    return numel, True
+
+
+def _resolve_single_reshape_dim(
+    node_id: str,
+    idx: int,
+    d: AttributeValue,
+    inp_shape: Sequence[DimensionType],
+    allowzero: bool,
+) -> tuple[DimensionType, int, bool]:
+    """Resolve a single target dimension in a Reshape operation.
+
+    Args:
+        node_id (str): Reshape node ID for error reporting.
+        idx (int): Target dimension index.
+        d (AttributeValue): Raw target dimension value.
+        inp_shape (Sequence[DimensionType]): Input tensor shape.
+        allowzero (bool): Whether 0 means literal zero rather than copying input dim.
+
+    Returns:
+        tuple[DimensionType, int, bool]: ``(resolved_dim, factor_multiplier, is_concrete)``.
+
+    Raises:
+        ValueError: If 0-dim copy is out of bounds or integer dimension is non-positive.
+    """
+    if d == 0 and not allowzero:
+        if idx >= len(inp_shape):
+            raise ValueError(f"Reshape in node '{node_id}' cannot copy dimension 0 at index {idx} from input of rank {len(inp_shape)}.")
+        copied_d = inp_shape[idx]
+        if isinstance(copied_d, int) and not isinstance(copied_d, bool):
+            return copied_d, copied_d, True
+        return copied_d, 1, False
+
+    if isinstance(d, int) and not isinstance(d, bool):
+        if d <= 0:
+            raise ValueError(f"Reshape in node '{node_id}' has invalid non-positive dimension {d}.")
+        return d, d, True
+
+    return (d if isinstance(d, (SymNode, SymInt)) else str(d)), 1, False
+
+
+def _propagate_reshape_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape and validate element count for Reshape operations.
 
     Supports ONNX 0-dimension copy semantics (copying corresponding input dimension
@@ -886,15 +830,7 @@ def _propagate_reshape_op(
     if inp_shape is None or not isinstance(target_shape_attr, (list, tuple)):
         return None
 
-    in_numel = 1
-    all_concrete = True
-    for d in inp_shape:
-        if isinstance(d, int) and not isinstance(d, bool) and d > 0:
-            in_numel *= d
-        else:
-            all_concrete = False
-            break
-
+    in_numel, all_concrete = _compute_concrete_numel(inp_shape)
     allowzero = bool(node.attributes.get("allowzero", 0))
     resolved_dims: list[DimensionType] = []
     neg_idx = -1
@@ -903,53 +839,26 @@ def _propagate_reshape_op(
     for idx, d in enumerate(target_shape_attr):
         if d == -1:
             if neg_idx != -1:
-                raise ValueError(
-                    f"Reshape in node '{node.id}' contains multiple -1 dimensions."
-                )
+                raise ValueError(f"Reshape in node '{node.id}' contains multiple -1 dimensions.")
             neg_idx = idx
             resolved_dims.append(-1)
-        elif d == 0 and not allowzero:
-            if idx >= len(inp_shape):
-                raise ValueError(
-                    f"Reshape in node '{node.id}' cannot copy dimension 0 at index {idx} "
-                    f"from input of rank {len(inp_shape)}."
-                )
-            copied_d = inp_shape[idx]
-            resolved_dims.append(copied_d)
-            if isinstance(copied_d, int) and not isinstance(copied_d, bool):
-                target_known_numel *= copied_d
-            else:
-                all_concrete = False
-        elif isinstance(d, int) and not isinstance(d, bool):
-            if d <= 0:
-                raise ValueError(
-                    f"Reshape in node '{node.id}' has invalid non-positive dimension {d}."
-                )
-            target_known_numel *= d
-            resolved_dims.append(d)
-        else:
-            all_concrete = False
-            resolved_dims.append(d if isinstance(d, (SymNode, SymInt)) else str(d))
+            continue
+        res_d, factor, is_conc = _resolve_single_reshape_dim(node.id, idx, d, inp_shape, allowzero)
+        resolved_dims.append(res_d)
+        target_known_numel *= factor
+        all_concrete = all_concrete and is_conc
 
     if all_concrete and neg_idx != -1:
         if in_numel % target_known_numel != 0:
-            raise ValueError(
-                f"Static shape mismatch in Reshape '{node.id}': input elements ({in_numel}) "
-                f"not divisible by target dimensions ({target_known_numel})."
-            )
+            raise ValueError(f"Static shape mismatch in Reshape '{node.id}': input elements ({in_numel}) not divisible by target dimensions ({target_known_numel}).")
         resolved_dims[neg_idx] = in_numel // target_known_numel
     elif all_concrete and neg_idx == -1 and in_numel != target_known_numel:
-        raise ValueError(
-            f"Static shape mismatch in Reshape '{node.id}': input elements ({in_numel}) "
-            f"mismatches target elements ({target_known_numel})."
-        )
+        raise ValueError(f"Static shape mismatch in Reshape '{node.id}': input elements ({in_numel}) mismatches target elements ({target_known_numel}).")
 
     return tuple(resolved_dims)
 
 
-def _propagate_transpose_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_transpose_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for Transpose operations according to perm attribute.
 
     Args:
@@ -965,28 +874,16 @@ def _propagate_transpose_op(
     if node.inputs:
         inp_shape = _resolve_input_shape(node.inputs[0], new_nodes)
         perm = node.attributes.get("perm")
-        if (
-            inp_shape is not None
-            and isinstance(perm, (list, tuple))
-            and len(perm) == len(inp_shape)
-        ):
+        if inp_shape is not None and isinstance(perm, (list, tuple)) and len(perm) == len(inp_shape):
             rank = len(inp_shape)
-            valid_perm: list[int] = [
-                p
-                for p in perm
-                if isinstance(p, int) and not isinstance(p, bool) and 0 <= p < rank
-            ]
+            valid_perm: list[int] = [p for p in perm if isinstance(p, int) and not isinstance(p, bool) and 0 <= p < rank]
             if len(valid_perm) != rank or len(set(valid_perm)) != rank:
-                raise ValueError(
-                    f"Invalid Transpose permutation {list(perm)} for rank {rank} in node '{node.id}'."
-                )
+                raise ValueError(f"Invalid Transpose permutation {list(perm)} for rank {rank} in node '{node.id}'.")
             return tuple(inp_shape[p] for p in valid_perm)
     return None
 
 
-def _propagate_broadcast_in_dim_op(
-    node: LogicalNode, new_nodes: dict[str, LogicalNode]
-) -> tuple[DimensionType, ...] | None:
+def _propagate_broadcast_in_dim_op(node: LogicalNode, new_nodes: dict[str, LogicalNode]) -> tuple[DimensionType, ...] | None:
     """Propagate output shape for BroadcastInDim operations.
 
     Args:
@@ -1133,20 +1030,10 @@ def propagate_shapes_and_constants(graph: LogicalGraph) -> LogicalGraph:
         inferred_shape = computed if computed is not None else node.shape_metadata
         updated_output_specs = list(node.output_specs)
 
-        if (
-            node.op_type in ("Split", "split")
-            and not updated_output_specs
-            and node.outputs
-            and len(node.outputs) > 1
-            and node.inputs
-        ):
+        if node.op_type in ("Split", "split") and not updated_output_specs and node.outputs and len(node.outputs) > 1 and node.inputs:
             inp_node = new_nodes.get(node.inputs[0])
             split_attr = node.attributes.get("split")
-            if (
-                inp_node is not None
-                and isinstance(inp_node.shape_metadata, (list, tuple))
-                and inferred_shape is not None
-            ):
+            if inp_node is not None and isinstance(inp_node.shape_metadata, (list, tuple)) and inferred_shape is not None:
                 axis_raw = node.attributes.get("axis", 0)
                 axis = int(axis_raw) if isinstance(axis_raw, (int, str)) else 0
                 norm_ax = normalize_axis(axis, len(inp_node.shape_metadata))
@@ -1154,19 +1041,11 @@ def propagate_shapes_and_constants(graph: LogicalGraph) -> LogicalGraph:
                 if isinstance(split_attr, (list, tuple)):
                     for sz in split_attr:
                         s_i = list(inp_node.shape_metadata)
-                        s_i[norm_ax] = (
-                            int(sz)
-                            if isinstance(sz, int) or str(sz).isdigit()
-                            else str(sz)
-                        )
-                        updated_output_specs.append(
-                            TensorSpec(shape=tuple(s_i), dtype=dt)
-                        )
+                        s_i[norm_ax] = int(sz) if isinstance(sz, int) or str(sz).isdigit() else str(sz)
+                        updated_output_specs.append(TensorSpec(shape=tuple(s_i), dtype=dt))
                 else:
                     for _ in node.outputs:
-                        updated_output_specs.append(
-                            TensorSpec(shape=tuple(inferred_shape), dtype=dt)
-                        )
+                        updated_output_specs.append(TensorSpec(shape=tuple(inferred_shape), dtype=dt))
 
         new_nodes[node.id] = node.clone(
             shape_metadata=inferred_shape,

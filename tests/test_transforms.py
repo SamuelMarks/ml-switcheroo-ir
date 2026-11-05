@@ -19,9 +19,7 @@ from ml_switcheroo_ir import (
 def test_eliminate_dead_nodes_basic() -> None:
     """Verify that dead nodes are pruned while outputs and their dependencies are preserved."""
     n_in = LogicalNode(id="in1", op_type="Input", shape_metadata=(4, 4))
-    n_live = LogicalNode(
-        id="live1", op_type="Relu", inputs=["in1"], shape_metadata=(4, 4)
-    )
+    n_live = LogicalNode(id="live1", op_type="Relu", inputs=["in1"], shape_metadata=(4, 4))
     n_dead1 = LogicalNode(id="dead1", op_type="Neg", inputs=["in1"])
     n_dead2 = LogicalNode(id="dead2", op_type="Exp", inputs=["dead1"])
 
@@ -93,9 +91,7 @@ def test_eliminate_dead_nodes_idempotence() -> None:
     st.integers(min_value=1, max_value=5),
     st.integers(min_value=1, max_value=5),
 )
-def test_eliminate_dead_nodes_property_idempotence(
-    num_live: int, num_dead: int
-) -> None:
+def test_eliminate_dead_nodes_property_idempotence(num_live: int, num_dead: int) -> None:
     """Property-based fuzz testing verifying DCE idempotence across arbitrary graphs.
 
     Args:
@@ -134,16 +130,10 @@ def test_eliminate_common_subexpressions_basic() -> None:
     """Verify that duplicate pure operations are merged and consumer inputs updated."""
     n_in = LogicalNode(id="in1", op_type="Input", shape_metadata=(4, 4))
     # Two identical pure nodes
-    n_relu1 = LogicalNode(
-        id="relu1", op_type="Relu", inputs=["in1"], shape_metadata=(4, 4)
-    )
-    n_relu2 = LogicalNode(
-        id="relu2", op_type="Relu", inputs=["in1"], shape_metadata=(4, 4)
-    )
+    n_relu1 = LogicalNode(id="relu1", op_type="Relu", inputs=["in1"], shape_metadata=(4, 4))
+    n_relu2 = LogicalNode(id="relu2", op_type="Relu", inputs=["in1"], shape_metadata=(4, 4))
     # Consumer using both
-    n_add = LogicalNode(
-        id="add1", op_type="Add", inputs=["relu1", "relu2"], shape_metadata=(4, 4)
-    )
+    n_add = LogicalNode(id="add1", op_type="Add", inputs=["relu1", "relu2"], shape_metadata=(4, 4))
 
     graph = LogicalGraph(
         nodes={n.id: n for n in [n_in, n_relu1, n_relu2, n_add]},
@@ -235,9 +225,7 @@ def test_propagate_shapes_error_detection() -> None:
         attributes={"shape": [-1, -1]},
     )
     with pytest.raises(ValueError, match="multiple -1 dimensions"):
-        propagate_shapes_and_constants(
-            LogicalGraph(nodes={n.id: n for n in [n_in, n_bad_reshape1]})
-        )
+        propagate_shapes_and_constants(LogicalGraph(nodes={n.id: n for n in [n_in, n_bad_reshape1]}))
 
     # 2. Indivisible dimension in Reshape with -1
     n_bad_reshape2 = LogicalNode(
@@ -247,9 +235,7 @@ def test_propagate_shapes_error_detection() -> None:
         attributes={"shape": [3, -1]},  # 16 is not divisible by 3!
     )
     with pytest.raises(ValueError, match="not divisible"):
-        propagate_shapes_and_constants(
-            LogicalGraph(nodes={n.id: n for n in [n_in, n_bad_reshape2]})
-        )
+        propagate_shapes_and_constants(LogicalGraph(nodes={n.id: n for n in [n_in, n_bad_reshape2]}))
 
     # 3. Explicit element count mismatch in Reshape without -1
     n_bad_reshape3 = LogicalNode(
@@ -259,9 +245,7 @@ def test_propagate_shapes_error_detection() -> None:
         attributes={"shape": [4, 5]},  # 20 != 16
     )
     with pytest.raises(ValueError, match="mismatches target elements"):
-        propagate_shapes_and_constants(
-            LogicalGraph(nodes={n.id: n for n in [n_in, n_bad_reshape3]})
-        )
+        propagate_shapes_and_constants(LogicalGraph(nodes={n.id: n for n in [n_in, n_bad_reshape3]}))
 
 
 def test_transforms_edge_cases() -> None:
@@ -347,9 +331,7 @@ def test_transforms_edge_cases() -> None:
     n_bcast_empty = LogicalNode(id="b_empty", op_type="BroadcastInDim", inputs=[])
 
     n_unshaped_in = LogicalNode(id="unshaped_in", op_type="Input")
-    n_shape_unshaped = LogicalNode(
-        id="s_unshaped", op_type="Shape", inputs=["unshaped_in"]
-    )
+    n_shape_unshaped = LogicalNode(id="s_unshaped", op_type="Shape", inputs=["unshaped_in"])
     n_reshape_unshaped = LogicalNode(
         id="r_unshaped",
         op_type="Reshape",
@@ -465,6 +447,9 @@ def test_dce_and_cse_multi_output_and_self_edges() -> None:
     assert dce_graph.nodes["split1"].version == 13
     assert dce_graph.nodes["split1"].source_ast_ref == "model.py:20"
 
+
+def test_cse_control_flow_subgraphs_and_multi_output_consumers() -> None:
+    """Verify CSE on control-flow nodes with distinct vs identical subgraphs and multi-output consumers."""
     # CSE on control-flow nodes with distinct vs identical subgraphs
     sub_a = LogicalGraph(
         name="sub_a",
@@ -591,20 +576,14 @@ def test_dce_and_cse_multi_output_and_self_edges() -> None:
                 outputs=["ns0", "ns1"],
                 attributes={"axis": 0, "num_outputs": 2},
             ),
-            "r_colon_fallback": LogicalNode(
-                id="r_colon_fallback", op_type="Relu", inputs=["sp_no_specs:5"]
-            ),
+            "r_colon_fallback": LogicalNode(id="r_colon_fallback", op_type="Relu", inputs=["sp_no_specs:5"]),
             "sp_unshaped": LogicalNode(
                 id="sp_unshaped",
                 op_type="CustomMulti",
                 outputs=["u0", "u1"],
             ),
-            "r_unshaped_colon": LogicalNode(
-                id="r_unshaped_colon", op_type="Relu", inputs=["sp_unshaped:1"]
-            ),
-            "r_unshaped_named": LogicalNode(
-                id="r_unshaped_named", op_type="Relu", inputs=["u1"]
-            ),
+            "r_unshaped_colon": LogicalNode(id="r_unshaped_colon", op_type="Relu", inputs=["sp_unshaped:1"]),
+            "r_unshaped_named": LogicalNode(id="r_unshaped_named", op_type="Relu", inputs=["u1"]),
         },
         inputs=["x_in"],
         outputs=[
