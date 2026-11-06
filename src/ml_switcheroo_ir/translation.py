@@ -166,11 +166,14 @@ class TranslationMap(pydantic.BaseModel):
         """
         return bool(self.operations)
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(
+        self,
+        other: TranslationMap | Mapping[str, JsonValue | OperationTranslationSpec] | JsonValue,
+    ) -> bool:
         """Compare equality against another TranslationMap or dict.
 
         Args:
-            other (object): Other object to compare.
+            other (TranslationMap | Mapping[str, JsonValue | OperationTranslationSpec] | JsonValue): Other value to compare.
 
         Returns:
             bool: True if equivalent.
@@ -479,6 +482,144 @@ _CANONICAL_FALLBACK_TRANSLATIONS: dict[str, dict[str, dict[str, RoleFrameworkMap
                 "tensorflow": ["dilations"],
                 "tf": ["dilations"],
                 "stablehlo": ["rhs_dilation"],
+            },
+        }
+    },
+    "optimizer": {
+        "roles": {
+            "learning_rate": {
+                "torch": ["lr"],
+                "optax": ["learning_rate"],
+                "jax": ["learning_rate", "step_size"],
+                "tensorflow": ["learning_rate"],
+                "tf": ["learning_rate"],
+                "keras3": ["learning_rate"],
+                "mlx": ["learning_rate"],
+            },
+            "beta1": {
+                "torch": ["betas"],
+                "optax": ["b1"],
+                "jax": ["b1"],
+                "tensorflow": ["beta_1"],
+                "tf": ["beta_1"],
+                "keras3": ["beta_1"],
+            },
+            "beta2": {
+                "torch": ["betas"],
+                "optax": ["b2"],
+                "jax": ["b2"],
+                "tensorflow": ["beta_2"],
+                "tf": ["beta_2"],
+                "keras3": ["beta_2"],
+            },
+            "epsilon": {
+                "torch": ["eps"],
+                "optax": ["eps"],
+                "jax": ["eps"],
+                "tensorflow": ["epsilon"],
+                "tf": ["epsilon"],
+                "keras3": ["epsilon"],
+            },
+            "weight_decay": {
+                "torch": ["weight_decay"],
+                "optax": ["weight_decay"],
+                "jax": ["weight_decay"],
+                "tensorflow": ["weight_decay"],
+                "tf": ["weight_decay"],
+                "keras3": ["weight_decay"],
+            },
+        }
+    },
+    "loss": {
+        "roles": {
+            "predictions": {
+                "torch": ["input"],
+                "optax": ["logits", "predictions"],
+                "jax": ["logits", "predictions"],
+                "tensorflow": ["y_pred", "logits"],
+                "tf": ["y_pred", "logits"],
+                "keras3": ["y_pred"],
+            },
+            "targets": {
+                "torch": ["target"],
+                "optax": ["labels", "targets"],
+                "jax": ["labels", "targets"],
+                "tensorflow": ["y_true", "labels"],
+                "tf": ["y_true", "labels"],
+                "keras3": ["y_true"],
+            },
+        }
+    },
+    "checkpoint": {
+        "roles": {
+            "path": {
+                "torch": ["f"],
+                "orbax": ["directory"],
+                "orbax.checkpoint": ["directory"],
+                "tensorflow": ["filepath", "save_path"],
+                "tf": ["filepath", "save_path"],
+                "keras3": ["filepath"],
+            },
+            "state": {
+                "torch": ["obj", "state_dict"],
+                "orbax": ["item", "items", "args"],
+                "orbax.checkpoint": ["item", "items", "args"],
+                "tensorflow": ["checkpoint"],
+                "tf": ["checkpoint"],
+                "keras3": ["weights"],
+            },
+        }
+    },
+    "assertion": {
+        "roles": {
+            "inputs": {
+                "torch": ["actual", "input"],
+                "chex": ["inputs", "trees"],
+                "numpy": ["actual", "x"],
+                "tensorflow": ["x"],
+                "tf": ["x"],
+            },
+            "rtol": {
+                "torch": ["rtol"],
+                "chex": ["rtol"],
+                "numpy": ["rtol"],
+                "tensorflow": ["rtol"],
+                "tf": ["rtol"],
+            },
+            "atol": {
+                "torch": ["atol"],
+                "chex": ["atol"],
+                "numpy": ["atol"],
+                "tensorflow": ["atol"],
+                "tf": ["atol"],
+            },
+        }
+    },
+    "dataloader": {
+        "roles": {
+            "dataset": {
+                "torch": ["dataset"],
+                "grain": ["data_source", "dataset", "parents"],
+                "tensorflow": ["dataset"],
+                "tf": ["dataset"],
+            },
+            "batch_size": {
+                "torch": ["batch_size"],
+                "grain": ["batch_size"],
+                "tensorflow": ["batch_size"],
+                "tf": ["batch_size"],
+            },
+            "drop_last": {
+                "torch": ["drop_last"],
+                "grain": ["drop_remainder"],
+                "tensorflow": ["drop_remainder"],
+                "tf": ["drop_remainder"],
+            },
+            "num_workers": {
+                "torch": ["num_workers"],
+                "grain": ["worker_count"],
+                "tensorflow": ["num_parallel_calls"],
+                "tf": ["num_parallel_calls"],
             },
         }
     },

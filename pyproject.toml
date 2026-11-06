@@ -74,11 +74,13 @@ python_version = "3.10"
 mypy_path = ["src"]
 plugins = ["pydantic.mypy"]
 strict = true
+disallow_any_unimported = true
 disallow_any_explicit = true
 disallow_any_generics = true
 disallow_subclassing_any = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+disallow_untyped_calls = true
 check_untyped_defs = true
 disallow_untyped_decorators = true
 no_implicit_optional = true
@@ -90,7 +92,17 @@ warn_return_any = true
 warn_unused_configs = true
 warn_unreachable = true
 strict_equality = true
-enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+extra_checks = true
+disable_error_code = ["override"]
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-expr",
+    "truthy-bool",
+    "truthy-iterable",
+    "possibly-undefined",
+    "redundant-self",
+    "unimported-reveal",
+]
 
 [tool.pydantic-mypy]
 init_forbid_extra = true
@@ -100,6 +112,7 @@ warn_required_dynamic_aliases = true
 [[tool.mypy.overrides]]
 module = ["tests", "tests.*"]
 disallow_untyped_decorators = false
+disallow_any_unimported = false
 
 [[tool.mypy.overrides]]
 module = [
@@ -107,9 +120,6 @@ module = [
     "ml_ecosystem_snapshots.*",
     "onnx",
     "onnx.*",
-    "hypothesis",
-    "hypothesis.*",
-    "pytest",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

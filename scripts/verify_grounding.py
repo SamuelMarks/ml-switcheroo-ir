@@ -21,10 +21,14 @@ from ml_switcheroo_ir.schema.custom_ops import (
 from ml_switcheroo_ir.schema.framework_registries import (
     ARRAY_API_REGISTRY,
     ATEN_REGISTRY,
+    CHEX_REGISTRY,
+    GRAIN_REGISTRY,
     ODL_CATALOG,
+    OPTAX_REGISTRY,
+    ORBAX_REGISTRY,
 )
 from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
-from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 from ml_switcheroo_ir.types import JsonValue
 from ml_switcheroo_ir.validation.grounding import SnapshotManifestNode
@@ -721,6 +725,171 @@ def verify_state_ops_grounding() -> list[str]:
     return errors
 
 
+def _check_domain_op_against_snapshot(
+    op_name: str,
+    schema: OpSchema,
+    expected_domain: str,
+    label: str,
+    snap_symbols: Mapping[str, dict[str, JsonValue]],
+    snap_file_name: str,
+) -> list[str]:
+    """Validate a single domain OpSchema against loaded snapshot symbols.
+
+    Args:
+        op_name (str): Operation key in the registry.
+        schema (OpSchema): Registered operator schema.
+        expected_domain (str): Expected domain identifier.
+        label (str): Human-readable domain label.
+        snap_symbols (Mapping[str, dict[str, JsonValue]]): Loaded snapshot symbol records.
+        snap_file_name (str): Snapshot filename for diagnostic messages.
+
+    Returns:
+        list[str]: Diagnostic error messages for this operator.
+    """
+    errors: list[str] = []
+    if op_name not in snap_symbols and f"{expected_domain}.{op_name}" not in snap_symbols:
+        errors.append(f"{label} op '{op_name}' is not grounded in {snap_file_name} snapshot.")
+        return errors
+    sym_record = snap_symbols.get(op_name) or snap_symbols[f"{expected_domain}.{op_name}"]
+    if schema.attributes:
+        raw_params = sym_record.get("params")
+        snap_params = raw_params if isinstance(raw_params, list) else []
+        known_params = {str(p["name"]) for p in snap_params if isinstance(p, dict) and p.get("name")}
+        for attr_name in schema.attributes:
+            if known_params and attr_name not in known_params:
+                errors.append(f"{label} op '{op_name}' attribute '{attr_name}' is not recognized in {snap_file_name}.")
+    return errors
+
+
+def _verify_domain_registry_grounding(
+    registry: Mapping[str, OpSchema],
+    registry_name: str,
+    expected_domain: str,
+    label: str,
+    glob_pattern: str,
+    snapshots_dir: Path | None = None,
+) -> list[str]:
+    """Verify a domain operator registry against its structural invariants and optional snapshot.
+
+    Args:
+        registry (Mapping[str, OpSchema]): Domain operator registry.
+        registry_name (str): Name of the registry constant for error messages.
+        expected_domain (str): Expected domain string on each OpSchema.
+        label (str): Human-readable domain label.
+        glob_pattern (str): Glob pattern to locate snapshot JSON in ``snapshots_dir``.
+        snapshots_dir (Path | None): Optional directory containing framework snapshots.
+
+    Returns:
+        list[str]: Diagnostic error messages for ungrounded or malformed schemas.
+    """
+    errors: list[str] = []
+    if not registry:
+        errors.append(f"{registry_name} is empty.")
+        return errors
+
+    snap_symbols: dict[str, dict[str, JsonValue]] = {}
+    snap_file_name = ""
+    if snapshots_dir is not None:
+        candidates = sorted(snapshots_dir.glob(glob_pattern))
+        if candidates:
+            snap_file_name = candidates[-1].name
+            snap_symbols = _load_snapshot_symbol_map(candidates[-1])
+
+    for op_name, schema in registry.items():
+        if schema.name != op_name:
+            errors.append(f"{label} op key '{op_name}' != schema.name '{schema.name}'.")
+        if schema.domain != expected_domain:
+            errors.append(f"{label} op '{op_name}' has invalid domain '{schema.domain}'.")
+        if snap_symbols:
+            errors.extend(
+                _check_domain_op_against_snapshot(
+                    op_name,
+                    schema,
+                    expected_domain,
+                    label,
+                    snap_symbols,
+                    snap_file_name,
+                )
+            )
+    return errors
+
+
+def verify_chex_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify Chex assertion and testing operator schemas in CHEX_REGISTRY.
+
+    Args:
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
+
+    Returns:
+        list[str]: Diagnostic error messages for Chex schemas.
+    """
+    return _verify_domain_registry_grounding(
+        CHEX_REGISTRY,
+        "CHEX_REGISTRY",
+        "chex",
+        "Chex",
+        "chex_*.json",
+        snapshots_dir,
+    )
+
+
+def verify_grain_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify Grain data pipeline operator schemas in GRAIN_REGISTRY.
+
+    Args:
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
+
+    Returns:
+        list[str]: Diagnostic error messages for Grain schemas.
+    """
+    return _verify_domain_registry_grounding(
+        GRAIN_REGISTRY,
+        "GRAIN_REGISTRY",
+        "grain",
+        "Grain",
+        "grain_*.json",
+        snapshots_dir,
+    )
+
+
+def verify_orbax_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify Orbax checkpointing operator schemas in ORBAX_REGISTRY.
+
+    Args:
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
+
+    Returns:
+        list[str]: Diagnostic error messages for Orbax schemas.
+    """
+    return _verify_domain_registry_grounding(
+        ORBAX_REGISTRY,
+        "ORBAX_REGISTRY",
+        "orbax",
+        "Orbax",
+        "orbax*.json",
+        snapshots_dir,
+    )
+
+
+def verify_optax_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify Optax optimizer and loss operator schemas in OPTAX_REGISTRY.
+
+    Args:
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
+
+    Returns:
+        list[str]: Diagnostic error messages for Optax schemas.
+    """
+    return _verify_domain_registry_grounding(
+        OPTAX_REGISTRY,
+        "OPTAX_REGISTRY",
+        "optax",
+        "Optax",
+        "optax_*.json",
+        snapshots_dir,
+    )
+
+
 def verify_odl_grounding() -> list[str]:
     """Verify universal Operation Definition Language (ODL) schemas in ODL_CATALOG.
 
@@ -739,7 +908,7 @@ def verify_odl_grounding() -> list[str]:
 
 
 def _verify_local_schemas_only() -> int:
-    """Verify local custom ops, ONNX, quantization, state, and ODL registries when snapshot directory is missing or empty.
+    """Verify local custom ops, ONNX, quantization, state, Chex, Grain, Orbax, Optax, and ODL registries when snapshot directory is missing or empty.
 
     Returns:
         int: Process exit code (0 for success, 1 for failure).
@@ -748,8 +917,12 @@ def _verify_local_schemas_only() -> int:
     onnx_errors = verify_onnx_grounding()
     quant_errors = verify_quantization_grounding()
     state_errors = verify_state_ops_grounding()
+    chex_errors = verify_chex_grounding()
+    grain_errors = verify_grain_grounding()
+    orbax_errors = verify_orbax_grounding()
+    optax_errors = verify_optax_grounding()
     odl_errors = verify_odl_grounding()
-    all_errors = custom_errors + onnx_errors + quant_errors + state_errors + odl_errors
+    all_errors = custom_errors + onnx_errors + quant_errors + state_errors + chex_errors + grain_errors + orbax_errors + optax_errors + odl_errors
     if all_errors:
         for err in all_errors:
             print(f"[ERROR] {err}")
@@ -781,6 +954,10 @@ def _run_all_snapshot_verifiers(snapshots_dir: Path) -> list[str]:
         + verify_wasm_grounding(snapshots_dir)
         + verify_array_api_grounding(snapshots_dir)
         + verify_aten_grounding(snapshots_dir)
+        + verify_chex_grounding(snapshots_dir)
+        + verify_grain_grounding(snapshots_dir)
+        + verify_orbax_grounding(snapshots_dir)
+        + verify_optax_grounding(snapshots_dir)
         + verify_collectives_grounding(snapshots_dir)
         + verify_quantization_grounding()
         + verify_state_ops_grounding()
@@ -844,6 +1021,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Audited ONNX schemas: {len(ONNX_REGISTRY)} ops.")
     print(f"Audited Array API schemas: {len(ARRAY_API_REGISTRY)} ops.")
     print(f"Audited ATen schemas: {len(ATEN_REGISTRY)} ops.")
+    print(f"Audited Chex schemas: {len(CHEX_REGISTRY)} ops.")
+    print(f"Audited Grain schemas: {len(GRAIN_REGISTRY)} ops.")
+    print(f"Audited Orbax schemas: {len(ORBAX_REGISTRY)} ops.")
+    print(f"Audited Optax schemas: {len(OPTAX_REGISTRY)} ops.")
     print(f"Audited Collective schemas: {len(COLLECTIVE_OPS_REGISTRY)} ops.")
     print(f"Audited Quantization schemas: {len(QUANTIZATION_OPS_REGISTRY)} ops.")
     print(f"Audited State schemas: {len(STATE_OPS_REGISTRY)} ops.")

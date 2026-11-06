@@ -56,6 +56,7 @@ from ml_switcheroo_ir.types import (
     TensorSpec,
     _AttributeValuePydanticAnnotation,
     _validate_dimension_tuple,
+    describe_value_type,
     is_dynamic_dimension,
 )
 
@@ -765,7 +766,7 @@ def _normalize_graph_nodes(
         return nodes
     if isinstance(nodes, Mapping):
         return NodeDict(nodes)
-    raise TypeError(f"LogicalGraph 'nodes' must be a Mapping[str, LogicalNode] or None, got {type(nodes).__name__}.")
+    raise TypeError(f"LogicalGraph 'nodes' must be a Mapping[str, LogicalNode] or None, got {describe_value_type(nodes)}.")
 
 
 def _auto_detect_input_pseudo_nodes(
@@ -1380,10 +1381,10 @@ class LogicalGraph(pydantic.BaseModel):
         Raises:
             TypeError: If the 'nodes' entry is not a Mapping.
         """
-        raw_map = data.model_dump() if isinstance(data, SerializedGraphModel) else data
+        raw_map: Mapping[str, RawGraphValue] = data.model_dump() if isinstance(data, SerializedGraphModel) else data
         raw_nodes = raw_map.get("nodes", {})
         if not isinstance(raw_nodes, Mapping):
-            raise TypeError(f"LogicalGraph.from_dict expected 'nodes' to be a Mapping, got {type(raw_nodes).__name__}.")
+            raise TypeError(f"LogicalGraph.from_dict expected 'nodes' to be a Mapping, got {describe_value_type(raw_nodes)}.")
         nodes = NodeDict({str(nid): _parse_node_dict(ndata, cls) for nid, ndata in raw_nodes.items() if isinstance(ndata, Mapping)})
         return _build_graph_from_parsed_sections(cls, nodes, raw_map)
 

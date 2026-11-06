@@ -14,8 +14,12 @@ from ml_switcheroo_ir.schema.custom_ops import (
 from ml_switcheroo_ir.schema.framework_registries import (
     ARRAY_API_REGISTRY,
     ATEN_REGISTRY,
+    CHEX_REGISTRY,
+    GRAIN_REGISTRY,
     ODL_CATALOG,
     ODL_DIALECT_MAPPINGS,
+    OPTAX_REGISTRY,
+    ORBAX_REGISTRY,
     get_abstract_op,
 )
 from ml_switcheroo_ir.schema.ghost import (
@@ -58,12 +62,16 @@ from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 __all__ = [
     "ARRAY_API_REGISTRY",
     "ATEN_REGISTRY",
+    "CHEX_REGISTRY",
     "CUSTOM_OPS_REGISTRY",
+    "GRAIN_REGISTRY",
     "METAL_REGISTRY",
     "MLIR_REGISTRY",
     "ODL_CATALOG",
     "ODL_DIALECT_MAPPINGS",
     "ONNX_REGISTRY",
+    "OPTAX_REGISTRY",
+    "ORBAX_REGISTRY",
     "PTX_REGISTRY",
     "RDNA_REGISTRY",
     "RDNA_TO_VOPD_MAP",

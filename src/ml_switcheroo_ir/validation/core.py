@@ -71,6 +71,11 @@ KNOWN_SYNONYMS: dict[tuple[str, str], str] = {
     ("tf", "gelu"): "tf.nn.gelu",
     ("tf", "relu"): "tf.nn.relu",
     ("tf", "silu"): "tf.nn.silu",
+    ("optax", "cross_entropy"): "optax.losses.softmax_cross_entropy",
+    ("optax", "adam_w"): "optax.adamw",
+    ("orbax", "checkpointer"): "orbax.checkpoint.PyTreeCheckpointer",
+    ("chex", "assert_allclose"): "chex.assert_trees_all_close",
+    ("grain", "DataLoader"): "grain.DataLoader",
 }
 
 CORE_MLIR_DIALECTS: dict[str, dict[str, int]] = {

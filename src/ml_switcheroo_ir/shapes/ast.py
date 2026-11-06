@@ -99,7 +99,8 @@ class SymNode:
         simplified = self.simplify()
         if simplified is not self:
             return simplified.eval(env)
-        raise NotImplementedError(f"Evaluation not implemented for node of type {type(self).__name__}")
+        node_type_name = str(type(self)).split("'")[1].rsplit(".", 1)[-1]
+        raise NotImplementedError(f"Evaluation not implemented for node of type {node_type_name}")
 
     def evaluate(self, bindings: dict[str, int]) -> int:
         """Evaluate expression given runtime variable bindings.
@@ -376,18 +377,18 @@ class SymConst(SymNode):
         """
         return f"SymConst({self.value})"
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
         """Check equality with constant.
 
         Args:
-            other (object): Other object.
+            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
 
         Returns:
             bool: True if values match.
         """
         if isinstance(other, SymConst):
             return self.value == other.value
-        if isinstance(other, int):
+        if isinstance(other, int) and not isinstance(other, bool):
             return self.value == other
         return False
 
@@ -471,11 +472,11 @@ class SymVar(SymNode):
         """
         return f"SymVar({self.name!r})"
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
         """Check equality with another variable.
 
         Args:
-            other (object): Other object.
+            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
 
         Returns:
             bool: True if variable names match.
@@ -842,11 +843,11 @@ class SymBinaryOp(SymNode):
         """
         return f"SymBinaryOp({self.op!r}, {self.left!r}, {self.right!r})"
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
         """Check structural equality with another binary operation node.
 
         Args:
-            other (object): Other object.
+            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
 
         Returns:
             bool: True if other is a SymBinaryOp with identical op, left, and right operands.
@@ -947,11 +948,11 @@ class SymUnaryOp(SymNode):
         """
         return f"SymUnaryOp({self.op!r}, {self.operand!r})"
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
         """Check structural equality.
 
         Args:
-            other (object): Other object.
+            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
 
         Returns:
             bool: True if op and operand match.
@@ -1061,11 +1062,11 @@ class SymPiecewise(SymNode):
         """
         return f"SymPiecewise(cases={self.cases!r}, default={self.default!r})"
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
         """Check structural equality.
 
         Args:
-            other (object): Other object.
+            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
 
         Returns:
             bool: True if cases and default match.
@@ -1367,11 +1368,11 @@ class SymInt:
             return hash(canon.value)
         return hash(str(canon))
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
         """Evaluate equality using canonical polynomial consistency.
 
         Args:
-            other (object): The other object to compare.
+            other (SymNode | SymInt | int | float | str | bool | None): The other value to compare.
 
         Returns:
             bool: True if expressions are mathematically consistent.

@@ -224,9 +224,8 @@ def test_runpy_main_module() -> None:
     import importlib
     import sys
 
-    import ml_switcheroo_ir.__main__
-
-    importlib.reload(ml_switcheroo_ir.__main__)
+    main_mod = importlib.import_module("ml_switcheroo_ir.__main__")
+    importlib.reload(main_mod)
 
     with NamedTemporaryFile(mode="w", delete=False) as f:
         f.write("{}")

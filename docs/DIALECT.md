@@ -76,3 +76,12 @@ Modern transformer primitives (`FlashAttention`, `RMSNorm`, `SwiGLU`, `RoPE`, `V
 ```
 
 For domain-specific or proprietary custom operations outside the built-in registry, provide a custom ops schema JSON file to the CLI `validate` command using the `--custom-ops` flag.
+
+## 5. Ecosystem Framework Dialects (`chex`, `grain`, `orbax`, `optax`)
+
+In addition to `ai.onnx`, `stablehlo`, `aten`, and `array_api`, `ml-switcheroo-ir` provides canonical schema registries for JAX/ML ecosystem libraries:
+
+*   **`chex` (`CHEX_REGISTRY`)**: Assertion primitives (`assert_shape`, `assert_rank`, `assert_type`, `assert_equal_shape`, `assert_trees_all_close`).
+*   **`grain` (`GRAIN_REGISTRY`)**: Deterministic data pipeline operations (`MapDataset`, `IterDataset`, `DataLoader`, `batch`, `map`).
+*   **`orbax` / `orbax.checkpoint` (`ORBAX_REGISTRY`)**: Checkpoint management primitives (`PyTreeCheckpointer`, `StandardCheckpointer`, `CheckpointManager`, `AsyncCheckpointer`, `SaveArgs`).
+*   **`optax` (`OPTAX_REGISTRY`)**: Gradient transformation and loss primitives (`adam`, `adamw`, `sgd`, `apply_updates`, `softmax_cross_entropy`).

@@ -134,6 +134,10 @@ def test_framework_registries_non_empty_initialization() -> None:
         finally:
             framework_registries.ATEN_REGISTRY.pop("mock_op", None)
             framework_registries.ARRAY_API_REGISTRY.pop("mock_op", None)
+            framework_registries.CHEX_REGISTRY.pop("mock_op", None)
+            framework_registries.GRAIN_REGISTRY.pop("mock_op", None)
+            framework_registries.ORBAX_REGISTRY.pop("mock_op", None)
+            framework_registries.OPTAX_REGISTRY.pop("mock_op", None)
             framework_registries.ODL_CATALOG.pop("mock_op", None)
     framework_registries._initialize_framework_registries()
 

@@ -109,6 +109,9 @@ jobs:
     - name: Check Doc Coverage (Interrogate)
       run: interrogate -vv -f 100 -M -i -c pyproject.toml src scripts tests
 
+    - name: Granular AST Docstring & Signature Check
+      run: python scripts/check_docs.py src scripts tests
+
     - name: Test & Branch Coverage
       run: |
         pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=term-missing --cov-report=xml --cov-report=json:coverage.json --cov-fail-under=100

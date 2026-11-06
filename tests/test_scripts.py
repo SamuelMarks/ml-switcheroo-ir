@@ -68,7 +68,7 @@ def test_scripts_package_import() -> None:
     """Test importing the scripts package module directly."""
     import scripts
 
-    assert scripts.__doc__ is not None
+    assert scripts is not None
 
 
 def test_get_color() -> None:
@@ -1934,6 +1934,79 @@ def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:
         assert len(o_errs) == 2
 
 
+def test_verify_domain_registries_grounding(tmp_path: Path) -> None:
+    """Test Chex, Grain, Orbax, and Optax grounding verification paths.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
+    from ml_switcheroo_ir.schema.onnx_registry import OpAttribute, OpSchema
+    from scripts.verify_grounding import (
+        verify_chex_grounding,
+        verify_grain_grounding,
+        verify_optax_grounding,
+        verify_orbax_grounding,
+    )
+
+    with patch("scripts.verify_grounding.CHEX_REGISTRY", {}):
+        assert "CHEX_REGISTRY is empty." in verify_chex_grounding()
+    with patch("scripts.verify_grounding.GRAIN_REGISTRY", {}):
+        assert "GRAIN_REGISTRY is empty." in verify_grain_grounding()
+    with patch("scripts.verify_grounding.ORBAX_REGISTRY", {}):
+        assert "ORBAX_REGISTRY is empty." in verify_orbax_grounding()
+    with patch("scripts.verify_grounding.OPTAX_REGISTRY", {}):
+        assert "OPTAX_REGISTRY is empty." in verify_optax_grounding()
+
+    snap_sub = tmp_path / "domain_snaps"
+    snap_sub.mkdir(exist_ok=True)
+    (snap_sub / "optax_v0.2.8.json").write_text(
+        json.dumps(
+            {
+                "categories": {
+                    "functions": [
+                        {
+                            "name": "adam",
+                            "api_path": "optax.adam",
+                            "params": [{"name": "learning_rate", "kind": "POSITIONAL_OR_KEYWORD"}],
+                        },
+                        {
+                            "name": "no_params_op",
+                            "api_path": "optax.no_params_op",
+                            "params": [],
+                        },
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    bad_optax = {
+        "adam": OpSchema(
+            "wrong_name",
+            "bad_dom",
+            1,
+            {"bad_attr": OpAttribute("bad_attr", "float", False), "learning_rate": OpAttribute("learning_rate", "float", True)},
+            [],
+            [],
+        ),
+        "no_params_op": OpSchema(
+            "no_params_op",
+            "optax",
+            1,
+            {"ignored_attr": OpAttribute("ignored_attr", "float", False)},
+            [],
+            [],
+        ),
+        "missing_op": OpSchema("missing_op", "optax", 1, {}, [], []),
+    }
+    with patch("scripts.verify_grounding.OPTAX_REGISTRY", bad_optax):
+        optax_errs = verify_optax_grounding(snap_sub)
+        assert any("op key 'adam' != schema.name 'wrong_name'" in e for e in optax_errs)
+        assert any("invalid domain 'bad_dom'" in e for e in optax_errs)
+        assert any("attribute 'bad_attr' is not recognized" in e for e in optax_errs)
+        assert any("op 'missing_op' is not grounded" in e for e in optax_errs)
+
+
 def test_lint_typing_exhaustive(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Test scripts/lint_typing.py across clean and violating Python constructs.
 
@@ -1957,7 +2030,7 @@ def test_lint_typing_exhaustive(tmp_path: Path, capsys: pytest.CaptureFixture[st
         "  object = 'object'\n"
         "  def __init__(self) -> None:\n"
         "    super().__init__()\n"
-        "  def __eq__(self, other: object) -> bool:\n"
+        "  def __eq__(self, other: int | str) -> bool:\n"
         "    return False\n"
         "# normal comment\n"
     )
@@ -1981,7 +2054,7 @@ def test_lint_typing_exhaustive(tmp_path: Path, capsys: pytest.CaptureFixture[st
         "f = 3  # " + "type: ignore[assignment]\n"
     )
     violations = check_source(bad_src, Path("bad.py"))
-    assert len(violations) == 14
+    assert len(violations) == 15
     assert any("Forbidden import 'typing.Any'" in v for v in violations)
     assert any("Forbidden import 'typing.cast'" in v for v in violations)
     assert any("Forbidden import 'builtins.getattr'" in v for v in violations)
@@ -1989,6 +2062,7 @@ def test_lint_typing_exhaustive(tmp_path: Path, capsys: pytest.CaptureFixture[st
     assert any("Forbidden reference 'typing.Any'" in v for v in violations)
     assert any("Forbidden builtin reference 'builtins.setattr'" in v for v in violations)
     assert any("Forbidden dunder attribute access '.__setattr__'" in v for v in violations)
+    assert any("Forbidden dunder attribute access '.__repr__'" in v for v in violations)
     assert any("Forbidden reflection/cast call 'getattr()'" in v for v in violations)
     assert any("Forbidden reference to 'Any'" in v for v in violations)
     assert any("Forbidden reference to 'object'" in v for v in violations)
@@ -2016,4 +2090,89 @@ def test_lint_typing_exhaustive(tmp_path: Path, capsys: pytest.CaptureFixture[st
     assert "Forbidden reflection/cast call 'getattr()'" in captured.err
 
     with patch("sys.argv", ["lint_typing.py"]):
+        assert main(None) == 0
+
+
+def test_check_docs_exhaustive(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Test scripts/check_docs.py across all AST docstring verification branches.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
+    """
+    import ast as _ast
+
+    from scripts.check_docs import _has_non_none_return, check_directory, check_file, main
+
+    assert _has_non_none_return(None) is False
+    assert _has_non_none_return(_ast.Name(id="None", ctx=_ast.Load())) is False
+    assert _has_non_none_return(_ast.Constant(value=None)) is False
+
+    assert check_directory(str(tmp_path / "nonexistent")) == []
+
+    txt_file = tmp_path / "ignore.txt"
+    txt_file.write_text("not python\n", encoding="utf-8")
+    assert check_directory(str(txt_file)) == []
+
+    bad_py = tmp_path / "bad.py"
+    bad_py.write_text(
+        "class MissingClassDoc:\n"
+        "    pass\n"
+        "def missing_func_doc():\n"
+        "    pass\n"
+        "from typing import overload\n"
+        "import typing\n"
+        "@overload\n"
+        "def ov1(x: int) -> int: ...\n"
+        "@typing.overload\n"
+        "def ov2(x: str) -> str: ...\n"
+        "@staticmethod\n"
+        "@typing.final\n"
+        "def bad_doc(pos_only: int, /, a: int, *args: int, kw_only: int = 1, **kwargs: int) -> int:\n"
+        '    """Doc with (' + "Any) and (" + 'object) but no sections."""\n'
+        "    return 1\n"
+        "class WithMethod:\n"
+        '    """Class doc."""\n'
+        "    def method(self, x: int) -> None:\n"
+        '        """Method doc.\n\n'
+        "        Args:\n"
+        "            x (int): Value.\n"
+        '        """\n'
+        "        pass\n"
+        "    async def async_fn(cls, y: int) -> str:\n"
+        '        """Async doc.\n\n'
+        "        Args:\n"
+        "            y (int): Value.\n\n"
+        "        Returns:\n"
+        "            str: Output.\n"
+        '        """\n'
+        "        return 'ok'\n",
+        encoding="utf-8",
+    )
+    violations = check_file(str(bad_py))
+    assert any("missing module docstring" in v for v in violations)
+    assert any("missing class docstring on 'MissingClassDoc'" in v for v in violations)
+    assert any("missing docstring on 'missing_func_doc'" in v for v in violations)
+    assert any("prohibited Any/object docstring type in 'bad_doc'" in v for v in violations)
+    assert any("missing 'Args:' section in 'bad_doc'" in v for v in violations)
+    assert any("missing arg 'pos_only' in 'bad_doc'" in v for v in violations)
+    assert any("missing arg 'args' in 'bad_doc'" in v for v in violations)
+    assert any("missing arg 'kw_only' in 'bad_doc'" in v for v in violations)
+    assert any("missing arg 'kwargs' in 'bad_doc'" in v for v in violations)
+    assert any("missing 'Returns:'/'Yields:' section in 'bad_doc'" in v for v in violations)
+
+    assert check_directory(str(bad_py)) == violations
+    assert main([str(tmp_path)]) == 1
+    captured = capsys.readouterr()
+    assert "missing module docstring" in captured.err
+
+    clean_dir = tmp_path / "clean_pkg"
+    clean_dir.mkdir()
+    clean_py = clean_dir / "clean.py"
+    clean_py.write_text(
+        '"""Clean module docstring."""\n\ndef ok(x: int) -> int:\n    """Compute value.\n\n    Args:\n        x (int): Input.\n\n    Returns:\n        int: Result.\n    """\n    return x\n',
+        encoding="utf-8",
+    )
+    assert main([str(clean_dir)]) == 0
+    with patch("sys.argv", ["check_docs.py", str(clean_dir)]):
         assert main(None) == 0

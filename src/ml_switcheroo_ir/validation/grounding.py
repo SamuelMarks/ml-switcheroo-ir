@@ -386,7 +386,7 @@ class GroundingValidator(Validator):
         Args:
             data (Mapping[str, SnapshotManifestNode]): Flat snapshot dictionary.
         """
-        known_fws = ("torch", "jax", "tensorflow", "tf", "stablehlo", "numpy")
+        known_fws = ("torch", "jax", "tensorflow", "tf", "stablehlo", "numpy", "chex", "grain", "orbax", "orbax_checkpoint", "optax")
         for k, v in data.items():
             if k == "_parameter_translations":
                 continue

@@ -28,6 +28,39 @@ def test_parameter_translation_engine_defaults() -> None:
     assert engine.translate_parameter("normalization", "eps", "torch", "tf") == "epsilon"
     assert engine.translate_parameter("normalization", "weight", "torch", "jax") == "scale"
 
+    # Optimizer: torch <-> optax <-> tf
+    assert engine.translate_parameter("optimizer", "lr", "torch", "optax") == "learning_rate"
+    assert engine.translate_parameter("optimizer", "learning_rate", "optax", "torch") == "lr"
+    assert engine.translate_parameter("optimizer", "b1", "optax", "tf") == "beta_1"
+    assert engine.translate_parameter("optimizer", "beta_1", "tf", "optax") == "b1"
+    assert engine.translate_parameter("optimizer", "b2", "optax", "keras3") == "beta_2"
+    assert engine.translate_parameter("optimizer", "eps", "optax", "tf") == "epsilon"
+
+    # Loss: torch <-> optax
+    assert engine.translate_parameter("loss", "input", "torch", "optax") == "logits"
+    assert engine.translate_parameter("loss", "logits", "optax", "torch") == "input"
+    assert engine.translate_parameter("loss", "target", "torch", "optax") == "labels"
+    assert engine.translate_parameter("loss", "labels", "optax", "torch") == "target"
+
+    # Checkpoint: torch <-> orbax
+    assert engine.translate_parameter("checkpoint", "f", "torch", "orbax") == "directory"
+    assert engine.translate_parameter("checkpoint", "directory", "orbax", "torch") == "f"
+    assert engine.translate_parameter("checkpoint", "obj", "torch", "orbax") == "item"
+    assert engine.translate_parameter("checkpoint", "item", "orbax", "torch") == "obj"
+
+    # Assertion: torch <-> chex
+    assert engine.translate_parameter("assertion", "actual", "torch", "chex") == "inputs"
+    assert engine.translate_parameter("assertion", "inputs", "chex", "torch") == "actual"
+    assert engine.translate_parameter("assertion", "rtol", "torch", "chex") == "rtol"
+
+    # DataLoader: torch <-> grain
+    assert engine.translate_parameter("dataloader", "dataset", "torch", "grain") == "data_source"
+    assert engine.translate_parameter("dataloader", "data_source", "grain", "torch") == "dataset"
+    assert engine.translate_parameter("dataloader", "drop_last", "torch", "grain") == "drop_remainder"
+    assert engine.translate_parameter("dataloader", "drop_remainder", "grain", "torch") == "drop_last"
+    assert engine.translate_parameter("dataloader", "num_workers", "torch", "grain") == "worker_count"
+    assert engine.translate_parameter("dataloader", "worker_count", "grain", "torch") == "num_workers"
+
 
 def test_parameter_translation_engine_translate_attributes() -> None:
     """Test translate_attributes with valid parameters and strict zero-hallucination policy."""

@@ -163,6 +163,9 @@ def test_cli_compliance_verbose_mapping_exception(
         Args:
             obj (Callable[[str], str] | type): Inspected object.
 
+        Returns:
+            str: Never returns (raises RuntimeError).
+
         Raises:
             RuntimeError: Always raised to test error resilience.
         """

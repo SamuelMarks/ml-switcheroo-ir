@@ -411,7 +411,7 @@ optimized_graph = propagate_shapes_and_constants(deduped_graph)
 
 ### Zero-Hallucination Parameter Translation
 
-Translate parameter and attribute names across frameworks (`torch`, `jax`, `tf`, `stablehlo`, `numpy`) driven by `concept_map.json`:
+Translate parameter and attribute names across frameworks (`torch`, `jax`, `tf`, `optax`, `orbax`, `chex`, `grain`, `stablehlo`, `numpy`) driven by `concept_map.json`:
 
 ```python
 from ml_switcheroo_ir.translation import ParameterTranslationEngine

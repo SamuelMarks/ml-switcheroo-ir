@@ -18,7 +18,11 @@ from ml_switcheroo_ir.schema.custom_ops import (
 from ml_switcheroo_ir.schema.framework_registries import (
     ARRAY_API_REGISTRY,
     ATEN_REGISTRY,
+    CHEX_REGISTRY,
+    GRAIN_REGISTRY,
     ODL_CATALOG,
+    OPTAX_REGISTRY,
+    ORBAX_REGISTRY,
 )
 from ml_switcheroo_ir.schema.ghost import (
     RDNA_INSTRUCTION_PRIMITIVES,
@@ -40,7 +44,7 @@ from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
 from ml_switcheroo_ir.schema.rdna_registry import RDNA_REGISTRY
 from ml_switcheroo_ir.schema.sass_registry import SASS_REGISTRY
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
-from ml_switcheroo_ir.types import AttributeValue
+from ml_switcheroo_ir.types import AttributeValue, describe_value_type
 from ml_switcheroo_ir.validation.core import (
     CORE_MLIR_DIALECTS,
     ValidationError,
@@ -251,6 +255,12 @@ class Validator:
             "wgsl": WGSL_REGISTRY,
             "aten": ATEN_REGISTRY,
             "array_api": ARRAY_API_REGISTRY,
+            "chex": CHEX_REGISTRY,
+            "grain": GRAIN_REGISTRY,
+            "orbax": ORBAX_REGISTRY,
+            "orbax_checkpoint": ORBAX_REGISTRY,
+            "orbax.checkpoint": ORBAX_REGISTRY,
+            "optax": OPTAX_REGISTRY,
             "odl": ODL_CATALOG,
             "abstract": ODL_CATALOG,
         }
@@ -508,7 +518,7 @@ class Validator:
                     ValidationError(
                         node_id=node.id,
                         attribute=key,
-                        message=f"Attribute '{key}' has invalid type. Expected {expected_type}, got {type(value).__name__}.",
+                        message=f"Attribute '{key}' has invalid type. Expected {expected_type}, got {describe_value_type(value)}.",
                         level=ValidationLevel.ERROR,
                     )
                 )

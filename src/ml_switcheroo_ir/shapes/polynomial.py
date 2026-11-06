@@ -245,11 +245,11 @@ class Polynomial:
         )
         return "".join(self._format_monomial_term(i, mono, self.terms[mono]) for i, mono in enumerate(sorted_monos))
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(self, other: Polynomial | int | float | str | bool | None) -> bool:
         """Evaluate equality between two polynomials.
 
         Args:
-            other (object): Other object to compare against.
+            other (Polynomial | int | float | str | bool | None): Other value to compare against.
 
         Returns:
             bool: True if both polynomials have identical canonical terms.

@@ -2,6 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/SamuelMarks/ml-switcheroo-ir/actions/workflows/ci.yml/badge.svg)](https://github.com/SamuelMarks/ml-switcheroo-ir/actions)
+[![Release](https://github.com/SamuelMarks/ml-switcheroo-ir/actions/workflows/release.yml/badge.svg)](https://github.com/SamuelMarks/ml-switcheroo-ir/actions/workflows/release.yml)
 [![Test Coverage](https://img.shields.io/badge/test_coverage-100%25-brightgreen.svg)](#)
 [![Doc Coverage](https://img.shields.io/badge/doc_coverage-100%25-brightgreen.svg)](#)
 
@@ -90,7 +91,7 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 - **Multi-Dialect Schema Registries:**
   - **ONNX Canonical Dialect (`ai.onnx`):** 221 canonical operators derived and grounded against the official specification with zero hallucinated attributes or parameters. Loaded dynamically from upstream snapshots with typed Python fallbacks; schema generation is strictly an offline build step (`scripts/generate_registry.py`).
   - **Modern Custom, State, Collective & Quantization Primitives:** Pre-registered schemas in `ml.switcheroo.custom` (`RMSNorm`, `RMSNormBackward`, `SwiGLU`, `RoPE`, `FlashAttention`, `PagedAttention`, `RaggedPagedAttention`, `VisionPatchEmbedding`, `LayerNorm`, `GroupNorm`, `GELU`, `EmbeddingLookup`, `ScaledDotProductAttention`), `ml.switcheroo.state` (`ReadVariable`, `AssignVariable`, `ScatterUpdate`), `collective` (`all_reduce`, `all_gather`, `reduce_scatter`, `all_to_all`), and `quantization` (`block_quantize`, `dequantize_grouped_int4`).
-  - **Framework & Universal Abstract Catalogs:** Universal Operation Definition Language (`ODL_CATALOG`, `get_abstract_op`), PyTorch ATen (`ATEN_REGISTRY`), and Python Array API (`ARRAY_API_REGISTRY`).
+  - **Framework & Universal Abstract Catalogs:** Universal Operation Definition Language (`ODL_CATALOG`, `get_abstract_op`), PyTorch ATen (`ATEN_REGISTRY`), Python Array API (`ARRAY_API_REGISTRY`), Chex (`CHEX_REGISTRY`), Grain (`GRAIN_REGISTRY`), Orbax (`ORBAX_REGISTRY`), and Optax (`OPTAX_REGISTRY`).
   - **StableHLO Dialect (`stablehlo`):** 120 grounded compiler operations with structured attribute schemas (`DotDimensionNumbersAttr`, `ConvDimensionNumbersAttr`, `GatherDimensionNumbersAttr`, `ScatterDimensionNumbersAttr`, `ComparisonDirectionAttr`, `PrecisionAttr`).
   - **Core MLIR Dialects:** Schema awareness and operand/attribute checking for `arith`, `math`, `tensor`, `linalg`, `scf`, and `func`.
   - **GPU Accelerator ISAs & Shader Dialects:** WebGPU WGSL (qualifiers, workgroup limits, 16-byte alignment/stride), AMD RDNA3 (GFX11 VOPD dual-issue pairing matrix), NVIDIA SASS (scoreboard latency hazard detection), NVIDIA PTX (`nvidia_ptx`), Apple Metal (`metal_msl`), WebAssembly SIMD (`wasm_simd`), and WebGL (`webgl`).
@@ -431,8 +432,8 @@ ml-switcheroo-ir export-schema --typescript --ts-out types.ts
 `ml-switcheroo-ir` is maintained under strict engineering standards:
 
 - **100% Test Coverage:** Line and branch coverage enforced via `pytest --cov --cov-branch --cov-fail-under=100`.
-- **100% Documentation Coverage:** Every public class, method, function, parameter, and return value documented in Google style and verified via `interrogate --fail-under=100`.
-- **Strict Static Typing & Anti-Reflection:** Verified with `mypy --strict`, `ruff`, and `scripts/lint_typing.py` (enforcing zero `Any`, `object`, `cast`, `getattr`/`setattr`, or dynamic code execution).
+- **100% Documentation Coverage:** Every public class, method, function, parameter, and return value documented in Google style and verified via `interrogate --fail-under=100` and `scripts/check_docs.py`.
+- **Strict Static Typing & Anti-Reflection:** Verified with `mypy --strict`, `ruff`, and `scripts/lint_typing.py` (enforcing zero `Any`, `object`, `cast`, `getattr`/`setattr`, dunder attribute accesses, or dynamic code execution).
 - **Minimal Runtime Dependencies:** Relies on a minimal set of core dependencies.
 
 Run the test suite locally:

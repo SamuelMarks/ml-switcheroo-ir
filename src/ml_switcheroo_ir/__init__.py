@@ -47,7 +47,11 @@ from ml_switcheroo_ir.graph import (
 from ml_switcheroo_ir.schema.framework_registries import (
     ARRAY_API_REGISTRY,
     ATEN_REGISTRY,
+    CHEX_REGISTRY,
+    GRAIN_REGISTRY,
     ODL_CATALOG,
+    OPTAX_REGISTRY,
+    ORBAX_REGISTRY,
     get_abstract_op,
 )
 from ml_switcheroo_ir.sentinels import (
@@ -102,7 +106,11 @@ __version__ = "0.0.5"
 __all__ = [
     "ARRAY_API_REGISTRY",
     "ATEN_REGISTRY",
+    "CHEX_REGISTRY",
+    "GRAIN_REGISTRY",
     "ODL_CATALOG",
+    "OPTAX_REGISTRY",
+    "ORBAX_REGISTRY",
     "AttributeValue",
     "AutodiffSentinelProtocol",
     "BaseFrontend",

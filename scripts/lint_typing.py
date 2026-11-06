@@ -1,12 +1,12 @@
 """AST-based static typing and anti-reflection linter for ml-switcheroo-ir.
 
 Enforces zero usage of:
-- ``getattr``, ``setattr``, ``hasattr``, ``delattr``, ``vars``, ``globals``, ``locals``, ``eval``, ``exec``, ``compile``, ``cast``
+- ``getattr``, ``setattr``, ``hasattr``, ``delattr``, ``vars``, ``globals``, ``locals``, ``dir``, ``eval``, ``exec``, ``compile``, ``cast``
 - ``operator.attrgetter``, ``operator.itemgetter``, ``operator.methodcaller``
+- ``inspect.getattr_static``, ``read_runtime_attr``, ``has_runtime_attr``, ``set_runtime_attr``
 - ``types.FunctionType`` and ``core_schema.any_schema``
-- ``object`` annotations, base classes, and calls (except ``other: object`` in ``__eq__`` / ``__ne__``)
-- ``object.__setattr__``, ``object.__getattribute__``, ``object.__delattr__``, ``.__dict__``, ``.__mro__``, ``.__subclasses__``, ``.__class__``, ``.__get_pydantic_core_schema__``, ``.__builtins__``, ``.__globals__``, ``.__code__``, ``.__closure__``
-- Direct dunder method invocations ``obj.__<name>__(...)`` (only ``super().__<name>__(...)`` is permitted)
+- ``object`` annotations, base classes, and calls
+- All dunder attribute accesses ``obj.__<name>__`` and direct dunder method invocations ``obj.__<name>__(...)`` (only ``super().__<name>__(...)`` is permitted)
 - ``typing.Any``, ``typing_extensions.Any``
 - ``typing.cast``, ``typing_extensions.cast``
 - ``# type: ignore`` comments
@@ -30,11 +30,16 @@ _FORBIDDEN_BUILTIN_CALLS: frozenset[str] = frozenset(
         "vars",
         "globals",
         "locals",
+        "dir",
         "eval",
         "exec",
         "compile",
         "cast",
         "object",
+        "getattr_static",
+        "read_runtime_attr",
+        "has_runtime_attr",
+        "set_runtime_attr",
     }
 )
 
@@ -52,32 +57,39 @@ _FORBIDDEN_TYPES_NAMES: frozenset[str] = frozenset(
     }
 )
 
-_FORBIDDEN_DUNDER_ATTRS: frozenset[str] = frozenset(
-    {
-        "__dict__",
-        "__mro__",
-        "__subclasses__",
-        "__setattr__",
-        "__getattribute__",
-        "__delattr__",
-        "__class__",
-        "__get_pydantic_core_schema__",
-        "__builtins__",
-        "__globals__",
-        "__code__",
-        "__closure__",
-    }
-)
-
 _TYPING_MODULES: frozenset[str] = frozenset({"typing", "typing_extensions"})
 _OPERATOR_MODULES: frozenset[str] = frozenset({"operator", "_operator"})
 _FORBIDDEN_TYPING_NAMES: frozenset[str] = frozenset({"Any", "cast"})
 _MODULE_FORBIDDEN_TABLE: tuple[tuple[frozenset[str], frozenset[str], str], ...] = (
     (_TYPING_MODULES, _FORBIDDEN_TYPING_NAMES, "Forbidden reference"),
-    (frozenset({"builtins"}), _FORBIDDEN_BUILTIN_CALLS, "Forbidden builtin reference"),
+    (frozenset({"builtins", "inspect"}), _FORBIDDEN_BUILTIN_CALLS, "Forbidden builtin reference"),
     (_OPERATOR_MODULES, _FORBIDDEN_OPERATOR_NAMES, "Forbidden operator helper"),
     (frozenset({"types"}), _FORBIDDEN_TYPES_NAMES, "Forbidden dynamic type reference"),
 )
+
+
+def _is_dunder_name(name: str) -> bool:
+    """Return True if ``name`` is a dunder identifier ``__<name>__``.
+
+    Args:
+        name (str): Candidate attribute or method identifier.
+
+    Returns:
+        bool: True if ``name`` starts and ends with ``__`` and has length > 4.
+    """
+    return len(name) > 4 and name.startswith("__") and name.endswith("__")
+
+
+def _is_super_call(node: ast.AST) -> bool:
+    """Return True if ``node`` is a ``super()`` call expression.
+
+    Args:
+        node (ast.AST): AST expression node to inspect.
+
+    Returns:
+        bool: True if ``node`` represents ``super(...)``.
+    """
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "super"
 
 
 class _TypingAndReflectionVisitor(ast.NodeVisitor):
@@ -87,39 +99,26 @@ class _TypingAndReflectionVisitor(ast.NodeVisitor):
         """Initialize the visitor.
 
         Args:
-            file_path: Path of the file being checked.
+            file_path (Path): Path of the file being checked.
         """
         self.file_path = file_path
         self.violations: list[str] = []
-        self._allowed_eq_object_nodes: set[int] = set()
 
     def _record(self, lineno: int, col_offset: int, message: str) -> None:
         """Record a lint violation.
 
         Args:
-            lineno: 1-based line number.
-            col_offset: 0-based column offset.
-            message: Human-readable violation description.
+            lineno (int): 1-based line number.
+            col_offset (int): 0-based column offset.
+            message (str): Human-readable violation description.
         """
         self.violations.append(f"{self.file_path}:{lineno}:{col_offset + 1}: {message}")
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        """Allow ``other: object`` parameter annotation only on ``__eq__`` and ``__ne__``.
-
-        Args:
-            node: FunctionDef AST node.
-        """
-        if node.name in ("__eq__", "__ne__"):
-            for arg in node.args.args:
-                if isinstance(arg.annotation, ast.Name) and arg.annotation.id == "object":
-                    self._allowed_eq_object_nodes.add(id(arg.annotation))
-        self.generic_visit(node)
-
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        """Check forbidden imports from ``typing``, ``builtins``, ``operator``, and ``types``.
+        """Check forbidden imports from ``typing``, ``builtins``, ``inspect``, ``operator``, and ``types``.
 
         Args:
-            node: ImportFrom AST node.
+            node (ast.ImportFrom): ImportFrom AST node.
         """
         module = node.module or ""
         for mod_set, forbidden_names, _ in _MODULE_FORBIDDEN_TABLE:
@@ -137,9 +136,9 @@ class _TypingAndReflectionVisitor(ast.NodeVisitor):
         """Check forbidden module attributes, dunder attributes, and ``any_schema``.
 
         Args:
-            node: Attribute AST node.
+            node (ast.Attribute): Attribute AST node.
         """
-        if node.attr in _FORBIDDEN_DUNDER_ATTRS:
+        if _is_dunder_name(node.attr) and not _is_super_call(node.value):
             self._record(
                 node.lineno,
                 node.col_offset,
@@ -165,7 +164,7 @@ class _TypingAndReflectionVisitor(ast.NodeVisitor):
         """Check direct calls to forbidden builtins, operator helpers, and dunder methods.
 
         Args:
-            node: Call AST node.
+            node (ast.Call): Call AST node.
         """
         if isinstance(node.func, ast.Name):
             fn_name = node.func.id
@@ -177,25 +176,23 @@ class _TypingAndReflectionVisitor(ast.NodeVisitor):
                 )
         elif isinstance(node.func, ast.Attribute):
             attr = node.func.attr
-            if len(attr) > 4 and attr.startswith("__") and attr.endswith("__"):
-                is_super = isinstance(node.func.value, ast.Call) and isinstance(node.func.value.func, ast.Name) and node.func.value.func.id == "super"
-                if not is_super:
-                    self._record(
-                        node.lineno,
-                        node.col_offset,
-                        f"Forbidden direct dunder method call '.{attr}()'",
-                    )
+            if _is_dunder_name(attr) and not _is_super_call(node.func.value):
+                self._record(
+                    node.lineno,
+                    node.col_offset,
+                    f"Forbidden direct dunder method call '.{attr}()'",
+                )
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
         """Check bare ``Any`` and ``object`` references.
 
         Args:
-            node: Name AST node.
+            node (ast.Name): Name AST node.
         """
         if node.id == "Any":
             self._record(node.lineno, node.col_offset, "Forbidden reference to 'Any'")
-        elif node.id == "object" and isinstance(node.ctx, ast.Load) and id(node) not in self._allowed_eq_object_nodes:
+        elif node.id == "object" and isinstance(node.ctx, ast.Load):
             self._record(node.lineno, node.col_offset, "Forbidden reference to 'object'")
         self.generic_visit(node)
 

@@ -36,6 +36,13 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: check-docs
+        name: Granular AST Docstring & Signature Check
+        entry: python3 scripts/check_docs.py src scripts tests
+        language: system
+        types: [python]
+        pass_filenames: false
+
       - id: pytest-coverage
         name: Run Pytest Coverage
         entry: pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=json:coverage.json --cov-fail-under=100

@@ -6,7 +6,7 @@ import pydantic
 
 from ml_switcheroo_ir.distributed import PartitionAxisElement
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalMesh, LogicalNode
-from ml_switcheroo_ir.types import DType
+from ml_switcheroo_ir.types import DType, describe_value_type
 from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel
 
 __all__ = [
@@ -507,7 +507,7 @@ def _validate_node_checkpoint_tag(node: LogicalNode) -> list[ValidationError]:
             ValidationError(
                 node_id=node.id,
                 attribute="activation_checkpoint",
-                message=f"Invalid activation checkpoint tag type: {type(tag).__name__}.",
+                message=f"Invalid activation checkpoint tag type: {describe_value_type(tag)}.",
                 level=ValidationLevel.ERROR,
             )
         ]

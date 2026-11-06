@@ -261,7 +261,7 @@ The IR incorporates built-in, minimal-dependency schema registries across deep l
    - **Block & Grouped Quantization (`quantization`)**: `quantization.block_quantize` and `quantization.dequantize_grouped_int4`.
 3. **Framework & Universal Abstract Catalogs**:
    - **Operation Definition Language (`ODL_CATALOG`, `odl`)**: Universal abstract math catalog (`add`, `subtract`, `multiply`, `divide`, `matmul`, `relu`, `gelu`, `silu`, `softmax`, `layer_norm`, `rms_norm`, `conv2d`, `scaled_dot_product_attention`) with cross-dialect mappings (`ODL_DIALECT_MAPPINGS`) and `get_abstract_op()`.
-   - **PyTorch ATen (`ATEN_REGISTRY`, `aten`)** and **Python Array API (`ARRAY_API_REGISTRY`, `array_api`)**.
+   - **PyTorch ATen (`ATEN_REGISTRY`, `aten`)**, **Python Array API (`ARRAY_API_REGISTRY`, `array_api`)**, **Chex (`CHEX_REGISTRY`, `chex`)**, **Grain (`GRAIN_REGISTRY`, `grain`)**, **Orbax (`ORBAX_REGISTRY`, `orbax` / `orbax.checkpoint`)**, and **Optax (`OPTAX_REGISTRY`, `optax`)**.
 4. **Compiler Dialects**:
    - **`stablehlo`**: 120 canonical compiler operations (`dot_general`, `convolution`, `reduce`, `while`, `gather`, `scatter`, `custom_call`) with structured attribute schemas (`DotDimensionNumbersAttr`, `ConvDimensionNumbersAttr`, `GatherDimensionNumbersAttr`, `ScatterDimensionNumbersAttr`, `ComparisonDirectionAttr`, `PrecisionAttr`).
    - **Core MLIR**: Dialect validation for `arith`, `math`, `tensor`, `linalg`, `scf`, and `func`, verifying operand arities and structural separation between SSA operands and buildable attributes (e.g. `staticSizes` and `dynamicSizes` on `tensor.empty`).
@@ -370,7 +370,7 @@ To deliver actionable compiler errors and facilitate syntactic round-tripping, `
 Every repository across the ecosystem adheres to strict verification gates:
 
 - **100% Test Coverage:** Branch and statement coverage enforced on every commit (`pytest --cov --cov-branch --cov-fail-under=100`).
-- **100% Documentation Coverage:** Enforced via `interrogate --fail-under=100 src scripts tests`.
-- **Strict Static Typing & Anti-Reflection:** Verified using `mypy --strict`, `ruff`, and `scripts/lint_typing.py` with zero `Any`, `object`, `cast`, `getattr`/`setattr`, or dynamic execution constructs.
+- **100% Documentation Coverage:** Enforced via `interrogate --fail-under=100 src scripts tests` and `python scripts/check_docs.py src scripts tests`.
+- **Strict Static Typing & Anti-Reflection:** Verified using `mypy --strict`, `ruff`, and `scripts/lint_typing.py` with zero `Any`, `object`, `cast`, `getattr`/`setattr`, dunder attribute accesses, or dynamic execution constructs.
 - **Minimal Runtime Dependencies:** Relies on a minimal set of core dependencies.
 - **Git Safety Protocol:** Under no circumstances is `git push` executed autonomously.

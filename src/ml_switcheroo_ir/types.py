@@ -30,6 +30,7 @@ __all__ = [
     "TensorShape",
     "TensorSpec",
     "_validate_dimension_tuple",
+    "describe_value_type",
     "is_dynamic_dimension",
 ]
 
@@ -261,6 +262,30 @@ class DType(str, Enum):
         return _DTYPE_ITEMSIZE_MAP[self.value]
 
 
+DescribeValueTarget: typing_extensions.TypeAlias = typing.Union[
+    "AttributeValue",
+    InitializerValue,
+    DimensionType,
+    pydantic.BaseModel,
+    Iterable[typing.Union["AttributeValue", InitializerValue, pydantic.BaseModel, "DescribeValueTarget"]],
+    Mapping[str, typing.Union["AttributeValue", InitializerValue, pydantic.BaseModel, "DescribeValueTarget"]],
+]
+
+
+def describe_value_type(
+    val: DescribeValueTarget,
+) -> str:
+    """Return the unqualified Python runtime type name of a value without dunder attribute access.
+
+    Args:
+        val (DescribeValueTarget): Value whose runtime type name to format.
+
+    Returns:
+        str: Unqualified type name (e.g. 'int', 'float', 'list', 'dict').
+    """
+    return str(type(val)).split("'")[1].rsplit(".", 1)[-1]
+
+
 def _validate_dimension_tuple(
     dims: (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType | float),
 ) -> tuple[DimensionType, ...]:
@@ -288,7 +313,7 @@ def _validate_dimension_tuple(
         if isinstance(d, bool):
             raise TypeError(f"Boolean value {d!r} is not a valid tensor dimension in TensorShape.")
         if not isinstance(d, (int, str, SymNode, SymInt)):
-            raise TypeError(f"Value {d!r} of type {type(d).__name__} is not a valid DimensionType.")
+            raise TypeError(f"Value {d!r} of type {describe_value_type(d)} is not a valid DimensionType.")
         validated.append(d)
     return tuple(validated)
 
@@ -468,11 +493,14 @@ class TensorShape(pydantic.BaseModel):
         """
         return self.dims[idx]
 
-    def __eq__(self, other: object) -> bool:
+    def __eq__(
+        self,
+        other: TensorShape | Sequence[DimensionType | JsonValue] | JsonValue,
+    ) -> bool:
         """Check equality against TensorShape, tuple, or list.
 
         Args:
-            other (object): Other shape object.
+            other (TensorShape | Sequence[DimensionType | JsonValue] | JsonValue): Other shape value.
 
         Returns:
             bool: True if dimensions match.
