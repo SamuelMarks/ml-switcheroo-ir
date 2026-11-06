@@ -84,4 +84,4 @@ In addition to `ai.onnx`, `stablehlo`, `aten`, and `array_api`, `ml-switcheroo-i
 *   **`chex` (`CHEX_REGISTRY`)**: Assertion primitives (`assert_shape`, `assert_rank`, `assert_type`, `assert_equal_shape`, `assert_trees_all_close`).
 *   **`grain` (`GRAIN_REGISTRY`)**: Deterministic data pipeline operations (`MapDataset`, `IterDataset`, `DataLoader`, `batch`, `map`).
 *   **`orbax` / `orbax.checkpoint` (`ORBAX_REGISTRY`)**: Checkpoint management primitives (`PyTreeCheckpointer`, `StandardCheckpointer`, `CheckpointManager`, `AsyncCheckpointer`, `SaveArgs`).
-*   **`optax` (`OPTAX_REGISTRY`)**: Gradient transformation and loss primitives (`adam`, `adamw`, `sgd`, `apply_updates`, `softmax_cross_entropy`).
+*   **`optax` (`OPTAX_REGISTRY`)**: Gradient transformation, schedule, and loss primitives (`adam`, `adamw`, `sgd`, `cosine_decay_schedule`, `softmax_cross_entropy`).

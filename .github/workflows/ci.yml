@@ -40,11 +40,11 @@ jobs:
       run: |
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks
-        gh release download v0.0.5 -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download v0.0.4 -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber
+        gh release download v0.0.5 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download v0.0.4 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/*_exhaustive.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks/ 2>/dev/null || true
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/concept_map.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/ 2>/dev/null || true
         python -c "
-        import json
+        import glob, json
         snap_dir = '../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots'
         # Ensure wgsl_ops.json is present
         wgsl_path = f'{snap_dir}/wgsl_ops.json'
@@ -62,6 +62,31 @@ jobs:
         flash_path = f'{snap_dir}/flash_attention_v2.6.3.json'
         with open(flash_path, 'w', encoding='utf-8') as f:
             json.dump({'categories': {'neural_ops': [{'name': 'FlashAttention', 'api_path': 'ml.switcheroo.custom.FlashAttention'}]}}, f)
+        # Ensure optax_v*.json includes apply_updates when populated from v0.0.4 release
+        for optax_path in sorted(glob.glob(f'{snap_dir}/optax_*.json')):
+            try:
+                with open(optax_path, 'r', encoding='utf-8') as f:
+                    optax_data = json.load(f)
+                cats = optax_data.setdefault('categories', {})
+                has_apply = any(
+                    isinstance(item, dict) and item.get('name') == 'apply_updates'
+                    for items in cats.values() if isinstance(items, list)
+                    for item in items
+                )
+                if not has_apply:
+                    cats.setdefault('array', []).append({
+                        'name': 'apply_updates',
+                        'api_path': 'optax.apply_updates',
+                        'kind': 'function',
+                        'params': [
+                            {'name': 'params', 'kind': 'POSITIONAL_OR_KEYWORD', 'is_mandatory': True},
+                            {'name': 'updates', 'kind': 'POSITIONAL_OR_KEYWORD', 'is_mandatory': True},
+                        ],
+                    })
+                    with open(optax_path, 'w', encoding='utf-8') as f:
+                        json.dump(optax_data, f, indent=2)
+            except Exception:
+                pass
         
         # Patch concept_map.json with missing newer blocks and keras3/mlx/onnx mappings
         cmap_path = f'{snap_dir}/concept_map.json'

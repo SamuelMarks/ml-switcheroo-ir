@@ -416,11 +416,16 @@ _CANONICAL_OPTAX_OPS: list[CustomOpSchema] = [
         outputs=["tx"],
     ),
     CustomOpSchema(
-        name="apply_updates",
+        name="cosine_decay_schedule",
         domain="optax",
-        attributes=[],
-        inputs=["params", "updates"],
-        outputs=["updated_params"],
+        attributes=[
+            CustomAttributeSchema(name="init_value", type="float", required=True),
+            CustomAttributeSchema(name="decay_steps", type="int", required=True),
+            CustomAttributeSchema(name="alpha", type="float", required=False, default=0.0),
+            CustomAttributeSchema(name="exponent", type="float", required=False, default=1.0),
+        ],
+        inputs=[],
+        outputs=["schedule"],
     ),
     CustomOpSchema(
         name="softmax_cross_entropy",
