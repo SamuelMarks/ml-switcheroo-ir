@@ -797,3 +797,48 @@ def test_usage_recipes_d_and_e() -> None:
     g = LogicalGraph(nodes={"in": n_in}, outputs=["in"])
     opt = optimize_for_lowering(g)
     assert len(opt) == 1
+
+
+def test_usage_parameter_and_weight_translation() -> None:
+    """Test README.md and USAGE.md parameter, weight name, conv layout, and QKV translation examples."""
+    from ml_switcheroo_ir.translation import ParameterTranslationEngine
+
+    engine = ParameterTranslationEngine()
+
+    tf_param = engine.translate_parameter(
+        operation="normalization",
+        param_name="eps",
+        source_framework="torch",
+        target_framework="tf",
+    )
+    assert tf_param == "epsilon"
+
+    torch_attrs = {"eps": 1e-5, "weight": 1.0}
+    tf_attrs = engine.translate_attributes(
+        operation="normalization",
+        attributes=torch_attrs,
+        source_framework="torch",
+        target_framework="tf",
+    )
+    assert tf_attrs == {"epsilon": 1e-5, "gamma": 1.0}
+
+    keras_weight = engine.translate_weight_name(
+        layer_type="convolution",
+        weight_name="weight",
+        source_framework="torch",
+        target_framework="keras3",
+    )
+    assert keras_weight == "kernel"
+
+    oihw_weights = [[[[1.0, 2.0]]]]
+    hwio_weights = engine.permute_conv_weights(
+        weights=oihw_weights,
+        source_format="OIHW",
+        target_format="HWIO",
+    )
+    assert hwio_weights == [[[[1.0]], [[2.0]]]]
+
+    q, k, v = engine.split_qkv_weights([1, 2, 3, 4, 5, 6], num_heads=1, head_dim=2)
+    assert isinstance(q, list) and isinstance(k, list) and isinstance(v, list)
+    merged_qkv = engine.merge_qkv_weights(list(q), list(k), list(v))
+    assert merged_qkv == [1, 2, 3, 4, 5, 6]

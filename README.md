@@ -19,17 +19,23 @@ Machine learning framework interoperability suffers from an $N \times M$ transla
 ```mermaid
 flowchart LR
     subgraph Frontends["Frontends (N)"]
-        direction TB
-        Flax["Flax"] ~~~ PyTorch["PyTorch"] ~~~ JAX["JAX"]
-        Keras["Keras"] ~~~ MLX["MLX"] ~~~ TensorFlow["TensorFlow"]
+        Flax["Flax"]
+        Keras["Keras"]
+        PyTorch["PyTorch"]
+        MLX["MLX"]
+        JAX["JAX"]
+        TensorFlow["TensorFlow"]
     end
 
     IR["ml-switcheroo-ir<br/>(LogicalGraph)"]
 
     subgraph Backends["Backends (M)"]
-        direction TB
-        WASM["WASM"] ~~~ StableHLO["StableHLO"] ~~~ RDNA["AMD RDNA"]
-        WebGPU["WebGPU"] ~~~ MLIR["MLIR"] ~~~ SASS["NVIDIA SASS"]
+        WASM["WASM"]
+        WebGPU["WebGPU"]
+        StableHLO["StableHLO"]
+        MLIR["MLIR"]
+        RDNA["AMD RDNA"]
+        SASS["NVIDIA SASS"]
     end
 
     Flax --> IR
@@ -59,17 +65,17 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 | :--- | :--- |
 | **Tier 1: Core Definitions** | `ml-switcheroo-ir` |
 | **Tier 2: Computational AD** | `ml-switcheroo-compiler` (AOT Tracing, Reverse-Mode AD) |
-| **Ground-Truth Grounding** | `ml-ecosystem-snapshots` (Ghost Protocol, Anti-Hallucination) |
+| **Ground-Truth Grounding** | `ml-ecosystem-snapshots` / `ml-framework-snapshots` (Ghost Protocol, Anti-Hallucination) |
 | **Source Transpilation** | `ml-switcheroo` (CST/AST Rewriting & Framework Adapters) |
 | **Tiers 3-4: zero-* Frontends** | `zero-jax`, `zero-flax`, `zero-pytorch`, `zero-keras`, `zero-tensorflow`, `zero-mlx`, `zero-pax`, `zero-optax`, `zero-chex`, `zero-grain`, `zero-orbax` |
 | **Tier 5: Proving Grounds** | `zero-zoo` (Golden Seed float-for-float verification) |
 
 ### Interoperating Repositories
 
-- **[`SamuelMarks/ml-switcheroo-ir`](https://github.com/SamuelMarks/ml-switcheroo-ir)** (This repo): Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding (`PartitionSpec`, `PipelineTopologyConfig`, `WebRTCSignalingTopology`), symbolic shape algebra (`SymNode`, `SymInt`, `Polynomial`, `SymbolicSolver`, `ShapeTracker`), autodiff sentinels (`ZeroTangent`, `NoTangent`), multi-dialect operator registries (ONNX, StableHLO, MLIR, Modern Custom Ops, State/Collective/Quantization Ops, ODL, ATen, Array API, WebGPU WGSL, NVIDIA PTX/SASS, AMD RDNA, Apple Metal, WASM SIMD, WebGL), native pure-IR transformations (DCE, CSE, shape propagation), `ParameterTranslationEngine`, and the `GroundingValidator`.
+- **[`SamuelMarks/ml-switcheroo-ir`](https://github.com/SamuelMarks/ml-switcheroo-ir)** (This repo): Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding (`PartitionSpec`, `PipelineTopologyConfig`, `WebRTCSignalingTopology`), symbolic shape algebra (`SymNode`, `SymInt`, `Polynomial`, `SymbolicSolver`, `ShapeTracker`), autodiff sentinels (`ZeroTangent`, `NoTangent`), multi-dialect operator registries (ONNX, StableHLO, MLIR, Modern Custom Ops, State/Collective/Quantization Ops, ODL, ATen, Array API, Chex, Grain, Orbax, Optax, WebGPU WGSL, NVIDIA PTX/SASS, AMD RDNA, Apple Metal, WASM SIMD, WebGL), native pure-IR transformations (DCE, CSE, shape propagation), `ParameterTranslationEngine`, and the `GroundingValidator`.
 - **[`SamuelMarks/ml-switcheroo-compiler`](https://github.com/SamuelMarks/ml-switcheroo-compiler)**: The execution and tracing engine. Consumes `ml-switcheroo-ir` data structures, provides concurrent `TracerTape`, `ProxyTensor` tracking, reverse-mode automatic differentiation (`compiler.grad`), topological sorting, VJPs, and Dead Code Elimination (DCE).
 - **[`SamuelMarks/ml-switcheroo`](https://github.com/SamuelMarks/ml-switcheroo)**: The high-level Python source-to-source framework transpiler and framework adapters that emit and ingest `ml-switcheroo-ir` graphs.
-- **[`SamuelMarks/ml-ecosystem-snapshots`](https://github.com/SamuelMarks/ml-ecosystem-snapshots)**: The ground-truth reference database and Ghost Protocol generator, capturing exact runtime signatures, parameters, and AST definitions from official framework distributions to eliminate compiler hallucinations.
+- **[`SamuelMarks/ml-ecosystem-snapshots`](https://github.com/SamuelMarks/ml-ecosystem-snapshots)** / **[`SamuelMarks/ml-framework-snapshots`](https://github.com/SamuelMarks/ml-framework-snapshots)**: The ground-truth reference database and Ghost Protocol generator, capturing exact runtime signatures, parameters, and AST definitions from official framework distributions to eliminate compiler hallucinations.
 - **`SamuelMarks/zero-*` Framework Family**: Pure-Python, minimal-dependency replicas of major machine learning frameworks:
   - **[`zero-jax`](https://github.com/SamuelMarks/zero-jax)**: Mimics `jnp`, `lax`, `jit`, `grad`, and `vmap` with PyTree flattening.
   - **[`zero-flax`](https://github.com/SamuelMarks/zero-flax)**: Neural network layers (`Dense`, `Conv`, `Attention`) and `nnx` state functionalization.
@@ -90,16 +96,16 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 - **Extensive Precision & Quantization Types (`DType`):** Standard floats and ints, sub-byte formats (`int4`, `uint4`, `int2`), modern FP8 types (`float8_e4m3fn`, `float8_e5m2`), complex numbers (`complex64`, `complex128`), and quantization invariant auditing.
 - **Multi-Dialect Schema Registries:**
   - **ONNX Canonical Dialect (`ai.onnx`):** 221 canonical operators derived and grounded against the official specification with zero hallucinated attributes or parameters. Loaded dynamically from upstream snapshots with typed Python fallbacks; schema generation is strictly an offline build step (`scripts/generate_registry.py`).
-  - **Modern Custom, State, Collective & Quantization Primitives:** Pre-registered schemas in `ml.switcheroo.custom` (`RMSNorm`, `RMSNormBackward`, `SwiGLU`, `RoPE`, `FlashAttention`, `PagedAttention`, `RaggedPagedAttention`, `VisionPatchEmbedding`, `LayerNorm`, `GroupNorm`, `GELU`, `EmbeddingLookup`, `ScaledDotProductAttention`), `ml.switcheroo.state` (`ReadVariable`, `AssignVariable`, `ScatterUpdate`), `collective` (`all_reduce`, `all_gather`, `reduce_scatter`, `all_to_all`), and `quantization` (`block_quantize`, `dequantize_grouped_int4`).
-  - **Framework & Universal Abstract Catalogs:** Universal Operation Definition Language (`ODL_CATALOG`, `get_abstract_op`), PyTorch ATen (`ATEN_REGISTRY`), Python Array API (`ARRAY_API_REGISTRY`), Chex (`CHEX_REGISTRY`), Grain (`GRAIN_REGISTRY`), Orbax (`ORBAX_REGISTRY`), and Optax (`OPTAX_REGISTRY`).
-  - **StableHLO Dialect (`stablehlo`):** 120 grounded compiler operations with structured attribute schemas (`DotDimensionNumbersAttr`, `ConvDimensionNumbersAttr`, `GatherDimensionNumbersAttr`, `ScatterDimensionNumbersAttr`, `ComparisonDirectionAttr`, `PrecisionAttr`).
+  - **Modern Custom, State, Collective, Quantization & Autodiff Primitives:** Pre-registered schemas in `ml.switcheroo.custom` (`RMSNorm`, `RMSNormBackward`, `SwiGLU`, `RoPE`, `FlashAttention`, `PagedAttention`, `RaggedPagedAttention`, `VisionPatchEmbedding`, `LayerNorm`, `GroupNorm`, `GELU`, `EmbeddingLookup`, `ScaledDotProductAttention`), `ml.switcheroo.state` / `state` (`ReadVariable`, `AssignVariable`, `ScatterUpdate`), `collective` / `ml.switcheroo.collective` (`all_reduce`, `all_gather`, `reduce_scatter`, `all_to_all`), `quantization` / `ml.switcheroo.quant` (`block_quantize`, `dequantize_grouped_int4`), and `ml.switcheroo.ad` / `ad` (`ZeroTangent`, `NoTangent`).
+  - **Framework & Universal Abstract Catalogs:** Universal Operation Definition Language (`ODL_CATALOG`, `get_abstract_op`), PyTorch ATen (`ATEN_REGISTRY`), Python Array API (`ARRAY_API_REGISTRY`), Chex (`CHEX_REGISTRY`), Grain (`GRAIN_REGISTRY`), Orbax (`ORBAX_REGISTRY`, `orbax` / `orbax.checkpoint`), and Optax (`OPTAX_REGISTRY`).
+  - **StableHLO Dialect (`stablehlo`):** 121 grounded compiler operations with structured attribute schemas (`DotDimensionNumbersAttr`, `ConvDimensionNumbersAttr`, `GatherDimensionNumbersAttr`, `ScatterDimensionNumbersAttr`, `ComparisonDirectionAttr`, `PrecisionAttr`).
   - **Core MLIR Dialects:** Schema awareness and operand/attribute checking for `arith`, `math`, `tensor`, `linalg`, `scf`, and `func`.
   - **GPU Accelerator ISAs & Shader Dialects:** WebGPU WGSL (qualifiers, workgroup limits, 16-byte alignment/stride), AMD RDNA3 (GFX11 VOPD dual-issue pairing matrix), NVIDIA SASS (scoreboard latency hazard detection), NVIDIA PTX (`nvidia_ptx`), Apple Metal (`metal_msl`), WebAssembly SIMD (`wasm_simd`), and WebGL (`webgl`).
 - **Native Pure-IR Graph Transformations:** Pure Python, framework-agnostic passes in `ml_switcheroo_ir.transforms`: Dead Code Elimination (DCE) preserving side-effects/mutating ops, Common Subexpression Elimination (CSE) via value-numbering attribute hashing, and Symbolic Shape Propagation/Constant Folding.
-- **Zero-Hallucination Parameter Translation:** `ParameterTranslationEngine` maps parameters, attribute dictionaries, weight names, conv weight permutations, and QKV projections across frameworks (`torch`, `jax`, `flax_nnx`, `keras3`, `mlx`, `tf`, `onnx`, `stablehlo`, `numpy`) driven by `concept_map.json`.
+- **Zero-Hallucination Parameter & Weight Translation:** `ParameterTranslationEngine` maps parameters, attribute dictionaries, weight names (`translate_weight_name`), conv weight permutations (`permute_conv_weights`), and QKV projections (`split_qkv_weights`, `merge_qkv_weights`) across frameworks (`torch`, `jax`, `flax_nnx`, `keras3`, `mlx`, `tf`, `optax`, `orbax`, `chex`, `grain`, `onnx`, `stablehlo`, `numpy`) driven by `concept_map.json`.
 - **High-Throughput Streaming & Compressed I/O:** Stream graphs directly to writable streams (`graph.to_stream(fp)`) and transparently read/write compressed files (`.gz` and `.zst`) without memory spikes.
 - **Ghost Protocol v2 Integration:** Data models (`GhostRef`, `ExtendedGhostRef`, `GhostIsaRef`, `GhostMlirRef`, `GhostPythonRef`) bridging hardware instructions, MLIR traits, and framework snapshots.
-- **Anti-Hallucination Grounding Validator:** `GroundingValidator` audits IR graphs against formal manifests from `ml-ecosystem-snapshots` (26,918 empirical symbols across 73 snapshot files), computing hallucination scores and surfacing typo suggestions.
+- **Anti-Hallucination Grounding Validator:** `GroundingValidator` audits IR graphs against formal manifests from `ml-ecosystem-snapshots` / `ml-framework-snapshots` (supporting `ML_ECOSYSTEM_SNAPSHOTS_DIR` and `ML_FRAMEWORK_SNAPSHOTS_DIR`), computing hallucination scores and surfacing typo suggestions.
 - **JSON Schema, TypeScript & Python Code Generation:** Emits Draft 2020-12 conforming JSON Schemas (across 7 core models), TypeScript interfaces (`generate_typescript_definitions()`), and executable Python graph-builder source code (`export_to_python()`).
 - **Static Compliance & Coverage Analysis:** Built-in CLI command to AST-scan downstream codebases and score compliance against IR interfaces and canonical dialects.
 
@@ -278,7 +284,7 @@ deduped_graph = eliminate_common_subexpressions(clean_graph)
 optimized_graph = propagate_shapes_and_constants(deduped_graph)
 ```
 
-### 6. Zero-Hallucination Parameter Translation
+### 6. Zero-Hallucination Parameter & Weight Translation
 
 ```python
 from ml_switcheroo_ir.translation import ParameterTranslationEngine
@@ -293,6 +299,15 @@ tf_attrs = engine.translate_attributes(
     target_framework="tf",
 )
 assert tf_attrs == {"epsilon": 1e-5, "gamma": 1.0}
+
+# Translate weight tensor names across frameworks (e.g., PyTorch -> Keras 3)
+keras_weight = engine.translate_weight_name(
+    layer_type="convolution",
+    weight_name="weight",
+    source_framework="torch",
+    target_framework="keras3",
+)
+assert keras_weight == "kernel"
 ```
 
 ---
@@ -436,14 +451,24 @@ ml-switcheroo-ir export-schema --typescript --ts-out types.ts
 - **Strict Static Typing & Anti-Reflection:** Verified with `mypy --strict`, `ruff`, and `scripts/lint_typing.py` (enforcing zero `Any`, `object`, `cast`, `getattr`/`setattr`, dunder attribute accesses, or dynamic code execution).
 - **Minimal Runtime Dependencies:** Relies on a minimal set of core dependencies.
 
-Run the test suite locally:
+Run the test and verification suite locally:
 
 ```bash
-# Run tests
-uv run pytest
-
-# Run tests with strict coverage report
+# 1. Run tests with strict 100% line and branch coverage
 ./run_test_coverage.sh
+
+# 2. Verify 100% documentation coverage and granular AST docstring signatures
+interrogate -vv -f 100 -M -i -c pyproject.toml src scripts tests
+python3 scripts/check_docs.py src scripts tests
+
+# 3. Verify formatting, linting, strict typing, and anti-reflection rules
+ruff format --check .
+ruff check .
+python3 scripts/lint_typing.py
+mypy --strict src tests scripts
+
+# 4. Verify empirical snapshot grounding
+python3 scripts/verify_grounding.py --strict --snapshots-dir ../ml-framework-snapshots --ecosystem-snapshots-dir ../ml-ecosystem-snapshots
 ```
 
 ---

@@ -13,26 +13,38 @@ The Abstract ML Machine compiler ecosystem is designed to solve the classical $N
 ```mermaid
 flowchart LR
     subgraph Frontends["Frontends (N)"]
-        F1["Flax / Keras"]
-        F2["PyTorch / MLX"]
-        F3["JAX / TensorFlow"]
+        Flax["Flax"]
+        Keras["Keras"]
+        PyTorch["PyTorch"]
+        MLX["MLX"]
+        JAX["JAX"]
+        TensorFlow["TensorFlow"]
     end
 
     IR["ml-switcheroo-ir<br/>(LogicalGraph)"]
 
     subgraph Backends["Backends (M)"]
-        B1["WASM / WebGPU"]
-        B2["StableHLO / MLIR"]
-        B3["RDNA / SASS"]
+        WASM["WASM"]
+        WebGPU["WebGPU"]
+        StableHLO["StableHLO"]
+        MLIR["MLIR"]
+        RDNA["AMD RDNA"]
+        SASS["NVIDIA SASS"]
     end
 
-    F1 --> IR
-    F2 --> IR
-    F3 --> IR
+    Flax --> IR
+    Keras --> IR
+    PyTorch --> IR
+    MLX --> IR
+    JAX --> IR
+    TensorFlow --> IR
 
-    IR --> B1
-    IR --> B2
-    IR --> B3
+    IR --> WASM
+    IR --> WebGPU
+    IR --> StableHLO
+    IR --> MLIR
+    IR --> RDNA
+    IR --> SASS
 ```
 
 By decoupling ingestion from code generation through a strictly validated, language-agnostic Intermediate Representation (`ml-switcheroo-ir`), the complexity collapses to $N + M$.
@@ -116,10 +128,10 @@ graph TD
 
 ### Component Breakdown
 
-1. **`ml-ecosystem-snapshots` (Tier 0)**:
-   The empirical ground-truth database. Introspects and captures exact runtime function signatures, parameter kinds, default values, docstrings, and AST snapshots from official upstream framework releases (PyTorch, JAX, TensorFlow). It provides the reference manifests that eliminate LLM and compiler hallucinations.
+1. **`ml-ecosystem-snapshots` / `ml-framework-snapshots` (Tier 0)**:
+   The empirical ground-truth database. Introspects and captures exact runtime function signatures, parameter kinds, default values, docstrings, and AST snapshots from official upstream framework releases (PyTorch, JAX, TensorFlow, Optax, Orbax, Chex, Grain). It provides the reference manifests that eliminate LLM and compiler hallucinations.
 2. **`ml-switcheroo-ir` (Tier 1)**:
-   The foundational intermediate representation contract. Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding & topologies (`PartitionSpec`, `PipelineTopologyConfig`, `WebRTCSignalingTopology`), symbolic shape algebra (`SymNode`, `SymInt`, `Polynomial`, `SymbolicSolver`, `ShapeTracker`), autodiff sentinels (`ZeroTangent`, `NoTangent`), multi-dialect schema registries (ONNX, StableHLO, MLIR, Modern Custom Ops, State/Collective/Quantization Ops, ODL, ATen, Array API, WebGPU WGSL, NVIDIA PTX/SASS, AMD RDNA, Apple Metal, WASM SIMD, WebGL), native IR graph transformations (DCE, CSE, shape propagation), Ghost Protocol v2 specifications, cross-framework `ParameterTranslationEngine`, and the anti-hallucination `GroundingValidator`.
+   The foundational intermediate representation contract. Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding & topologies (`PartitionSpec`, `PipelineTopologyConfig`, `WebRTCSignalingTopology`), symbolic shape algebra (`SymNode`, `SymInt`, `Polynomial`, `SymbolicSolver`, `ShapeTracker`), autodiff sentinels (`ZeroTangent`, `NoTangent`), multi-dialect schema registries (ONNX, StableHLO, MLIR, Modern Custom Ops, State/Collective/Quantization Ops, ODL, ATen, Array API, Chex, Grain, Orbax, Optax, WebGPU WGSL, NVIDIA PTX/SASS, AMD RDNA, Apple Metal, WASM SIMD, WebGL), native IR graph transformations (DCE, CSE, shape propagation), Ghost Protocol v2 specifications, cross-framework `ParameterTranslationEngine`, JSON Schema / TypeScript / Python code generation (`export.py`), and the anti-hallucination `GroundingValidator`.
 3. **`ml-switcheroo-compiler` (Tier 2)**:
    The computational execution engine. Features:
    - **`TracerTape`**: Thread-safe AOT tracing leveraging `threading.local`.
@@ -263,7 +275,7 @@ The IR incorporates built-in, minimal-dependency schema registries across deep l
    - **Operation Definition Language (`ODL_CATALOG`, `odl`)**: Universal abstract math catalog (`add`, `subtract`, `multiply`, `divide`, `matmul`, `relu`, `gelu`, `silu`, `softmax`, `layer_norm`, `rms_norm`, `conv2d`, `scaled_dot_product_attention`) with cross-dialect mappings (`ODL_DIALECT_MAPPINGS`) and `get_abstract_op()`.
    - **PyTorch ATen (`ATEN_REGISTRY`, `aten`)**, **Python Array API (`ARRAY_API_REGISTRY`, `array_api`)**, **Chex (`CHEX_REGISTRY`, `chex`)**, **Grain (`GRAIN_REGISTRY`, `grain`)**, **Orbax (`ORBAX_REGISTRY`, `orbax` / `orbax.checkpoint`)**, and **Optax (`OPTAX_REGISTRY`, `optax`)**.
 4. **Compiler Dialects**:
-   - **`stablehlo`**: 120 canonical compiler operations (`dot_general`, `convolution`, `reduce`, `while`, `gather`, `scatter`, `custom_call`) with structured attribute schemas (`DotDimensionNumbersAttr`, `ConvDimensionNumbersAttr`, `GatherDimensionNumbersAttr`, `ScatterDimensionNumbersAttr`, `ComparisonDirectionAttr`, `PrecisionAttr`).
+   - **`stablehlo`**: 121 canonical compiler operations (`dot_general`, `convolution`, `reduce`, `while`, `gather`, `scatter`, `custom_call`) with structured attribute schemas (`DotDimensionNumbersAttr`, `ConvDimensionNumbersAttr`, `GatherDimensionNumbersAttr`, `ScatterDimensionNumbersAttr`, `ComparisonDirectionAttr`, `PrecisionAttr`).
    - **Core MLIR**: Dialect validation for `arith`, `math`, `tensor`, `linalg`, `scf`, and `func`, verifying operand arities and structural separation between SSA operands and buildable attributes (e.g. `staticSizes` and `dynamicSizes` on `tensor.empty`).
 5. **GPU Accelerator ISAs & Shader Dialects**:
    - **WebGPU WGSL (`webgpu_wgsl` / `wgsl`)**: Validates `@workgroup_size` dimension limits (1–3 positive integers), address space qualifiers (`storage, read`, `storage, read_write`, `uniform`, `workgroup`), uniform buffer 16-byte struct alignment and array stride constraints, compute builtins, and mutation tracking.
@@ -276,8 +288,8 @@ The IR incorporates built-in, minimal-dependency schema registries across deep l
 To ensure LLMs and automated compilers cannot generate phantom operators or illegal attributes, `ml-switcheroo-ir` integrates Ghost Protocol v2:
 - **Data Models**: `GhostRef`, `ExtendedGhostRef`, `GhostPythonRef`, `GhostIsaRef`, `GhostMlirRef`, `GhostParam`, `ExtendedGhostParam`, `GhostResult`, `SnapshotEnvelope`.
 - **Hardware & Compiler Semantics**: Models operand direction (`READ`, `WRITE`, `READ_WRITE`, `PREDICATE`), parameter roles (`OPERAND`, `ATTRIBUTE`, `RESULT`, `SUCCESSOR`, `REGION`), MLIR traits, and ISA register classes.
-- **`GroundingValidator` & `audit_graph`**: Ingests ground-truth snapshot manifests from `ml-ecosystem-snapshots` (26,918 empirical symbols across 73 snapshot files). Validates that every operation kind and attribute exists in the snapshot, computing a precise hallucination score ($0.0$ to $1.0$) and surfacing Levenshtein distance typo suggestions.
-- **`ParameterTranslationEngine`**: Translates parameter names, keyword arguments, weight names, conv weight permutations, and QKV projections across frameworks (`torch`, `jax`, `flax_nnx`, `keras3`, `mlx`, `tf`, `onnx`, `stablehlo`, `numpy`) based on empirical concept maps (`concept_map.json`). Enforces a strict zero-hallucinated-parameters policy: unmapped parameters raise exceptions unless explicit passthrough is enabled.
+- **`GroundingValidator` & `audit_graph`**: Ingests ground-truth snapshot manifests from `ml-ecosystem-snapshots` / `ml-framework-snapshots` (26,918 empirical symbols across 73 snapshot files). Validates that every operation kind and attribute exists in the snapshot, computing a precise hallucination score ($0.0$ to $1.0$) and surfacing Levenshtein distance typo suggestions.
+- **`ParameterTranslationEngine`**: Translates parameter names, keyword arguments, weight names, conv weight permutations, and QKV projections across frameworks (`torch`, `jax`, `flax_nnx`, `keras3`, `mlx`, `tf`, `optax`, `orbax`, `chex`, `grain`, `onnx`, `stablehlo`, `numpy`) based on empirical concept maps (`concept_map.json`). Enforces a strict zero-hallucinated-parameters policy: unmapped parameters raise exceptions unless explicit passthrough is enabled.
 
 ### 3.6. Pure-IR Graph Transformations & Optimizations
 
@@ -309,7 +321,7 @@ The repository exposes a complete CLI (`ml-switcheroo-ir` / `python -m ml_switch
 - `compliance`: Static AST compliance and dialect coverage scan of downstream codebases.
 - `toposort`: Deterministic topological sorting and cycle detection of JSON graphs.
 - `verify-backend`: Validate external classes against `CompilerBackend` interface requirements.
-- `list-ops`: Discover and search registered operators across all 17 built-in registries.
+- `list-ops`: Discover and search registered operators across all 21 built-in registries.
 - `dump-snapshot`: Dump package symbols and methods to GhostRef JSON format.
 - `export-schema`: Export Draft 2020-12 JSON schemas and TypeScript definitions.
 

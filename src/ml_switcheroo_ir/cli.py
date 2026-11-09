@@ -227,7 +227,11 @@ def _handle_list_ops(parsed_args: argparse.Namespace) -> None:
     from ml_switcheroo_ir.schema.framework_registries import (
         ARRAY_API_REGISTRY,
         ATEN_REGISTRY,
+        CHEX_REGISTRY,
+        GRAIN_REGISTRY,
         ODL_CATALOG,
+        OPTAX_REGISTRY,
+        ORBAX_REGISTRY,
     )
     from ml_switcheroo_ir.schema.low_level_registries import (
         METAL_REGISTRY,
@@ -256,6 +260,10 @@ def _handle_list_ops(parsed_args: argparse.Namespace) -> None:
         WEBGL_REGISTRY,
         ATEN_REGISTRY,
         ARRAY_API_REGISTRY,
+        CHEX_REGISTRY,
+        GRAIN_REGISTRY,
+        ORBAX_REGISTRY,
+        OPTAX_REGISTRY,
         COLLECTIVE_OPS_REGISTRY,
         QUANTIZATION_OPS_REGISTRY,
         STATE_OPS_REGISTRY,

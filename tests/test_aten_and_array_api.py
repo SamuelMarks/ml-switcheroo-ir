@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ml_switcheroo_ir import LogicalNode
 from ml_switcheroo_ir.schema.framework_registries import (
     ARRAY_API_REGISTRY,
@@ -128,3 +130,23 @@ def test_missing_framework_schema_file(tmp_path: Path) -> None:
         json_path=tmp_path / "nonexistent.json",
     )
     assert res == {}
+
+
+def test_cli_list_ops_ecosystem_domains(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verify that CLI list-ops includes chex, grain, orbax, and optax registries.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest output capture fixture.
+    """
+    from ml_switcheroo_ir.cli import main
+
+    for domain, expected_op in (
+        ("chex", "assert_shape"),
+        ("grain", "DataLoader"),
+        ("orbax", "PyTreeCheckpointer"),
+        ("optax", "adamw"),
+    ):
+        main(["list-ops", "--domain", domain])
+        captured = capsys.readouterr()
+        assert expected_op in captured.out
+        assert domain in captured.out
