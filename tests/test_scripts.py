@@ -333,7 +333,9 @@ def test_update_readme_without_coverage_path_or_sibling() -> None:
 
 def test_update_readme_missing_file() -> None:
     """Test update_readme returns gracefully when readme does not exist."""
-    update_readme(readme_path="/nonexistent/path/README.md")
+    missing_path = "/nonexistent/path/README.md"
+    update_readme(readme_path=missing_path)
+    assert not os.path.exists(missing_path)
 
 
 def test_update_readme_success() -> None:
@@ -504,6 +506,7 @@ def test_update_badges_runpy_main() -> None:
             ):
                 runpy.run_module("scripts.update_badges", run_name="__main__")
                 mock_exit.assert_called_once_with(1)
+                assert mock_exit.call_count == 1
     finally:
         sys.modules["scripts.update_badges"] = orig_badges_mod
 
@@ -1159,6 +1162,7 @@ def test_verify_grounding_runpy_main() -> None:
         ):
             runpy.run_module("scripts.verify_grounding", run_name="__main__")
             mock_exit.assert_called_once_with(0)
+            assert mock_exit.call_count == 1
     finally:
         sys.modules["scripts.verify_grounding"] = orig_mod
 
@@ -1233,6 +1237,13 @@ def test_verify_mlir_grounding_paths() -> None:
             )
         errs = verify_mlir_grounding(tmppath)
         assert len(errs) > 0
+
+        from ml_switcheroo_ir.schema.onnx_registry import OpSchema
+
+        bad_mlir_op = OpSchema("arith.ungrounded_op", "mlir.arith", 1, {}, [], [])
+        with patch.dict("scripts.verify_grounding.MLIR_REGISTRY", {"arith.ungrounded_op": bad_mlir_op}):
+            errs_ungrounded = verify_mlir_grounding(tmppath)
+            assert any("is not grounded in mlir_v0.4.30.json or CORE_MLIR_DIALECTS" in e for e in errs_ungrounded)
 
 
 def test_verify_ir_snapshot_grounding_paths() -> None:
@@ -1835,12 +1846,13 @@ def test_verify_grounding_main_ecosystem_and_strict() -> None:
             assert verify_grounding_main(["--strict"]) == 1
             assert verify_grounding_main([]) == 0
 
-    # Passing explicit --ecosystem-snapshots-dir with valid fixtures
+    # Passing explicit --ecosystem-snapshots-dir and --framework-snapshots-dir with valid fixtures
     if Path(fixtures_dir).exists() and any(Path(fixtures_dir).glob("*.json")):
         assert verify_grounding_main(["--strict", "--ecosystem-snapshots-dir", fixtures_dir]) == 0
+        assert verify_grounding_main(["--strict", "--framework-snapshots-dir", "/nonexistent", "--ecosystem-snapshots-dir", fixtures_dir]) == 0
 
-    # Zero-mock end-to-end verification against ../ml-ecosystem-snapshots
-    assert verify_grounding_main(["--strict", "--snapshots-dir", "../ml-ecosystem-snapshots"]) == 0
+    # Zero-mock end-to-end verification against ../ml-framework-snapshots and ../ml-ecosystem-snapshots
+    assert verify_grounding_main(["--strict", "--snapshots-dir", "../ml-framework-snapshots", "--ecosystem-snapshots-dir", "../ml-ecosystem-snapshots"]) == 0
 
 
 def test_verify_stablehlo_grounding_exhaustive_paths(tmp_path: Path) -> None:

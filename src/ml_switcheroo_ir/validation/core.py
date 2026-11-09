@@ -108,6 +108,7 @@ CORE_MLIR_DIALECTS: dict[str, dict[str, int]] = {
         "insert": 3,
         "empty": 0,
         "cast": 1,
+        "reshape": 2,
         "dim": 2,
         "expand_shape": 1,
         "collapse_shape": 1,

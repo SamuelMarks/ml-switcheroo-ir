@@ -290,3 +290,22 @@ def test_multi_dialect_validator_mlir_registry_integration() -> None:
     errs = v.validate_kind(bad_mlir)
     assert len(errs) == 1
     assert "nonexistent.op" in errs[0].message
+
+    # Valid func.func in mlir.func domain
+    func_node = LogicalNode(
+        id="fn0",
+        op_type="func.func",
+        domain="mlir.func",
+        attributes={"sym_name": "main"},
+    )
+    assert not v.validate_kind(func_node)
+
+    # Non-ONNX domain op sharing an ONNX op name ('Relu') does not falsely match ai.onnx
+    bad_aten_relu = LogicalNode(
+        id="aten_bad",
+        op_type="Relu",
+        domain="aten",
+    )
+    errs_aten = v.validate_kind(bad_aten_relu)
+    assert len(errs_aten) == 1
+    assert "domain 'aten'" in errs_aten[0].message

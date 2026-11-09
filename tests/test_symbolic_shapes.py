@@ -732,6 +732,9 @@ def test_sym_minmax_unary_and_parser_edge_branches() -> None:
     assert SymUnaryOp("-", SymUnaryOp("abs", vx)).simplify() == SymUnaryOp("-", SymUnaryOp("abs", vx))
     assert SymPiecewise([], default=SymConst(0)).free_vars() == set()
     assert SymUnaryOp("abs", vx).simplify() == SymUnaryOp("abs", vx)
+    assert SymBinaryOp("min", vx, vy) == SymBinaryOp("min", vy, vx)
+    assert hash(SymBinaryOp("min", vx, vy)) == hash(SymBinaryOp("min", vy, vx))
+    assert SymbolicSolver.is_consistent("min(x, y)", "min(y, x)")
     assert hash(SymInt("x + 1")) == hash(SymInt("1 + x"))
     assert hash(SymInt(5)) == hash(5)
 

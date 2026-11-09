@@ -6,81 +6,112 @@ import os
 from pathlib import Path
 
 
+def _dir_has_json_files(directory: str) -> bool:
+    """Return True if a directory path exists and contains at least one JSON snapshot file.
+
+    Args:
+        directory (str): Directory path to inspect.
+
+    Returns:
+        bool: True if at least one .json or .json.gz file is present.
+    """
+    return os.path.isdir(directory) and any(f.endswith((".json", ".json.gz")) for f in os.listdir(directory))
+
+
+def _find_installed_package_snapshots_dir() -> str | None:
+    """Locate snapshots directory inside an installed snapshot package if available.
+
+    Returns:
+        str | None: Absolute path to installed package snapshots directory, or None.
+    """
+    try:
+        import importlib.util
+
+        for pkg_name in ("ml_framework_snapshots", "ml_ecosystem_snapshots"):
+            spec = importlib.util.find_spec(pkg_name)
+            if spec and spec.origin:
+                pkg_dir = os.path.join(os.path.dirname(spec.origin), "snapshots")
+                if _dir_has_json_files(pkg_dir):
+                    return os.path.abspath(pkg_dir)
+    except (ImportError, AttributeError, ValueError):
+        pass
+    return None
+
+
 def get_default_snapshots_dir() -> str:
     """Discover and return default snapshot directory location.
 
     Checks locations in the following precedence order:
-        1. ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable.
-        2. Sibling directory ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/.
-        3. User cache directory (~/.cache/ml_ecosystem_snapshots).
-        4. Installed ml_ecosystem_snapshots package directory.
+        1. ML_FRAMEWORK_SNAPSHOTS_DIR or ML_ECOSYSTEM_SNAPSHOTS_DIR environment variable.
+        2. Sibling directory ../ml-framework-snapshots or ../ml-ecosystem-snapshots.
+        3. User cache directory (~/.cache/ml_framework_snapshots or ~/.cache/ml_ecosystem_snapshots).
+        4. Installed ml_framework_snapshots or ml_ecosystem_snapshots package directory.
         5. Bundled offline fixture snapshots in tests/fixtures/snapshots.
 
     Returns:
         str: Absolute path to snapshot directory.
     """
-    env_eco = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
-    if env_eco and os.path.isdir(env_eco):
-        return os.path.abspath(env_eco)
+    for env_key in ("ML_FRAMEWORK_SNAPSHOTS_DIR", "ML_ECOSYSTEM_SNAPSHOTS_DIR"):
+        env_val = os.environ.get(env_key)
+        if env_val and os.path.isdir(env_val):
+            return os.path.abspath(env_val)
 
-    sibling_eco = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "..",
-            "ml-ecosystem-snapshots",
-            "src",
-            "ml_ecosystem_snapshots",
-            "snapshots",
-        )
+    base_dir = os.path.dirname(__file__)
+    sibling_candidates = (
+        os.path.abspath(os.path.join(base_dir, "..", "..", "..", "ml-framework-snapshots", "src", "ml_framework_snapshots", "snapshots")),
+        os.path.abspath(os.path.join(base_dir, "..", "..", "..", "ml-framework-snapshots", "snapshots")),
+        os.path.abspath(os.path.join(base_dir, "..", "..", "..", "ml-framework-snapshots")),
+        os.path.abspath(os.path.join(base_dir, "..", "..", "..", "ml-ecosystem-snapshots", "src", "ml_ecosystem_snapshots", "snapshots")),
     )
-    if os.path.isdir(sibling_eco) and any(f.endswith((".json", ".json.gz")) for f in os.listdir(sibling_eco)):
-        return sibling_eco
+    for cand in sibling_candidates:
+        if _dir_has_json_files(cand):
+            return cand
 
-    user_cache_eco = os.path.expanduser("~/.cache/ml_ecosystem_snapshots")
-    if os.path.isdir(user_cache_eco) and any(f.endswith((".json", ".json.gz")) for f in os.listdir(user_cache_eco)):
-        return os.path.abspath(user_cache_eco)
+    for cache_rel in ("~/.cache/ml_framework_snapshots", "~/.cache/ml_ecosystem_snapshots"):
+        user_cache = os.path.expanduser(cache_rel)
+        if _dir_has_json_files(user_cache):
+            return os.path.abspath(user_cache)
 
-    try:
-        import importlib.util
+    installed_dir = _find_installed_package_snapshots_dir()
+    if installed_dir is not None:
+        return installed_dir
 
-        spec = importlib.util.find_spec("ml_ecosystem_snapshots")
-        if spec and spec.origin:
-            pkg_dir = os.path.join(os.path.dirname(spec.origin), "snapshots")
-            if os.path.isdir(pkg_dir) and any(f.endswith((".json", ".json.gz")) for f in os.listdir(pkg_dir)):
-                return os.path.abspath(pkg_dir)
-    except (ImportError, AttributeError, ValueError):
-        pass
-
-    fixtures_dir = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "tests",
-            "fixtures",
-            "snapshots",
-        )
-    )
-    if os.path.isdir(fixtures_dir) and any(f.endswith((".json", ".json.gz")) for f in os.listdir(fixtures_dir)):
+    fixtures_dir = os.path.abspath(os.path.join(base_dir, "..", "..", "tests", "fixtures", "snapshots"))
+    if _dir_has_json_files(fixtures_dir):
         return fixtures_dir
 
-    return sibling_eco
+    return sibling_candidates[-1]
 
 
-DEFAULT_SNAPSHOT_DIR: str = get_default_snapshots_dir()
+_INITIAL_DEFAULT_SNAPSHOT_DIR: str = get_default_snapshots_dir()
+DEFAULT_SNAPSHOT_DIR: str = _INITIAL_DEFAULT_SNAPSHOT_DIR
 
 
 def get_effective_snapshot_dir() -> str:
-    """Return the active default snapshot directory, respecting overrides on validator.DEFAULT_SNAPSHOT_DIR.
+    """Return the active default snapshot directory, respecting runtime overrides.
+
+    Checks whether ``DEFAULT_SNAPSHOT_DIR`` on ``snapshots`` or ``validator`` has been
+    explicitly overridden from its initial value; otherwise resolves dynamically via
+    ``get_default_snapshots_dir()`` if environment variables are active.
 
     Returns:
         str: Effective default snapshot directory path.
     """
-    from ml_switcheroo_ir import validator as val_mod
+    if DEFAULT_SNAPSHOT_DIR != _INITIAL_DEFAULT_SNAPSHOT_DIR:
+        return DEFAULT_SNAPSHOT_DIR
 
-    return str(val_mod.DEFAULT_SNAPSHOT_DIR)
+    import sys
+
+    val_mod = sys.modules.get("ml_switcheroo_ir.validator")
+    if val_mod is not None:
+        val_dir = str(val_mod.DEFAULT_SNAPSHOT_DIR)
+        if val_dir != _INITIAL_DEFAULT_SNAPSHOT_DIR:
+            return val_dir
+
+    if "ML_FRAMEWORK_SNAPSHOTS_DIR" in os.environ or "ML_ECOSYSTEM_SNAPSHOTS_DIR" in os.environ:
+        return get_default_snapshots_dir()
+
+    return DEFAULT_SNAPSHOT_DIR
 
 
 def _has_snapshot_files(directory: Path) -> bool:
@@ -95,24 +126,31 @@ def _has_snapshot_files(directory: Path) -> bool:
     return directory.is_dir() and any(f.name.endswith((".json", ".json.gz")) for f in directory.iterdir())
 
 
-def resolve_snapshots_path(override_path: Path | str) -> Path | None:
+def resolve_snapshots_path(override_path: Path | str, allow_default_fallback: bool = False) -> Path | None:
     """Resolve an explicit snapshots directory path, supporting repo-root and sibling layouts.
 
     Args:
         override_path (Path | str): Explicit path provided via CLI flag or API parameter.
+        allow_default_fallback (bool): If True and the target is a standard sibling snapshot
+            repo root whose nested snapshots directory is unpopulated on disk, fall back to
+            ``get_effective_snapshot_dir()``. Defaults to False so explicit paths are honored.
 
     Returns:
         Path | None: Resolved snapshots directory path if found, or None.
     """
     p = Path(override_path).resolve()
     if p.is_dir():
-        nested_eco = p / "src" / "ml_ecosystem_snapshots" / "snapshots"
-        if _has_snapshot_files(nested_eco):
-            return nested_eco
-        if nested_eco.is_dir() or (p / "src" / "ml_ecosystem_snapshots").is_dir():
-            if p.name == "ml-ecosystem-snapshots":
-                return Path(DEFAULT_SNAPSHOT_DIR).resolve()
-            return nested_eco
+        for pkg_sub in ("ml_framework_snapshots", "ml_ecosystem_snapshots"):
+            nested = p / "src" / pkg_sub / "snapshots"
+            if _has_snapshot_files(nested):
+                return nested
+            if nested.is_dir() or (p / "src" / pkg_sub).is_dir():
+                if allow_default_fallback and p.name in ("ml-framework-snapshots", "ml-ecosystem-snapshots"):
+                    return Path(get_effective_snapshot_dir()).resolve()
+                return nested
+        direct_snaps = p / "snapshots"
+        if _has_snapshot_files(direct_snaps):
+            return direct_snaps
         return p
     return None
 
@@ -133,11 +171,12 @@ def find_schema_file(filename: str, override_path: Path | str | None = None) -> 
             return p
         return None
 
-    candidate = Path(DEFAULT_SNAPSHOT_DIR) / filename
+    active_dir = Path(get_effective_snapshot_dir())
+    candidate = active_dir / filename
     if candidate.is_file():
         return candidate
 
-    parent_candidate = Path(DEFAULT_SNAPSHOT_DIR).parent / filename
+    parent_candidate = active_dir.parent / filename
     if parent_candidate.is_file():
         return parent_candidate
 

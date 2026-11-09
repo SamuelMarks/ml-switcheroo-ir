@@ -40,7 +40,8 @@ def test_cli_compliance_invalid_json(tmp_path: pathlib.Path, capsys: pytest.Capt
     f = tmp_path / "bad.json"
     f.write_text("{bad json")
     cli_main(["compliance", str(tmp_path)])
-    # should not raise, just ignore
+    captured = capsys.readouterr()
+    assert "No IR, FrameworkAdapter, or DIALECT targets detected in the specified path." in captured.out
 
 
 def test_cli_compliance_onnx9000_adapter_and_decorator(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:

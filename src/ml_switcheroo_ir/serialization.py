@@ -526,12 +526,28 @@ _WS_COMMA = string.whitespace + ","
 _WS_COLON = string.whitespace + ":"
 
 
+_MAX_STREAM_TOKEN_CHARS: typing.Final[int] = 64 * 1024 * 1024
+
+
+def _encode_special_types(val: AttributeValue | InitializerValue | JsonValue) -> str:
+    """Encode IR-specific value types (DType, SymNode, SymInt, TensorShape, TensorSpec) for JSON serialization.
+
+    Args:
+        val (AttributeValue | InitializerValue | JsonValue): Value to serialize.
+
+    Returns:
+        str: String representation of special IR value.
+    """
+    return val.value if isinstance(val, DType) else str(val)
+
+
 def _decode_next_json_value(
     decoder: json.JSONDecoder,
     buf: str,
     pos: int,
     stream: typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO,
     chunk_size: int,
+    max_token_chars: int = _MAX_STREAM_TOKEN_CHARS,
 ) -> tuple[JsonValue, str, int]:
     """Decode a single JSON value starting at pos, incrementally reading chunks on boundary straddles.
 
@@ -541,12 +557,13 @@ def _decode_next_json_value(
         pos (int): Current position within buf.
         stream (typing.IO[str] | typing.IO[bytes] | typing.TextIO | typing.BinaryIO): Source input stream.
         chunk_size (int): Chunk size for incremental reads.
+        max_token_chars (int): Maximum buffer characters for a single JSON token before failing fast.
 
     Returns:
         tuple[JsonValue, str, int]: Decoded JSON value and updated (buf, next_pos).
 
     Raises:
-        json.JSONDecodeError: If the stream ends before a complete JSON value can be decoded.
+        json.JSONDecodeError: If the stream ends before a complete JSON value can be decoded or exceeds max_token_chars.
     """
     buf, pos = _skip_ws_and_tokens(buf, pos, stream, chunk_size, _WS)
     while True:
@@ -560,6 +577,8 @@ def _decode_next_json_value(
                     continue
             return val, buf, next_pos
         except json.JSONDecodeError:
+            if len(buf) - pos >= max_token_chars:
+                raise
             chunk = _read_next_chunk(stream, chunk_size)
             if not chunk:
                 raise
@@ -951,7 +970,7 @@ def _stream_write_graph(
                         "target_idx": edge.target_idx,
                         "value_name": edge.value_name,
                     }
-                    edge_str = json.dumps(edge_dict, sort_keys=True, indent=indent, default=str)
+                    edge_str = json.dumps(edge_dict, sort_keys=True, indent=indent, default=_encode_special_types)
                     fp.write(f"{pad2}{_indent_json_fragment(edge_str, pad2)}{e_comma}{_NL}")
                 fp.write(f"{pad1}]{comma}{_NL}")
         elif key == "nodes" and graph.nodes:
@@ -960,11 +979,11 @@ def _stream_write_graph(
             for n_idx, nid in enumerate(sorted_nids):
                 n_comma = "," if n_idx < len(sorted_nids) - 1 else ""
                 node_dict = _serialize_node_dict(graph.nodes[nid])
-                node_str = json.dumps(node_dict, sort_keys=True, indent=indent, default=str)
+                node_str = json.dumps(node_dict, sort_keys=True, indent=indent, default=_encode_special_types)
                 key_json = json.dumps(nid)
                 fp.write(f"{pad2}{key_json}: {_indent_json_fragment(node_str, pad2)}{n_comma}{_NL}")
             fp.write(f"{pad1}}}{comma}{_NL}")
         else:
-            val_str = json.dumps(val_map[key], sort_keys=True, indent=indent, default=str)
+            val_str = json.dumps(val_map[key], sort_keys=True, indent=indent, default=_encode_special_types)
             fp.write(f"{_indent_json_fragment(val_str, pad1)}{comma}{_NL}")
     fp.write("}")

@@ -236,7 +236,7 @@ def test_mlir_schemas_loader_with_custom_json(tmp_path: Path) -> None:
 
 
 def test_registry_loaders_with_nonexistent_custom_json(tmp_path: Path) -> None:
-    """Verify registry loaders handle non-existent json_path overrides without exceptions.
+    """Verify registry loaders leave global registries intact when an explicit json_path does not exist.
 
     Args:
         tmp_path (Path): Pytest temporary directory fixture.
@@ -246,6 +246,10 @@ def test_registry_loaders_with_nonexistent_custom_json(tmp_path: Path) -> None:
     rdna_registry._load_rdna_schemas(json_path=nonexistent)
     sass_registry._load_sass_schemas(json_path=nonexistent)
     stablehlo._load_stablehlo_schemas(json_path=nonexistent)
+    assert len(mlir_registry.MLIR_REGISTRY) > 0
+    assert len(rdna_registry.RDNA_REGISTRY) > 0
+    assert len(sass_registry.SASS_REGISTRY) > 0
+    assert len(stablehlo.STABLEHLO_REGISTRY) > 0
 
 
 def test_rdna_schemas_loader_with_custom_json(tmp_path: Path) -> None:
@@ -533,12 +537,28 @@ def test_snapshots_discovery_precedence(tmp_path: Path) -> None:
         resolved_cache = get_default_snapshots_dir()
         assert resolved_cache == str(cache_dir.resolve())
 
-    # Sibling repo root with empty snapshots subdir falls back to DEFAULT_SNAPSHOT_DIR
+    env_fw_dir = tmp_path / "env_fw_snapshots"
+    env_fw_dir.mkdir()
+    (env_fw_dir / "sample.json").write_text("{}", encoding="utf-8")
+    from ml_switcheroo_ir.snapshots import get_effective_snapshot_dir
+
+    with mock.patch.dict("os.environ", {"ML_FRAMEWORK_SNAPSHOTS_DIR": str(env_fw_dir)}):
+        assert get_default_snapshots_dir() == str(env_fw_dir.resolve())
+        assert get_effective_snapshot_dir() == str(env_fw_dir.resolve())
+
+    # Sibling repo root with empty snapshots subdir honors explicit path by default, or falls back when allow_default_fallback=True
     from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR, resolve_snapshots_path
 
     sibling_root = Path(__file__).resolve().parent.parent.parent / "ml-ecosystem-snapshots"
     with mock.patch("ml_switcheroo_ir.snapshots._has_snapshot_files", return_value=False):
-        assert resolve_snapshots_path(sibling_root) == Path(DEFAULT_SNAPSHOT_DIR).resolve()
+        assert resolve_snapshots_path(sibling_root) == (sibling_root / "src" / "ml_ecosystem_snapshots" / "snapshots").resolve()
+        assert resolve_snapshots_path(sibling_root, allow_default_fallback=True) == Path(DEFAULT_SNAPSHOT_DIR).resolve()
+
+    direct_snaps_root = tmp_path / "custom_repo"
+    direct_snaps = direct_snaps_root / "snapshots"
+    direct_snaps.mkdir(parents=True)
+    (direct_snaps / "snap.json").write_text("{}", encoding="utf-8")
+    assert resolve_snapshots_path(direct_snaps_root) == direct_snaps.resolve()
 
 
 def test_find_schema_file_all_branches(tmp_path: Path) -> None:

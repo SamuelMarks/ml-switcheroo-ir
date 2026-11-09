@@ -1,7 +1,7 @@
 """Tests for custom ops extensibility."""
 
 import json
-from tempfile import NamedTemporaryFile
+from pathlib import Path
 
 from ml_switcheroo_ir import LogicalNode
 from ml_switcheroo_ir.schema.custom_ops import (
@@ -72,8 +72,12 @@ def test_custom_op_type_checking() -> None:
     assert "Expected float" in errors[0].message
 
 
-def test_load_custom_ops_from_json() -> None:
-    """Test loading custom operators from a JSON file."""
+def test_load_custom_ops_from_json(tmp_path: Path) -> None:
+    """Test loading custom operators from a JSON file.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
     json_data = json.dumps(
         {
             "ops": [
@@ -88,12 +92,11 @@ def test_load_custom_ops_from_json() -> None:
         }
     )
 
-    with NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
-        f.write(json_data)
-        file_path = f.name
+    file_path = tmp_path / "custom_ops.json"
+    file_path.write_text(json_data, encoding="utf-8")
 
     registry = Registry()
-    registry.load_custom_ops_from_json(file_path)
+    registry.load_custom_ops_from_json(str(file_path))
 
     assert "MyOp" in registry.schemas
     op = registry.schemas["MyOp"]

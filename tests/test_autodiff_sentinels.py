@@ -113,6 +113,13 @@ def test_autodiff_sentinels_serialization_roundtrip() -> None:
     assert verify_sentinel_protocol(zt) is zt
     assert verify_sentinel_protocol(nt) is nt
 
+    import pytest
+
+    bad_zt = ZeroTangent(id="bad_zt")
+    bad_zt.domain = "ai.onnx"
+    with pytest.raises(TypeError, match="Expected autodiff sentinel node"):
+        verify_sentinel_protocol(bad_zt)
+
     cloned_zt = zt.clone(id="zt_cloned")
     cloned_nt = nt.clone(id="nt_cloned")
     assert isinstance(cloned_zt, ZeroTangent)

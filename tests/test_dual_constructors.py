@@ -267,3 +267,13 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
 
     val_eof, _, _ = _decode_next_json_value(dec, "123", 0, io.StringIO(""), 3)
     assert val_eof == 123
+
+    from ml_switcheroo_ir import DType
+    from ml_switcheroo_ir.serialization import _encode_special_types
+    from ml_switcheroo_ir.shapes import SymVar
+
+    assert _encode_special_types(DType.float32) == "float32"
+    assert _encode_special_types(SymVar("N")) == "N"
+
+    with pytest.raises(json.JSONDecodeError):
+        _decode_next_json_value(dec, '"unterminated', 0, io.StringIO("more_text"), 4, max_token_chars=8)

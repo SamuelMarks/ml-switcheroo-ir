@@ -301,12 +301,54 @@ else:
         str,
     )
 
+
+class PermutedWeightDescriptor(typing.NamedTuple):
+    """Typed tuple descriptor for a symbolic weight permutation ``(weights, perm)``.
+
+    Attributes:
+        weights (TensorLike): Symbolic or raw weight reference.
+        permutation (tuple[int, ...]): Target axis permutation.
+    """
+
+    weights: TensorLike
+    permutation: tuple[int, ...]
+
+
+class SplitQKVSliceDescriptor(typing.NamedTuple):
+    """Typed tuple descriptor for a single symbolic Q, K, or V projection slice ``(role, qkv_weight)``.
+
+    Attributes:
+        role (str): Projection component role ('q', 'k', or 'v').
+        qkv_weight (TensorLike): Combined QKV weight reference.
+    """
+
+    role: str
+    qkv_weight: TensorLike
+
+
+class MergedQKVWeightDescriptor(typing.NamedTuple):
+    """Typed tuple descriptor for a merged QKV weight ``('qkv', (q, k, v), concat_dim)``.
+
+    Attributes:
+        tag (str): Descriptor tag ('qkv').
+        weights (tuple[TensorLike, TensorLike, TensorLike]): Tuple of (q_weight, k_weight, v_weight).
+        concat_dim (int): Concatenation dimension index.
+    """
+
+    tag: str
+    weights: tuple[TensorLike, TensorLike, TensorLike]
+    concat_dim: int
+
+
 __all__ = [
+    "MergedQKVWeightDescriptor",
     "NestedTensorSequence",
     "OperationTranslationSpec",
     "ParameterTranslationEngine",
     "PermutableTensorProtocol",
+    "PermutedWeightDescriptor",
     "RoleFrameworkMap",
+    "SplitQKVSliceDescriptor",
     "SplittableTensorProtocol",
     "TensorLike",
     "TensorLikeProtocol",
@@ -913,7 +955,7 @@ class ParameterTranslationEngine:
             return weights.permute(tuple(perm))
         if _is_4d_nested_sequence(weights):
             return self._permute_4d_nested_sequence(weights, perm)
-        return (weights, tuple(perm))
+        return PermutedWeightDescriptor(weights, tuple(perm))
 
     def split_qkv_weights(
         self,
@@ -922,9 +964,9 @@ class ParameterTranslationEngine:
         head_dim: int,
         split_dim: int = 0,
     ) -> tuple[
-        TensorLike | tuple[str, TensorLike],
-        TensorLike | tuple[str, TensorLike],
-        TensorLike | tuple[str, TensorLike],
+        TensorLike | SplitQKVSliceDescriptor,
+        TensorLike | SplitQKVSliceDescriptor,
+        TensorLike | SplitQKVSliceDescriptor,
     ]:
         """Split combined QKV projection weights into separate Q, K, and V weights.
 
@@ -935,7 +977,7 @@ class ParameterTranslationEngine:
             split_dim (int): Dimension along which to split (default 0).
 
         Returns:
-            tuple[TensorLike | tuple[str, TensorLike], TensorLike | tuple[str, TensorLike], TensorLike | tuple[str, TensorLike]]:
+            tuple[TensorLike | SplitQKVSliceDescriptor, TensorLike | SplitQKVSliceDescriptor, TensorLike | SplitQKVSliceDescriptor]:
                 (q_weight, k_weight, v_weight) tuple.
 
         Raises:
@@ -953,7 +995,11 @@ class ParameterTranslationEngine:
             k = qkv_weight[proj_size : 2 * proj_size]
             v = qkv_weight[2 * proj_size :]
             return (q, k, v)
-        return (("q", qkv_weight), ("k", qkv_weight), ("v", qkv_weight))
+        return (
+            SplitQKVSliceDescriptor("q", qkv_weight),
+            SplitQKVSliceDescriptor("k", qkv_weight),
+            SplitQKVSliceDescriptor("v", qkv_weight),
+        )
 
     def merge_qkv_weights(
         self,
@@ -961,7 +1007,7 @@ class ParameterTranslationEngine:
         k_weight: TensorLike,
         v_weight: TensorLike,
         concat_dim: int = 0,
-    ) -> TensorLike | tuple[str, tuple[TensorLike, TensorLike, TensorLike], int]:
+    ) -> TensorLike | MergedQKVWeightDescriptor:
         """Merge separate Q, K, and V projection weights into a single combined QKV tensor.
 
         Args:
@@ -971,9 +1017,9 @@ class ParameterTranslationEngine:
             concat_dim (int): Dimension along which to concatenate (default 0).
 
         Returns:
-            TensorLike | tuple[str, tuple[TensorLike, TensorLike, TensorLike], int]:
+            TensorLike | MergedQKVWeightDescriptor:
                 Merged QKV weight object.
         """
         if isinstance(q_weight, list) and isinstance(k_weight, list) and isinstance(v_weight, list):
             return [*q_weight, *k_weight, *v_weight]
-        return ("qkv", (q_weight, k_weight, v_weight), concat_dim)
+        return MergedQKVWeightDescriptor("qkv", (q_weight, k_weight, v_weight), concat_dim)

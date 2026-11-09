@@ -231,5 +231,10 @@ def verify_sentinel_protocol(
 
     Returns:
         AutodiffSentinelProtocol: The verified sentinel node.
+
+    Raises:
+        TypeError: If node is not an instance of _AutodiffSentinelBase or has invalid domain.
     """
+    if node.domain != "ml.switcheroo.ad":
+        raise TypeError(f"Expected autodiff sentinel node in domain 'ml.switcheroo.ad', got {node!r}.")
     return node

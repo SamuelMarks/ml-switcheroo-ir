@@ -3,7 +3,6 @@
 import json
 import pathlib
 import runpy
-from tempfile import NamedTemporaryFile
 from unittest.mock import patch
 
 import pytest
@@ -28,6 +27,7 @@ from ml_switcheroo_ir.cli import main as cli_main
 
 def test_package_version() -> None:
     """Test package version exposure."""
+    assert __version__ == "0.0.6"
     assert __version__.count(".") == 2
 
 
@@ -170,11 +170,12 @@ def test_cli_parse_json() -> None:
     assert len(graph_empty.nodes) == 0
 
 
-def test_cli_main(capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_main(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Test CLI main entrypoint.
 
     Args:
         capsys (pytest.CaptureFixture[str]): Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
 
     """
     json_data = json.dumps(
@@ -187,11 +188,10 @@ def test_cli_main(capsys: pytest.CaptureFixture[str]) -> None:
         }
     )
 
-    with NamedTemporaryFile(mode="w", delete=False) as f:
-        f.write(json_data)
-        f_name = f.name
+    f_path = tmp_path / "model.json"
+    f_path.write_text(json_data, encoding="utf-8")
 
-    cli_main(["toposort", f_name])
+    cli_main(["toposort", str(f_path)])
 
     captured = capsys.readouterr()
     assert "Topological Order:" in captured.out
@@ -199,52 +199,62 @@ def test_cli_main(capsys: pytest.CaptureFixture[str]) -> None:
     assert "n2 (Output)" in captured.out
 
 
-def test_cli_main_sys_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_main_sys_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Test CLI main using sys.argv.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Pytest fixture to mock attributes.
         capsys (pytest.CaptureFixture[str]): Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
 
     """
     json_data = json.dumps({"nodes": {}, "edges": []})
-    with NamedTemporaryFile(mode="w", delete=False) as f:
-        f.write(json_data)
-        f_name = f.name
+    f_path = tmp_path / "empty_graph.json"
+    f_path.write_text(json_data, encoding="utf-8")
 
-    monkeypatch.setattr("sys.argv", ["ml-switcheroo-ir", "toposort", f_name])
+    monkeypatch.setattr("sys.argv", ["ml-switcheroo-ir", "toposort", str(f_path)])
     cli_main()
 
     captured = capsys.readouterr()
     assert "Topological Order:" in captured.out
 
 
-def test_runpy_main_module() -> None:
-    """Execute __main__.py to get coverage."""
+def test_runpy_main_module(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
+    """Execute __main__.py to get coverage.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+    """
     import importlib
     import sys
 
     main_mod = importlib.import_module("ml_switcheroo_ir.__main__")
     importlib.reload(main_mod)
 
-    with NamedTemporaryFile(mode="w", delete=False) as f:
-        f.write("{}")
-        f_name = f.name
+    f_path = tmp_path / "runpy_main.json"
+    f_path.write_text("{}", encoding="utf-8")
     sys.modules.pop("ml_switcheroo_ir.__main__", None)
-    with patch("sys.argv", ["ml-switcheroo-ir", "toposort", f_name]):
+    with patch("sys.argv", ["ml-switcheroo-ir", "toposort", str(f_path)]):
         runpy.run_module("ml_switcheroo_ir.__main__", run_name="__main__")
+    assert "Topological Order:" in capsys.readouterr().out
 
 
-def test_runpy_cli_module() -> None:
-    """Execute cli.py to get coverage on its __main__ block."""
+def test_runpy_cli_module(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
+    """Execute cli.py to get coverage on its __main__ block.
+
+    Args:
+        capsys (pytest.CaptureFixture[str]): Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+    """
     import sys
 
-    with NamedTemporaryFile(mode="w", delete=False) as f:
-        f.write("{}")
-        f_name = f.name
+    f_path = tmp_path / "runpy_cli.json"
+    f_path.write_text("{}", encoding="utf-8")
     sys.modules.pop("ml_switcheroo_ir.cli", None)
-    with patch("sys.argv", ["ml-switcheroo-ir", "toposort", f_name]):
+    with patch("sys.argv", ["ml-switcheroo-ir", "toposort", str(f_path)]):
         runpy.run_module("ml_switcheroo_ir.cli", run_name="__main__")
+    assert "Topological Order:" in capsys.readouterr().out
 
 
 def test_cli_main_other_command(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -263,6 +273,7 @@ def test_cli_main_other_command(monkeypatch: pytest.MonkeyPatch, capsys: pytest.
 
     monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self, args: MockArgs())
     cli_main(["other"])
+    assert capsys.readouterr().out == ""
 
 
 def test_verify_backend_missing_file(capsys: pytest.CaptureFixture[str]) -> None:
@@ -278,113 +289,124 @@ def test_verify_backend_missing_file(capsys: pytest.CaptureFixture[str]) -> None
     assert "Compliance: 0%" in captured.out
 
 
-def test_verify_backend_spec_none(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verify_backend_spec_none(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
     """Test verify-backend when importlib spec is None.
 
     Args:
         capsys: Pytest fixture to capture stdout and stderr.
         monkeypatch: Pytest fixture to mock attributes.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
 
     """
     monkeypatch.setattr("importlib.util.spec_from_file_location", lambda n, p: None)
-    with NamedTemporaryFile(mode="w", delete=False) as f:
-        f.write("")
-        fname = f.name
-    cli_main(["verify-backend", fname, "MyClass"])
+    fpath = tmp_path / "empty_mod.py"
+    fpath.write_text("", encoding="utf-8")
+    cli_main(["verify-backend", str(fpath), "MyClass"])
     captured = capsys.readouterr()
     assert "Error: Could not load module" in captured.out
 
 
-def test_verify_backend_execution_error(capsys: pytest.CaptureFixture[str]) -> None:
+def test_verify_backend_execution_error(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Test verify-backend when module execution fails.
 
     Args:
         capsys: Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
 
     """
-    with NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write("import nonexistent_module_123")
-        fname = f.name
-    cli_main(["verify-backend", fname, "MyClass"])
+    fpath = tmp_path / "bad_exec.py"
+    fpath.write_text("import nonexistent_module_123", encoding="utf-8")
+    cli_main(["verify-backend", str(fpath), "MyClass"])
     captured = capsys.readouterr()
     assert "Error executing module" in captured.out
     assert "Compliance: 0%" in captured.out
 
 
-def test_verify_backend_missing_class(capsys: pytest.CaptureFixture[str]) -> None:
+def test_verify_backend_missing_class(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Test verify-backend when the specified class is missing.
 
     Args:
         capsys: Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
 
     """
-    with NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write("x = 1")
-        fname = f.name
-    cli_main(["verify-backend", fname, "MyClass"])
+    fpath = tmp_path / "missing_cls.py"
+    fpath.write_text("x = 1", encoding="utf-8")
+    cli_main(["verify-backend", str(fpath), "MyClass"])
     captured = capsys.readouterr()
     assert "not found in" in captured.out
     assert "Compliance: 20%" in captured.out
 
 
-def test_verify_backend_not_a_class(capsys: pytest.CaptureFixture[str]) -> None:
+def test_verify_backend_not_a_class(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Test verify-backend when the specified name is not a class.
 
     Args:
         capsys: Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
 
     """
-    with NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write("MyClass = 1")
-        fname = f.name
-    cli_main(["verify-backend", fname, "MyClass"])
+    fpath = tmp_path / "not_cls.py"
+    fpath.write_text("MyClass = 1", encoding="utf-8")
+    cli_main(["verify-backend", str(fpath), "MyClass"])
     captured = capsys.readouterr()
     assert "Compliance: 40%" in captured.out
 
 
-def test_verify_backend_no_graph_arg(capsys: pytest.CaptureFixture[str]) -> None:
+def test_verify_backend_no_graph_arg(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Test verify-backend when the compile method is missing the graph arg.
 
     Args:
         capsys: Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
 
     """
-    with NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write("from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, wrong_arg):\n        pass")
-        fname = f.name
-    cli_main(["verify-backend", fname, "MyClass"])
+    fpath = tmp_path / "no_graph_arg.py"
+    fpath.write_text(
+        "from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, wrong_arg):\n        pass",
+        encoding="utf-8",
+    )
+    cli_main(["verify-backend", str(fpath), "MyClass"])
     captured = capsys.readouterr()
     assert "Compliance: 80%" in captured.out
 
 
-def test_verify_backend_perfect(capsys: pytest.CaptureFixture[str]) -> None:
+def test_verify_backend_perfect(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
     """Test verify-backend with a perfect implementation.
 
     Args:
         capsys: Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
 
     """
-    with NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write("from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, graph):\n        pass")
-        fname = f.name
-    cli_main(["verify-backend", fname, "MyClass"])
+    fpath = tmp_path / "perfect_backend.py"
+    fpath.write_text(
+        "from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, graph):\n        pass",
+        encoding="utf-8",
+    )
+    cli_main(["verify-backend", str(fpath), "MyClass"])
     captured = capsys.readouterr()
     assert "Compliance: 100%" in captured.out
 
 
 def test_verify_backend_class_not_inheriting(
     capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
 ) -> None:
     """Test verify-backend when the class does not inherit CompilerBackend.
 
     Args:
         capsys: Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
 
     """
-    with NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write("class MyClass:\n    pass")
-        fname = f.name
-    cli_main(["verify-backend", fname, "MyClass"])
+    fpath = tmp_path / "not_inheriting.py"
+    fpath.write_text("class MyClass:\n    pass", encoding="utf-8")
+    cli_main(["verify-backend", str(fpath), "MyClass"])
     captured = capsys.readouterr()
     assert "Compliance: 40%" in captured.out
 

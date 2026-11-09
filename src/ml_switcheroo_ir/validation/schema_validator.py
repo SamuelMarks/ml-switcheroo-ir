@@ -234,9 +234,11 @@ class Validator:
             "mlir.tensor": self.mlir_registry,
             "mlir.linalg": self.mlir_registry,
             "mlir.scf": self.mlir_registry,
+            "mlir.func": self.mlir_registry,
             "collective": self.collective_registry,
             "ml.switcheroo.collective": self.collective_registry,
             "quantization": self.quantization_registry,
+            "ml.switcheroo.quant": self.quantization_registry,
             "ml.switcheroo.quantization": self.quantization_registry,
             "state": self.state_registry,
             "ml.switcheroo.state": self.state_registry,
@@ -312,9 +314,12 @@ class Validator:
             )
 
         if node.domain != "ai.onnx":
+            s = self.registry.get(node.op_type)
+            if s is not None and s.domain == node.domain:
+                return s
             secondary = self._get_domain_registry(node.domain)
-            if secondary is not None and node.op_type in secondary:
-                return secondary[node.op_type]
+            if secondary is not None:
+                return secondary.get(node.op_type)
 
         return self.registry.get(node.op_type)
 
@@ -369,7 +374,8 @@ class Validator:
         elif node.domain in ("webgpu_wgsl", "wgsl"):
             extra_primitives = WGSL_PRIMITIVE_SIGNATURES
 
-        if node.op_type in secondary or node.op_type in extra_primitives or node.op_type in self.registry:
+        reg_schema = self.registry.get(node.op_type)
+        if node.op_type in secondary or node.op_type in extra_primitives or (reg_schema is not None and reg_schema.domain == node.domain):
             return []
 
         lvl = ValidationLevel.WARNING if node.domain == "ml.switcheroo.custom" and self.level != ValidationLevel.STRICT else ValidationLevel.ERROR
@@ -377,6 +383,7 @@ class Validator:
             "collective": "collective registry.",
             "ml.switcheroo.collective": "collective registry.",
             "quantization": "quantization registry.",
+            "ml.switcheroo.quant": "quantization registry.",
             "ml.switcheroo.quantization": "quantization registry.",
             "state": "state registry.",
             "ml.switcheroo.state": "state registry.",
@@ -592,6 +599,8 @@ class Validator:
         errors: list[ValidationError] = []
         errors.extend(self.validate_kind(node))
         errors.extend(self.validate_required_attributes(node))
+        if populate_defaults:
+            self.populate_defaults(node)
         errors.extend(self.validate_attribute_types(node))
         errors.extend(self.validate_sharding(node, mesh))
         if node.domain in (
@@ -603,7 +612,7 @@ class Validator:
             "wgsl",
         ):
             errors.extend(self.validate_isa_instruction(node))
-        if node.domain in ("quantization", "ml.switcheroo.quantization") or node.op_type.startswith("quantization.") or node.op_type in ("block_quantize", "dequantize_grouped_int4"):
+        if node.domain in ("quantization", "ml.switcheroo.quant", "ml.switcheroo.quantization") or node.op_type.startswith("quantization.") or node.op_type in ("block_quantize", "dequantize_grouped_int4"):
             errors.extend(self.validate_quantization(node))
 
         if self.level == ValidationLevel.STRICT and node.shape_metadata is None and node.op_type != "NoTangent":
@@ -637,9 +646,6 @@ class Validator:
                             level=ValidationLevel.WARNING,
                         )
                     )
-
-        if populate_defaults:
-            self.populate_defaults(node)
 
         return self._filter_by_level(errors)
 

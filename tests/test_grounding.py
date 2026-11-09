@@ -499,6 +499,7 @@ def test_grounding_against_ml_ecosystem_snapshots_golden_fallback(
     empty_snap_dir.mkdir(parents=True, exist_ok=True)
     with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(empty_snap_dir)):
         test_grounding_against_ml_ecosystem_snapshots_golden(tmp_path)
+    assert empty_snap_dir.is_dir()
 
 
 def test_snapshots_dir_resolution_env_and_siblings(tmp_path: Path) -> None:

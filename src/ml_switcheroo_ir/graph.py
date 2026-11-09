@@ -72,14 +72,12 @@ __all__ = [
     "LogicalGraph",
     "LogicalMesh",
     "LogicalNode",
-    "NoTangent",
     "NodeDict",
     "PartitionSpec",
     "SerializedEdgeModel",
     "SerializedGraphModel",
     "SerializedNodeModel",
     "VersionedOutputList",
-    "ZeroTangent",
     "_apply_edges_list",
     "_build_graph_from_parsed_sections",
     "_decode_next_json_value",
@@ -158,6 +156,9 @@ class CyclicGraphError(Exception):
     """Raised when a cycle is detected in a graph during topological sorting."""
 
 
+_GLOBAL_OUTPUTS_VERSION: int = 0
+
+
 class VersionedOutputList(list[str]):
     """List subclass for LogicalNode.outputs that increments a mutation counter on change."""
 
@@ -172,6 +173,12 @@ class VersionedOutputList(list[str]):
         self.version = 0
         super().__init__(iterable)
 
+    def _bump_version(self) -> None:
+        """Increment both local and global output list mutation counters."""
+        global _GLOBAL_OUTPUTS_VERSION
+        self.version += 1
+        _GLOBAL_OUTPUTS_VERSION += 1
+
     def append(self, item: str) -> None:
         """Append an output name and increment mutation version.
 
@@ -179,7 +186,7 @@ class VersionedOutputList(list[str]):
             item (str): Output SSA name.
         """
         super().append(item)
-        self.version += 1
+        self._bump_version()
 
     @classmethod
     def __get_pydantic_core_schema__(
@@ -394,7 +401,9 @@ class LogicalNode(pydantic.BaseModel):
         Args:
             outputs (Iterable[str]): Replacement sequence of output SSA names.
         """
+        global _GLOBAL_OUTPUTS_VERSION
         self.outputs = VersionedOutputList(outputs)
+        _GLOBAL_OUTPUTS_VERSION += 1
 
     @property
     def shape(self) -> TensorShape | None:
@@ -1140,7 +1149,7 @@ class LogicalGraph(pydantic.BaseModel):
         nodes_dict = self.nodes
         dict_ver = nodes_dict.version
         tracked_node = self._cached_outputs_node
-        if self._cached_output_map is not None and dict_ver == self._cached_nodes_version and (tracked_node is None or (tracked_node.outputs is self._cached_outputs_list_ref and tracked_node.outputs.version == self._cached_outputs_version)):
+        if self._cached_output_map is not None and dict_ver == self._cached_nodes_version and _GLOBAL_OUTPUTS_VERSION == self._cached_outputs_version and (tracked_node is None or tracked_node.outputs is self._cached_outputs_list_ref):
             return self._cached_output_map
 
         mapping: dict[str, tuple[LogicalNode, int]] = {}
@@ -1155,7 +1164,7 @@ class LogicalGraph(pydantic.BaseModel):
         self._cached_nodes_version = dict_ver
         self._cached_outputs_node = first_multi_node
         self._cached_outputs_list_ref = first_multi_node.outputs if first_multi_node is not None else None
-        self._cached_outputs_version = first_multi_node.outputs.version if first_multi_node is not None else 0
+        self._cached_outputs_version = _GLOBAL_OUTPUTS_VERSION
         return mapping
 
     def get_output_producer(self, output_name: str) -> LogicalNode | None:
@@ -1575,5 +1584,3 @@ class GraphFrontend(BaseFrontend, ABC):
 
 LogicalNode.model_rebuild()
 LogicalGraph.model_rebuild()
-
-from ml_switcheroo_ir.sentinels import NoTangent, ZeroTangent  # noqa: E402

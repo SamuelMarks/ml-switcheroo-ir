@@ -301,4 +301,4 @@ class SymbolicSolver:
 
         s1 = n1.simplify()
         s2 = n2.simplify()
-        return str(s1) == str(s2)
+        return s1 == s2 or str(s1) == str(s2)

@@ -11,15 +11,17 @@ from ml_switcheroo_ir.snapshots import find_schema_file
 
 
 def test_load_stablehlo_schemas_missing_file() -> None:
-    """Test _load_stablehlo_schemas when JSON file does not exist."""
+    """Test _load_stablehlo_schemas when the json file is missing."""
     with mock.patch("pathlib.Path.exists", return_value=False):
         stablehlo._load_stablehlo_schemas()
+    assert len(stablehlo.STABLEHLO_REGISTRY) > 0
 
 
 def test_load_mlir_schemas_missing_file() -> None:
-    """Test _load_mlir_schemas when JSON file does not exist."""
+    """Test _load_mlir_schemas when the json file is missing."""
     with mock.patch("pathlib.Path.exists", return_value=False):
         mlir_registry._load_mlir_schemas()
+    assert "arith.addf" in mlir_registry.MLIR_REGISTRY
 
 
 def test_find_schema_file_branches() -> None:

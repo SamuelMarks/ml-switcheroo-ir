@@ -273,7 +273,7 @@ def eliminate_dead_nodes(graph: LogicalGraph) -> LogicalGraph:
 def _serialize_attr_for_key(
     val: (AttributeValue | InitializerValue | LogicalGraph | Mapping[str, LogicalGraph | AttributeValue] | Mapping[str, AttributeValue | dict[str, InitializerValue]]),
 ) -> HashableAttrKey:
-    """Normalize attribute values for deterministic equivalence hashing.
+    """Normalize attribute values with explicit type tags for deterministic equivalence hashing.
 
     Args:
         val (AttributeValue | InitializerValue | LogicalGraph | Mapping[str, LogicalGraph | AttributeValue] | Mapping[str, AttributeValue | dict[str, InitializerValue]]):
@@ -283,12 +283,12 @@ def _serialize_attr_for_key(
         HashableAttrKey: Hashable normalized representation.
     """
     if isinstance(val, LogicalGraph):
-        return _serialize_attr_for_key(val.to_dict())
+        return ("LogicalGraph", _serialize_attr_for_key(val.to_dict()))
     if isinstance(val, Mapping):
-        return tuple(sorted((str(k), _serialize_attr_for_key(v)) for k, v in val.items()))
+        return ("dict", tuple(sorted((str(k), _serialize_attr_for_key(v)) for k, v in val.items())))
     if isinstance(val, (list, tuple)):
-        return tuple(_serialize_attr_for_key(v) for v in val)
-    return repr(val)
+        return ("seq", tuple(_serialize_attr_for_key(v) for v in val))
+    return f"{type(val)!r}:{val!r}"
 
 
 def eliminate_common_subexpressions(graph: LogicalGraph) -> LogicalGraph:

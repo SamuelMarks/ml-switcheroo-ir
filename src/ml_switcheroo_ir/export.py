@@ -24,10 +24,12 @@ from ml_switcheroo_ir.distributed import (
 from ml_switcheroo_ir.graph import (
     LogicalGraph,
     LogicalNode,
+)
+from ml_switcheroo_ir.schema.ghost import SnapshotEnvelope
+from ml_switcheroo_ir.sentinels import (
     NoTangent,
     ZeroTangent,
 )
-from ml_switcheroo_ir.schema.ghost import SnapshotEnvelope
 from ml_switcheroo_ir.shapes import (
     DimensionType,
     SymBinaryOp,

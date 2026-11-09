@@ -101,7 +101,7 @@ def test_state_ops_validation_missing_required_attribute() -> None:
 
 
 def test_state_ops_loader_missing_file(tmp_path: Path) -> None:
-    """Test _load_state_schemas with non-existent path handles missing file gracefully.
+    """Test _load_state_schemas with a non-existent explicit json_path.
 
     Args:
         tmp_path (Path): Pytest temporary directory fixture.
@@ -109,6 +109,7 @@ def test_state_ops_loader_missing_file(tmp_path: Path) -> None:
     nonexistent = tmp_path / "does_not_exist.json"
     # Should not raise an error
     _load_state_schemas(json_path=nonexistent)
+    assert "AssignVariable" in STATE_OPS_REGISTRY
 
 
 def test_state_ops_custom_state_registry_and_unknown_op() -> None:

@@ -8,7 +8,7 @@ import inspect
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from ml_switcheroo_ir.schema.custom_ops import (
@@ -27,8 +27,17 @@ from ml_switcheroo_ir.schema.framework_registries import (
     OPTAX_REGISTRY,
     ORBAX_REGISTRY,
 )
+from ml_switcheroo_ir.schema.low_level_registries import (
+    METAL_REGISTRY,
+    PTX_REGISTRY,
+    WASM_REGISTRY,
+    WEBGL_REGISTRY,
+    WGSL_REGISTRY,
+)
 from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
+from ml_switcheroo_ir.schema.rdna_registry import RDNA_REGISTRY
+from ml_switcheroo_ir.schema.sass_registry import SASS_REGISTRY
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 from ml_switcheroo_ir.types import JsonValue
 from ml_switcheroo_ir.validation.grounding import SnapshotManifestNode
@@ -39,21 +48,23 @@ from ml_switcheroo_ir.validator import (
 )
 
 
-def _resolve_override_snapshots_path(override_path: str) -> Path | None:
+def _resolve_override_snapshots_path(override_path: str, allow_default_fallback: bool = True) -> Path | None:
     """Resolve an explicit snapshots directory override, supporting repo-root and sibling layouts.
 
     Args:
         override_path (str): Explicit path provided via CLI flag or config.
+        allow_default_fallback (bool): Whether to fall back to active default snapshot directory
+            when a sibling snapshot repo's nested snapshots directory is unpopulated.
 
     Returns:
         Optional[Path]: Resolved snapshots directory path if found, or None.
     """
     from ml_switcheroo_ir.snapshots import resolve_snapshots_path
 
-    return resolve_snapshots_path(override_path)
+    return resolve_snapshots_path(override_path, allow_default_fallback=allow_default_fallback)
 
 
-def find_snapshots_directory(override_path: str | None = None) -> Path | None:
+def find_snapshots_directory(override_path: str | Sequence[str] | None = None) -> Path | None:
     """Locate the ground-truth snapshots directory.
 
     Delegates explicit overrides to ``ml_switcheroo_ir.snapshots.resolve_snapshots_path``
@@ -61,29 +72,32 @@ def find_snapshots_directory(override_path: str | None = None) -> Path | None:
     ``get_default_snapshots_dir()``.
 
     Args:
-        override_path (Optional[str]): Explicit path provided via CLI flag or config.
+        override_path (Optional[str | Sequence[str]]): Explicit path or sequence of candidate paths.
 
     Returns:
         Optional[Path]: Path to snapshots directory if found, or None.
     """
-    if override_path:
+    if isinstance(override_path, str) and override_path:
         return _resolve_override_snapshots_path(override_path)
+    if isinstance(override_path, Sequence) and not isinstance(override_path, str):
+        for candidate in override_path:
+            resolved = _resolve_override_snapshots_path(candidate)
+            if resolved is not None:
+                return resolved
+        return None
 
-    env_val = os.environ.get("ML_ECOSYSTEM_SNAPSHOTS_DIR")
-    if env_val:
-        resolved_env = _resolve_override_snapshots_path(env_val)
-        if resolved_env is not None:
-            return resolved_env
-
-    default_path = Path(DEFAULT_SNAPSHOT_DIR).resolve()
-    if default_path.is_dir():
-        return default_path
+    for env_key in ("ML_FRAMEWORK_SNAPSHOTS_DIR", "ML_ECOSYSTEM_SNAPSHOTS_DIR"):
+        env_val = os.environ.get(env_key)
+        if env_val:
+            resolved_env = _resolve_override_snapshots_path(env_val)
+            if resolved_env is not None:
+                return resolved_env
 
     from ml_switcheroo_ir.snapshots import get_default_snapshots_dir
 
-    discovered = Path(get_default_snapshots_dir()).resolve()
-    if discovered.is_dir():
-        return discovered
+    for fallback_dir in (Path(DEFAULT_SNAPSHOT_DIR).resolve(), Path(get_default_snapshots_dir()).resolve()):
+        if fallback_dir.is_dir():
+            return fallback_dir
 
     return None
 
@@ -103,7 +117,8 @@ def _load_snapshot_symbol_map(
         data = json.load(f)
 
     snap_symbols: dict[str, dict[str, JsonValue]] = {}
-    for cat_items in data.get("categories", {}).values():
+    categories = data.get("categories", {})
+    for cat_items in categories.values():
         if isinstance(cat_items, list):
             for item in cat_items:
                 if isinstance(item, dict):
@@ -115,6 +130,35 @@ def _load_snapshot_symbol_map(
                         snap_symbols[api_path] = item
                         snap_symbols[api_path.split(".")[-1]] = item
     return snap_symbols
+
+
+def _verify_registry_structural_integrity(
+    registry: Mapping[str, OpSchema],
+    registry_name: str,
+    expected_domains: tuple[str, ...],
+    label: str,
+) -> list[str]:
+    """Verify structural invariants (non-empty, key/name match, domain match) of an OpSchema registry.
+
+    Args:
+        registry (Mapping[str, OpSchema]): Registry mapping operator name to OpSchema.
+        registry_name (str): Name of the registry constant for error messages.
+        expected_domains (tuple[str, ...]): Allowed domain strings for schemas in the registry.
+        label (str): Human-readable dialect label.
+
+    Returns:
+        list[str]: List of structural error messages.
+    """
+    errors: list[str] = []
+    if not registry:
+        errors.append(f"{registry_name} is empty.")
+        return errors
+    for op_name, schema in registry.items():
+        if schema.name != op_name:
+            errors.append(f"{label} op key '{op_name}' != schema.name '{schema.name}'.")
+        if schema.domain not in expected_domains:
+            errors.append(f"{label} op '{op_name}' has invalid domain '{schema.domain}'.")
+    return errors
 
 
 def _verify_category_items_have_identifiers(
@@ -134,7 +178,7 @@ def _verify_category_items_have_identifiers(
     Returns:
         list[str]: Diagnostic error messages for items missing identifiers.
     """
-    candidates = sorted(snapshots_dir.glob(glob_pattern))
+    candidates = [p for p in sorted(snapshots_dir.glob(glob_pattern)) if not p.name.endswith("_exhaustive.json")]
     if not candidates:
         return []
 
@@ -143,7 +187,8 @@ def _verify_category_items_have_identifiers(
     with open(target_file, encoding="utf-8") as f:
         data = json.load(f)
 
-    for cat_items in data.get("categories", {}).values():
+    categories = data.get("categories", {})
+    for cat_items in categories.values():
         if isinstance(cat_items, list):
             for item in cat_items:
                 if isinstance(item, dict):
@@ -203,7 +248,7 @@ def _find_stablehlo_snapshot_file(snapshots_dir: Path) -> Path | None:
     if candidates:
         return candidates[-1]
 
-    if "ml-ecosystem-snapshots" in str(snapshots_dir):
+    if "ml-ecosystem-snapshots" in str(snapshots_dir) or "ml-framework-snapshots" in str(snapshots_dir):
         try:
             from ml_ecosystem_snapshots.frameworks import __file__ as pkg_fw_file
 
@@ -237,7 +282,6 @@ def verify_stablehlo_grounding(snapshots_dir: Path) -> list[str]:
         if op_name not in gv.grounded_symbols and f"stablehlo.{op_name}" not in gv.grounded_symbols:
             errors.append(f"StableHLO op '{op_name}' is not grounded in {stablehlo_file.name} snapshot.")
 
-        # Check attributes against snapshot record
         sym_record = gv.grounded_symbols.get(op_name) or gv.grounded_symbols.get(f"stablehlo.{op_name}")
         if sym_record:
             known_attrs = _extract_known_attributes(sym_record)
@@ -467,18 +511,20 @@ def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: List of diagnostic errors for ungrounded MLIR operations.
     """
+    allowed_mlir_domains = ("mlir", *(f"mlir.{d}" for d in CORE_MLIR_DIALECTS), *CORE_MLIR_DIALECTS.keys())
+    errors = _verify_registry_structural_integrity(MLIR_REGISTRY, "MLIR_REGISTRY", allowed_mlir_domains, "MLIR")
     mlir_file = snapshots_dir / "mlir_v0.4.30.json"
     if not mlir_file.is_file():
-        candidates = sorted(snapshots_dir.glob("mlir*.json"))
+        candidates = [p for p in sorted(snapshots_dir.glob("mlir*.json")) if not p.name.endswith("_exhaustive.json")]
         if not candidates:
-            return []
+            return errors
         mlir_file = candidates[-1]
 
-    errors: list[str] = []
     with open(mlir_file, encoding="utf-8") as f:
         data = json.load(f)
 
-    known_dialects, known_symbols = _collect_mlir_snapshot_symbols(data.get("categories", {}))
+    categories = data.get("categories", {}) if isinstance(data, dict) else {}
+    known_dialects, known_symbols = _collect_mlir_snapshot_symbols(categories if isinstance(categories, dict) else {})
 
     for dialect in CORE_MLIR_DIALECTS:
         if known_dialects and dialect not in known_dialects:
@@ -491,6 +537,10 @@ def verify_mlir_grounding(snapshots_dir: Path) -> list[str]:
             for attr_name in schema.attributes:
                 if known_attrs and attr_name not in known_attrs:
                     errors.append(f"MLIR op '{op_name}' attribute '{attr_name}' is not grounded in {mlir_file.name} snapshot attributes {list(known_attrs)}.")
+        else:
+            dialect_prefix, _, short_op = op_name.partition(".")
+            if known_symbols and short_op not in CORE_MLIR_DIALECTS.get(dialect_prefix, {}):
+                errors.append(f"MLIR op '{op_name}' is not grounded in {mlir_file.name} or CORE_MLIR_DIALECTS.")
 
     return errors
 
@@ -562,20 +612,23 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
     return errors
 
 
-def verify_rdna_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify AMD RDNA instructions and VOPD specifications against snapshot.
+def verify_rdna_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify AMD RDNA instructions and VOPD specifications against snapshot and registry.
 
     Args:
-        snapshots_dir (Path): Path to framework snapshots directory.
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
 
     Returns:
         List[str]: Diagnostic error messages for ungrounded RDNA instructions.
     """
-    candidates = sorted(snapshots_dir.glob("*rdna*.json"))
-    if not candidates:
-        return []
+    errors = _verify_registry_structural_integrity(RDNA_REGISTRY, "RDNA_REGISTRY", ("amd_rdna", "rdna"), "RDNA")
+    if snapshots_dir is None:
+        return errors
 
-    errors: list[str] = []
+    candidates = [p for p in sorted(snapshots_dir.glob("*rdna*.json")) if not p.name.endswith("_exhaustive.json")]
+    if not candidates:
+        return errors
+
     rdna_file = candidates[-1]
     with open(rdna_file, encoding="utf-8") as f:
         data = json.load(f)
@@ -594,20 +647,23 @@ def verify_rdna_grounding(snapshots_dir: Path) -> list[str]:
     return errors
 
 
-def verify_sass_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify NVIDIA SASS instructions and control codes against snapshot.
+def verify_sass_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify NVIDIA SASS instructions and control codes against snapshot and registry.
 
     Args:
-        snapshots_dir (Path): Path to framework snapshots directory.
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
 
     Returns:
         List[str]: Diagnostic error messages for ungrounded SASS instructions.
     """
-    candidates = sorted(snapshots_dir.glob("*sass*.json"))
-    if not candidates:
-        return []
+    errors = _verify_registry_structural_integrity(SASS_REGISTRY, "SASS_REGISTRY", ("nvidia_sass", "sass"), "SASS")
+    if snapshots_dir is None:
+        return errors
 
-    errors: list[str] = []
+    candidates = [p for p in sorted(snapshots_dir.glob("*sass*.json")) if not p.name.endswith("_exhaustive.json")]
+    if not candidates:
+        return errors
+
     sass_file = candidates[-1]
     with open(sass_file, encoding="utf-8") as f:
         data = json.load(f)
@@ -626,22 +682,25 @@ def verify_sass_grounding(snapshots_dir: Path) -> list[str]:
     return errors
 
 
-def verify_wgsl_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify WebGPU WGSL operations and attributes against snapshot or schema.
+def verify_wgsl_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify WebGPU WGSL operations and attributes against snapshot and WGSL_REGISTRY.
 
     Args:
-        snapshots_dir (Path): Path to framework snapshots directory.
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
 
     Returns:
         List[str]: Diagnostic error messages for ungrounded WGSL operations.
     """
+    errors = _verify_registry_structural_integrity(WGSL_REGISTRY, "WGSL_REGISTRY", ("webgpu_wgsl", "wgsl"), "WGSL")
+    if snapshots_dir is None:
+        return errors
+
     wgsl_file = snapshots_dir / "wgsl_ops.json"
     if not wgsl_file.is_file():
         wgsl_file = Path(DEFAULT_SNAPSHOT_DIR) / "wgsl_ops.json"
     if not wgsl_file.is_file():
-        return []
+        return errors
 
-    errors: list[str] = []
     with open(wgsl_file, encoding="utf-8") as f:
         data = json.load(f)
 
@@ -650,45 +709,69 @@ def verify_wgsl_grounding(snapshots_dir: Path) -> list[str]:
         if not name:
             errors.append("WGSL op missing name.")
             continue
-        if op.get("domain") != "wgsl":
+        if op.get("domain") not in ("wgsl", "webgpu_wgsl"):
             errors.append(f"WGSL op '{name}' has invalid domain '{op.get('domain')}'.")
     return errors
 
 
-def verify_ptx_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify NVIDIA PTX operations against snapshot if available.
+def verify_ptx_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify NVIDIA PTX operations in PTX_REGISTRY and against snapshot if available.
 
     Args:
-        snapshots_dir (Path): Path to framework snapshots directory.
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
 
     Returns:
         List[str]: Diagnostic error messages for ungrounded PTX operations.
     """
-    return _verify_category_items_have_identifiers(snapshots_dir, "*ptx*.json", "PTX", allow_mnemonic=True)
+    errors = _verify_registry_structural_integrity(PTX_REGISTRY, "PTX_REGISTRY", ("nvidia_ptx", "ptx"), "PTX")
+    if snapshots_dir is not None:
+        errors.extend(_verify_category_items_have_identifiers(snapshots_dir, "*ptx*.json", "PTX", allow_mnemonic=True))
+    return errors
 
 
-def verify_metal_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify Metal MSL compute operations against snapshot if available.
+def verify_metal_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify Metal MSL compute operations in METAL_REGISTRY and against snapshot if available.
 
     Args:
-        snapshots_dir (Path): Path to framework snapshots directory.
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
 
     Returns:
         List[str]: Diagnostic error messages for ungrounded Metal operations.
     """
-    return _verify_category_items_have_identifiers(snapshots_dir, "*metal*.json", "Metal", allow_mnemonic=False)
+    errors = _verify_registry_structural_integrity(METAL_REGISTRY, "METAL_REGISTRY", ("metal_msl", "metal"), "Metal")
+    if snapshots_dir is not None:
+        errors.extend(_verify_category_items_have_identifiers(snapshots_dir, "*metal*.json", "Metal", allow_mnemonic=False))
+    return errors
 
 
-def verify_wasm_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify WebAssembly SIMD operations against snapshot if available.
+def verify_wasm_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify WebAssembly SIMD operations in WASM_REGISTRY and against snapshot if available.
 
     Args:
-        snapshots_dir (Path): Path to framework snapshots directory.
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
 
     Returns:
         List[str]: Diagnostic error messages for ungrounded WASM operations.
     """
-    return _verify_category_items_have_identifiers(snapshots_dir, "*wasm*.json", "WASM", allow_mnemonic=False)
+    errors = _verify_registry_structural_integrity(WASM_REGISTRY, "WASM_REGISTRY", ("wasm_simd", "wasm"), "WASM")
+    if snapshots_dir is not None:
+        errors.extend(_verify_category_items_have_identifiers(snapshots_dir, "*wasm*.json", "WASM", allow_mnemonic=False))
+    return errors
+
+
+def verify_webgl_grounding(snapshots_dir: Path | None = None) -> list[str]:
+    """Verify WebGL / GLSL operations in WEBGL_REGISTRY and against snapshot if available.
+
+    Args:
+        snapshots_dir (Path | None): Optional path to framework snapshots directory.
+
+    Returns:
+        List[str]: Diagnostic error messages for ungrounded WebGL operations.
+    """
+    errors = _verify_registry_structural_integrity(WEBGL_REGISTRY, "WEBGL_REGISTRY", ("webgl",), "WebGL")
+    if snapshots_dir is not None:
+        errors.extend(_verify_category_items_have_identifiers(snapshots_dir, "*webgl*.json", "WebGL", allow_mnemonic=False))
+    return errors
 
 
 def verify_quantization_grounding() -> list[str]:
@@ -714,15 +797,7 @@ def verify_state_ops_grounding() -> list[str]:
     Returns:
         list[str]: Diagnostic error messages for state schemas.
     """
-    errors: list[str] = []
-    if not STATE_OPS_REGISTRY:
-        errors.append("STATE_OPS_REGISTRY is empty.")
-    for op_name, schema in STATE_OPS_REGISTRY.items():
-        if schema.name != op_name:
-            errors.append(f"State op key '{op_name}' != schema.name '{schema.name}'.")
-        if schema.domain != "ml.switcheroo.state":
-            errors.append(f"State op '{op_name}' has invalid domain '{schema.domain}'.")
-    return errors
+    return _verify_registry_structural_integrity(STATE_OPS_REGISTRY, "STATE_OPS_REGISTRY", ("ml.switcheroo.state",), "State")
 
 
 def _check_domain_op_against_snapshot(
@@ -782,9 +857,8 @@ def _verify_domain_registry_grounding(
     Returns:
         list[str]: Diagnostic error messages for ungrounded or malformed schemas.
     """
-    errors: list[str] = []
+    errors = _verify_registry_structural_integrity(registry, registry_name, (expected_domain,), label)
     if not registry:
-        errors.append(f"{registry_name} is empty.")
         return errors
 
     snap_symbols: dict[str, dict[str, JsonValue]] = {}
@@ -795,12 +869,8 @@ def _verify_domain_registry_grounding(
             snap_file_name = candidates[-1].name
             snap_symbols = _load_snapshot_symbol_map(candidates[-1])
 
-    for op_name, schema in registry.items():
-        if schema.name != op_name:
-            errors.append(f"{label} op key '{op_name}' != schema.name '{schema.name}'.")
-        if schema.domain != expected_domain:
-            errors.append(f"{label} op '{op_name}' has invalid domain '{schema.domain}'.")
-        if snap_symbols:
+    if snap_symbols:
+        for op_name, schema in registry.items():
             errors.extend(
                 _check_domain_op_against_snapshot(
                     op_name,
@@ -896,33 +966,33 @@ def verify_odl_grounding() -> list[str]:
     Returns:
         list[str]: Diagnostic error messages for ODL schemas.
     """
-    errors: list[str] = []
-    if not ODL_CATALOG:
-        errors.append("ODL_CATALOG is empty.")
-    for op_name, schema in ODL_CATALOG.items():
-        if schema.name != op_name:
-            errors.append(f"ODL op key '{op_name}' != schema.name '{schema.name}'.")
-        if schema.domain != "odl":
-            errors.append(f"ODL op '{op_name}' has invalid domain '{schema.domain}'.")
-    return errors
+    return _verify_registry_structural_integrity(ODL_CATALOG, "ODL_CATALOG", ("odl",), "ODL")
 
 
 def _verify_local_schemas_only() -> int:
-    """Verify local custom ops, ONNX, quantization, state, Chex, Grain, Orbax, Optax, and ODL registries when snapshot directory is missing or empty.
+    """Verify local custom ops, ONNX, quantization, state, hardware ISAs, Chex, Grain, Orbax, Optax, and ODL registries when snapshot directory is missing or empty.
 
     Returns:
         int: Process exit code (0 for success, 1 for failure).
     """
-    custom_errors = verify_custom_ops_grounding()
-    onnx_errors = verify_onnx_grounding()
-    quant_errors = verify_quantization_grounding()
-    state_errors = verify_state_ops_grounding()
-    chex_errors = verify_chex_grounding()
-    grain_errors = verify_grain_grounding()
-    orbax_errors = verify_orbax_grounding()
-    optax_errors = verify_optax_grounding()
-    odl_errors = verify_odl_grounding()
-    all_errors = custom_errors + onnx_errors + quant_errors + state_errors + chex_errors + grain_errors + orbax_errors + optax_errors + odl_errors
+    all_errors = (
+        verify_custom_ops_grounding()
+        + verify_onnx_grounding()
+        + verify_quantization_grounding()
+        + verify_state_ops_grounding()
+        + verify_rdna_grounding()
+        + verify_sass_grounding()
+        + verify_wgsl_grounding()
+        + verify_ptx_grounding()
+        + verify_metal_grounding()
+        + verify_wasm_grounding()
+        + verify_webgl_grounding()
+        + verify_chex_grounding()
+        + verify_grain_grounding()
+        + verify_orbax_grounding()
+        + verify_optax_grounding()
+        + verify_odl_grounding()
+    )
     if all_errors:
         for err in all_errors:
             print(f"[ERROR] {err}")
@@ -952,6 +1022,7 @@ def _run_all_snapshot_verifiers(snapshots_dir: Path) -> list[str]:
         + verify_ptx_grounding(snapshots_dir)
         + verify_metal_grounding(snapshots_dir)
         + verify_wasm_grounding(snapshots_dir)
+        + verify_webgl_grounding(snapshots_dir)
         + verify_array_api_grounding(snapshots_dir)
         + verify_aten_grounding(snapshots_dir)
         + verify_chex_grounding(snapshots_dir)
@@ -978,8 +1049,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--snapshots-dir",
         type=str,
+        action="append",
         default=None,
-        help="Path to snapshots directory.",
+        help="Path(s) to snapshots directory (may be specified multiple times).",
+    )
+    parser.add_argument(
+        "--framework-snapshots-dir",
+        type=str,
+        default=None,
+        help="Path to ml-framework-snapshots directory.",
     )
     parser.add_argument(
         "--ecosystem-snapshots-dir",
@@ -996,8 +1074,15 @@ def main(argv: list[str] | None = None) -> int:
 
     print("=== Auditing ml-switcheroo-ir Schema Grounding ===")
 
-    target_dir = args.ecosystem_snapshots_dir or args.snapshots_dir
-    snapshots_dir = find_snapshots_directory(target_dir)
+    candidates: list[str] = []
+    if args.framework_snapshots_dir:
+        candidates.append(args.framework_snapshots_dir)
+    if args.snapshots_dir:
+        candidates.extend(args.snapshots_dir)
+    if args.ecosystem_snapshots_dir:
+        candidates.append(args.ecosystem_snapshots_dir)
+
+    snapshots_dir = find_snapshots_directory(candidates if candidates else None)
     if snapshots_dir is None:
         if args.strict:
             print("[ERROR] Snapshot directory not found in strict mode.")
@@ -1029,7 +1114,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Audited Quantization schemas: {len(QUANTIZATION_OPS_REGISTRY)} ops.")
     print(f"Audited State schemas: {len(STATE_OPS_REGISTRY)} ops.")
     print(f"Audited ODL schemas: {len(ODL_CATALOG)} ops.")
-    print("Audited Low-Level & Hardware ISAs (RDNA, SASS, WGSL, PTX, Metal, WASM).")
+    print("Audited Low-Level & Hardware ISAs (RDNA, SASS, WGSL, PTX, Metal, WASM, WebGL).")
 
     if all_errors:
         print(f"\n[FAILURE] Found {len(all_errors)} ungrounded symbol(s) or schema defect(s):")

@@ -110,6 +110,7 @@ def test_typescript_definitions_compile(tmp_path: Path) -> None:
         tmp_path (Path): Pytest temporary directory fixture.
     """
     _verify_ts_compilation(tmp_path)
+    assert (tmp_path / "schema.d.ts").is_file()
 
 
 def test_typescript_missing_tsc_and_structural_parity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

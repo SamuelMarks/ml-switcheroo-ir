@@ -850,11 +850,13 @@ class SymBinaryOp(SymNode):
             other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
 
         Returns:
-            bool: True if other is a SymBinaryOp with identical op, left, and right operands.
+            bool: True if other is a SymBinaryOp with identical op and operands.
         """
-        if not isinstance(other, SymBinaryOp):
+        if not isinstance(other, SymBinaryOp) or self.op != other.op:
             return False
-        return self.op == other.op and self.left == other.left and self.right == other.right
+        if self.left == other.left and self.right == other.right:
+            return True
+        return self.op in ("min", "max") and self.left == other.right and self.right == other.left
 
     def __hash__(self) -> int:
         """Compute hash for binary operation.
@@ -862,6 +864,8 @@ class SymBinaryOp(SymNode):
         Returns:
             int: Hash integer based on op, left, and right operands.
         """
+        if self.op in ("min", "max"):
+            return hash((self.op, frozenset((self.left, self.right))))
         return hash((self.op, self.left, self.right))
 
 

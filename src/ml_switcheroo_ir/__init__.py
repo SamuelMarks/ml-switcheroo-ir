@@ -101,7 +101,7 @@ from ml_switcheroo_ir.validator import (
     estimate_graph_communication_volume,
 )
 
-__version__ = "0.0.5"
+__version__ = "0.0.6"
 
 __all__ = [
     "ARRAY_API_REGISTRY",
