@@ -128,8 +128,8 @@ graph TD
 
 ### Component Breakdown
 
-1. **`ml-ecosystem-snapshots` / `ml-framework-snapshots` (Tier 0)**:
-   The empirical ground-truth database. Introspects and captures exact runtime function signatures, parameter kinds, default values, docstrings, and AST snapshots from official upstream framework releases (PyTorch, JAX, TensorFlow, Optax, Orbax, Chex, Grain). It provides the reference manifests that eliminate LLM and compiler hallucinations.
+1. **`ml-ecosystem-snapshots` (v0.0.6) / `ml-framework-snapshots` (Tier 0)**:
+   The empirical ground-truth database. Introspects and captures full dumps of the official module hierarchy, classes, fields, functions, function args (types, defaults), docstrings, and AST snapshots from official upstream framework releases (PyTorch, JAX, TensorFlow, Optax, Orbax, Chex, Grain, and `ml-switcheroo-ir` via `ir_v0.0.6.json`). It provides the reference manifests that eliminate LLM and compiler hallucinations.
 2. **`ml-switcheroo-ir` (Tier 1)**:
    The foundational intermediate representation contract. Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding & topologies (`PartitionSpec`, `PipelineTopologyConfig`, `WebRTCSignalingTopology`), symbolic shape algebra (`SymNode`, `SymInt`, `Polynomial`, `SymbolicSolver`, `ShapeTracker`), autodiff sentinels (`ZeroTangent`, `NoTangent`), multi-dialect schema registries (ONNX, StableHLO, MLIR, Modern Custom Ops, State/Collective/Quantization Ops, ODL, ATen, Array API, Chex, Grain, Orbax, Optax, WebGPU WGSL, NVIDIA PTX/SASS, AMD RDNA, Apple Metal, WASM SIMD, WebGL), native IR graph transformations (DCE, CSE, shape propagation), Ghost Protocol v2 specifications, cross-framework `ParameterTranslationEngine`, JSON Schema / TypeScript / Python code generation (`export.py`), and the anti-hallucination `GroundingValidator`.
 3. **`ml-switcheroo-compiler` (Tier 2)**:

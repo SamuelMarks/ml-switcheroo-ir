@@ -28,6 +28,7 @@ jobs:
       uses: actions/checkout@v7
       with:
         repository: SamuelMarks/ml-ecosystem-snapshots
+        ref: v0.0.6
         path: ml-ecosystem-snapshots
         persist-credentials: false
 
@@ -40,7 +41,7 @@ jobs:
       run: |
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks
-        gh release download v0.0.5 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download v0.0.4 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber
+        gh release download v0.0.6 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download v0.0.5 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/*_exhaustive.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks/ 2>/dev/null || true
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/concept_map.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/ 2>/dev/null || true
         python -c "

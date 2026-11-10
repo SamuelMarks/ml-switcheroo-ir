@@ -573,8 +573,36 @@ def _resolve_ir_symbol(mod_path: str, obj_name: str, allow_nested: bool) -> bool
     return True
 
 
+def _verify_ir_category_entries(
+    entries: list[dict[str, str]],
+    default_kind: str,
+) -> list[str]:
+    """Verify a list of IR snapshot category entries against runtime symbols.
+
+    Args:
+        entries (list[dict[str, str]]): Snapshot category entries.
+        default_kind (str): Default symbol kind ('class' or 'function') when 'kind' is omitted.
+
+    Returns:
+        list[str]: Diagnostic error messages for unresolvable symbols.
+    """
+    errors: list[str] = []
+    for entry in entries:
+        path = entry.get("api_path", "")
+        if not path:
+            continue
+        kind = entry.get("kind", default_kind)
+        mod_path, obj_name = path.rsplit(".", 1)
+        if kind == "function":
+            if not _resolve_ir_symbol(mod_path, obj_name, allow_nested=False):
+                errors.append(f"Exported function '{path}' not resolvable at runtime.")
+        elif not _resolve_ir_symbol(mod_path, obj_name, allow_nested=True):
+            errors.append(f"Exported symbol '{path}' not resolvable at runtime.")
+    return errors
+
+
 def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
-    """Verify ir_v0.0.4.json snapshot matches runtime API signatures.
+    """Verify ir_v*.json snapshot matches runtime API signatures.
 
     Args:
         snapshots_dir (Path): Path to framework snapshots directory.
@@ -582,7 +610,9 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
     Returns:
         List[str]: List of diagnostic errors for mismatched public APIs.
     """
-    ir_file = snapshots_dir / "ir_v0.0.4.json"
+    ir_file = snapshots_dir / "ir_v0.0.6.json"
+    if not ir_file.is_file():
+        ir_file = snapshots_dir / "ir_v0.0.4.json"
     if not ir_file.is_file():
         candidates = sorted(snapshots_dir.glob("ir_v*.json"))
         if not candidates:
@@ -593,21 +623,12 @@ def verify_ir_snapshot_grounding(snapshots_dir: Path) -> list[str]:
     with open(ir_file, encoding="utf-8") as f:
         data = json.load(f)
 
-    for cls_entry in data.get("categories", {}).get("classes", []):
-        path = cls_entry.get("api_path", "")
-        if not path:
-            continue
-        mod_path, obj_name = path.rsplit(".", 1)
-        if not _resolve_ir_symbol(mod_path, obj_name, allow_nested=True):
-            errors.append(f"Exported symbol '{path}' not resolvable at runtime.")
-
-    for fn_entry in data.get("categories", {}).get("functions", []):
-        path = fn_entry.get("api_path", "")
-        if not path:
-            continue
-        mod_path, obj_name = path.rsplit(".", 1)
-        if not _resolve_ir_symbol(mod_path, obj_name, allow_nested=False):
-            errors.append(f"Exported function '{path}' not resolvable at runtime.")
+    categories = data.get("categories", {})
+    errors.extend(_verify_ir_category_entries(categories.get("classes", []), "class"))
+    errors.extend(_verify_ir_category_entries(categories.get("functions", []), "function"))
+    for cat_name, cat_entries in categories.items():
+        if cat_name not in ("classes", "functions") and isinstance(cat_entries, list):
+            errors.extend(_verify_ir_category_entries(cat_entries, "class"))
 
     return errors
 

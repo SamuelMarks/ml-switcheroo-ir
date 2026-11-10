@@ -716,3 +716,30 @@ def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> N
     assert gv_no_disc._find_best_symbol_match("unknown_op", "") is None
     node_no_disc = LogicalNode(id="n3", op_type="unknown_op", domain="unknown_dom")
     assert len(gv_no_disc.validate_grounding(node_no_disc)) == 1
+
+    # Test aliases and overloads registration/extraction in v0.0.6 snapshot records
+    v6_manifest = {
+        "categories": {
+            "array": [
+                {
+                    "name": "overloaded_op",
+                    "api_path": "fw.overloaded_op",
+                    "aliases": ["fw.alias_op", "", "fw.overloaded_op"],
+                    "params": [{"name": "base_param"}],
+                    "overloads": [
+                        {"params": [{"name": "ov_param_1"}, {"name": "ov_param_2"}]},
+                        "not_a_dict",
+                    ],
+                }
+            ]
+        }
+    }
+    gv_v6 = GroundingValidator(snapshot_manifest=v6_manifest)
+    assert "fw.alias_op" in gv_v6.grounded_symbols
+    ov_node = LogicalNode(
+        id="n_ov",
+        op_type="alias_op",
+        domain="fw",
+        attributes={"base_param": 1, "ov_param_2": 2},
+    )
+    assert gv_v6.validate_grounding(ov_node) == []

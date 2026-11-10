@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 import pydantic
 
+from ml_switcheroo_ir.schema.ghost import ExtendedGhostRef, GhostParam
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
 
 
@@ -306,6 +307,75 @@ def analyze_python_file(filepath: str, dialect_ops: set[str]) -> FileComplianceR
     )
 
 
+def _format_snapshot_param(param: GhostParam) -> str:
+    """Format a single GhostParam into a Python signature parameter string.
+
+    Args:
+        param (GhostParam): Snapshot parameter specification.
+
+    Returns:
+        str: Formatted parameter string (e.g. ``'x: Tensor = None'``).
+    """
+    prefix = "*" if param.kind == "VAR_POSITIONAL" else ("**" if param.kind == "VAR_KEYWORD" else "")
+    rendered = f"{prefix}{param.name}"
+    if param.annotation:
+        rendered += f": {param.annotation}"
+    if param.default is not None:
+        rendered += f" = {param.default}"
+    return rendered
+
+
+def _format_snapshot_signature(ref: ExtendedGhostRef) -> str:
+    """Format an ExtendedGhostRef parameter list and return type as a Python signature.
+
+    Args:
+        ref (ExtendedGhostRef): Grounded snapshot symbol reference.
+
+    Returns:
+        str: Formatted signature string.
+    """
+    if not ref.params and ref.kind == "class":
+        return "Class/Type"
+    joined = ", ".join(_format_snapshot_param(p) for p in ref.params)
+    sig = f"({joined})"
+    if ref.returns_type:
+        sig += f" -> {ref.returns_type}"
+    return sig
+
+
+def _lookup_snapshot_api_metadata(framework: str, api_path: str, symbol: str) -> tuple[str, str]:
+    """Resolve signature and docstring from ml-ecosystem-snapshots when live import is unavailable.
+
+    Args:
+        framework (str): Target framework identifier (e.g. ``'torch'``, ``'jax'``).
+        api_path (str): Fully qualified API path.
+        symbol (str): Unqualified symbol name.
+
+    Returns:
+        tuple[str, str]: Tuple of ``(signature, docstring)``.
+    """
+    from ml_switcheroo_ir.snapshots import get_effective_snapshot_dir
+
+    try:
+        from ml_ecosystem_snapshots.grounding.engine import GroundingEngine
+
+        snap_dir = get_effective_snapshot_dir()
+        base_dirs = [snap_dir] if os.path.isdir(snap_dir) else None
+        engine = GroundingEngine(base_dirs=base_dirs)
+        ref = engine.get_symbol(framework, api_path) or engine.get_symbol(framework, symbol)
+        if ref is not None:
+            sig = _format_snapshot_signature(ref)
+            doc = "No docstring available."
+            if ref.docstring:
+                doc = ref.docstring.strip().split("\n\n")[0].replace("\n", " ")
+                if len(doc) > 150:
+                    doc = doc[:147] + "..."
+            return sig, doc
+    except (ImportError, AttributeError, KeyError, OSError, ValueError, TypeError, RuntimeError):
+        pass
+    return "Unknown", "No docstring available."
+
+
 def _resolve_mapped_api_row(raw_api_path: str) -> list[str]:
     """Resolve framework, namespace, symbol, signature, and docstring for a mapped API path.
 
@@ -354,6 +424,12 @@ def _resolve_mapped_api_row(raw_api_path: str) -> list[str]:
         RuntimeError,
     ):
         pass
+
+    if signature == "Unknown" or docstring == "No docstring available.":
+        snap_sig, snap_doc = _lookup_snapshot_api_metadata(framework, api_path, symbol)
+        if signature == "Unknown":
+            signature = snap_sig
+        docstring = snap_doc
 
     return ["[ ]", framework, namespace, symbol, api_path, signature, docstring]
 

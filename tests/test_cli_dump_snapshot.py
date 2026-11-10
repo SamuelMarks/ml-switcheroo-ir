@@ -37,9 +37,18 @@ def test_cli_dump_snapshot(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     # Verify SnapshotEnvelope metadata
     assert data["schema_version"] == "2.0.0"
     assert data["target"] == "ml-switcheroo-ir"
+    assert "classes" in data["categories"]
+    assert "functions" in data["categories"]
     assert "onnx" in data["categories"]
     assert "custom" in data["categories"]
     assert "stablehlo" in data["categories"]
+
+    assert "ml_switcheroo_ir.LogicalGraph" in data
+    assert "ml_switcheroo_ir.topological_sort" in data
+    ts_entry = data["ml_switcheroo_ir.topological_sort"]
+    assert ts_entry["kind"] == "function"
+    assert ts_entry["docstring"]
+    assert any(p["name"] == "strict" and p["default"] == "False" for p in ts_entry["params"])
 
     rmsnorm_entry = data["ml.switcheroo.custom.RMSNorm"]
     assert rmsnorm_entry["name"] == "RMSNorm"

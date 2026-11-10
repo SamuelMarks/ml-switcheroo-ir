@@ -189,3 +189,100 @@ def test_cli_compliance_verbose_mapping_exception(
 
     assert "Verbose Missing Operations Report" in captured.out
     assert "Mapped API targets" in captured.out
+
+
+def test_compliance_snapshot_api_metadata_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test snapshot metadata fallback in compliance._resolve_mapped_api_row and helper formatters.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from ml_switcheroo_ir.compliance import (
+        _format_snapshot_param,
+        _format_snapshot_signature,
+        _lookup_snapshot_api_metadata,
+        _resolve_mapped_api_row,
+    )
+    from ml_switcheroo_ir.schema.ghost import ExtendedGhostRef, GhostParam, ParameterKind
+
+    p_var = GhostParam(name="args", kind=ParameterKind.VAR_POSITIONAL, annotation="int")
+    p_kw = GhostParam(name="kwargs", kind=ParameterKind.VAR_KEYWORD, default="{}")
+    assert _format_snapshot_param(p_var) == "*args: int"
+    assert _format_snapshot_param(p_kw) == "**kwargs = {}"
+
+    cls_ref = ExtendedGhostRef(name="MyClass", api_path="pkg.MyClass", kind="class", params=[])
+    assert _format_snapshot_signature(cls_ref) == "Class/Type"
+
+    fn_ref = ExtendedGhostRef(
+        name="my_fn",
+        api_path="pkg.my_fn",
+        kind="function",
+        params=[p_var, p_kw],
+        returns_type="Tensor",
+        docstring="A" * 160,
+    )
+    assert _format_snapshot_signature(fn_ref) == "(*args: int, **kwargs = {}) -> Tensor"
+
+    no_doc_ref = ExtendedGhostRef(
+        name="no_doc_fn",
+        api_path="pkg.no_doc_fn",
+        kind="function",
+        params=[],
+        docstring=None,
+    )
+
+    fake_engine_cls = MagicMock()
+    fake_engine_inst = MagicMock()
+    fake_engine_cls.return_value = fake_engine_inst
+
+    with patch("ml_ecosystem_snapshots.grounding.engine.GroundingEngine", fake_engine_cls):
+        fake_engine_inst.get_symbol.return_value = fn_ref
+        sig, doc = _lookup_snapshot_api_metadata("pkg", "pkg.my_fn", "my_fn")
+        assert sig == "(*args: int, **kwargs = {}) -> Tensor"
+        assert doc.endswith("...")
+        assert len(doc) == 150
+
+        fake_engine_inst.get_symbol.return_value = no_doc_ref
+        sig2, doc2 = _lookup_snapshot_api_metadata("pkg", "pkg.no_doc_fn", "no_doc_fn")
+        assert sig2 == "()"
+        assert doc2 == "No docstring available."
+
+        row = _resolve_mapped_api_row("uninstalled_fw.submod.my_fn")
+        assert row[5] == "()"
+
+    with patch(
+        "ml_ecosystem_snapshots.grounding.engine.GroundingEngine",
+        side_effect=RuntimeError("engine error"),
+    ):
+        assert _lookup_snapshot_api_metadata("pkg", "pkg.fn", "fn") == (
+            "Unknown",
+            "No docstring available.",
+        )
+
+    # Branch where live module provides docstring, so only signature or neither needs snapshot update
+    import types
+
+    def _undocumented_fn(x: int) -> int:
+        """Short doc.
+
+        Args:
+            x (int): Input.
+
+        Returns:
+            int: Output.
+        """
+        return x
+
+    monkeypatch.setattr(
+        "importlib.import_module",
+        lambda name, package=None: types.SimpleNamespace(fn=_undocumented_fn),
+    )
+    monkeypatch.setattr(
+        "inspect.signature",
+        MagicMock(side_effect=ValueError("no sig")),
+    )
+    row_live_doc = _resolve_mapped_api_row("custom_mod.fn")
+    assert row_live_doc[5] == "Built-in / No signature"
+    assert row_live_doc[6] == "Short doc."

@@ -21,6 +21,12 @@ from ml_switcheroo_ir import (
 )
 from ml_switcheroo_ir.compliance import _fallback_tabulate
 from ml_switcheroo_ir.schema.custom_ops import Registry
+from ml_switcheroo_ir.schema.ghost import (
+    ExtendedGhostRef,
+    GhostParam,
+    GhostRef,
+    ParameterKind,
+)
 from ml_switcheroo_ir.types import JsonValue
 from ml_switcheroo_ir.validator import ValidationError, ValidationLevel, Validator
 
@@ -299,6 +305,92 @@ def _handle_list_ops(parsed_args: argparse.Namespace) -> None:
     )
 
 
+def _build_symbol_ghost_params(sym_name: str) -> list[GhostParam]:
+    """Extract GhostParam list from an exported ml_switcheroo_ir class or function signature.
+
+    Args:
+        sym_name (str): Exported symbol name in ``ml_switcheroo_ir``.
+
+    Returns:
+        list[GhostParam]: Extracted parameter specifications.
+    """
+    import inspect
+
+    import ml_switcheroo_ir
+
+    params: list[GhostParam] = []
+    members = dict(inspect.getmembers(ml_switcheroo_ir))
+    obj = members[sym_name]
+    try:
+        sig = inspect.signature(obj)
+        for p in sig.parameters.values():
+            ann = None if p.annotation is inspect.Parameter.empty else str(p.annotation)
+            default_val = None if p.default is inspect.Parameter.empty else repr(p.default)
+            params.append(
+                GhostParam(
+                    name=p.name,
+                    kind=ParameterKind(p.kind.name),
+                    default=default_val,
+                    annotation=ann,
+                )
+            )
+    except (ValueError, TypeError):
+        pass
+    return params
+
+
+def _collect_ir_public_symbol_snapshots(
+    snapshot_entries: dict[str, dict[str, JsonValue]],
+) -> tuple[
+    list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef],
+    list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef],
+]:
+    """Collect GhostRef snapshot records for all public classes and functions in ml_switcheroo_ir.
+
+    Args:
+        snapshot_entries (dict[str, dict[str, JsonValue]]): Flat lookup map to populate.
+
+    Returns:
+        tuple[list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef], list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef]]:
+            Tuple of ``(classes_list, functions_list)``.
+    """
+    import inspect
+
+    import ml_switcheroo_ir
+    from ml_switcheroo_ir import __all__ as ir_public_all
+
+    classes_list: list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef] = []
+    functions_list: list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef] = []
+    members = dict(inspect.getmembers(ml_switcheroo_ir))
+
+    for sym_name in ir_public_all:
+        obj = members.get(sym_name)
+        if obj is None or inspect.ismodule(obj) or not callable(obj):
+            continue
+        is_cls = inspect.isclass(obj)
+        kind = "class" if is_cls else "function"
+        params = _build_symbol_ghost_params(sym_name)
+        doc = inspect.getdoc(obj)
+        api_path = f"ml_switcheroo_ir.{sym_name}"
+        ref = GhostRef(
+            name=sym_name,
+            api_path=api_path,
+            kind=kind,
+            params=params,
+            docstring=doc,
+            has_varargs=any(p.kind == ParameterKind.VAR_POSITIONAL for p in params),
+            schema_version="2.0.0",
+        )
+        dumped = ref.model_dump()
+        snapshot_entries[api_path] = dumped
+        if is_cls:
+            classes_list.append(dumped)
+        else:
+            functions_list.append(dumped)
+
+    return classes_list, functions_list
+
+
 def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
     """Execute the 'dump-snapshot' CLI subcommand.
 
@@ -310,12 +402,8 @@ def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
     from ml_switcheroo_ir.schema.custom_ops import CUSTOM_OPS_REGISTRY
     from ml_switcheroo_ir.schema.ghost import (
         ExtendedGhostParam,
-        ExtendedGhostRef,
         GhostMlirRef,
-        GhostParam,
-        GhostRef,
         IRParameterRole,
-        ParameterKind,
         SnapshotEnvelope,
     )
     from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
@@ -325,6 +413,7 @@ def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
     onnx_list: list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef] = []
     custom_list: list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef] = []
     stablehlo_list: list[dict[str, JsonValue] | ExtendedGhostRef | GhostRef] = []
+    classes_list, functions_list = _collect_ir_public_symbol_snapshots(snapshot_entries)
 
     for op_name, schema in ONNX_REGISTRY.items():
         params = [
@@ -427,6 +516,8 @@ def _handle_dump_snapshot(parsed_args: argparse.Namespace) -> None:
         generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         environment={"source": "ml_switcheroo_ir.schema"},
         categories={
+            "classes": classes_list,
+            "functions": functions_list,
             "onnx": onnx_list,
             "custom": custom_list,
             "stablehlo": stablehlo_list,

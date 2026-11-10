@@ -344,7 +344,7 @@ class GroundingValidator(Validator):
                     self._load_file(os.path.join(root, fname))
 
     def _register_symbol_record(self, item: Mapping[str, SnapshotManifestNode], default_key: str | None = None) -> None:
-        """Register an individual symbol record under primary and short keys.
+        """Register an individual symbol record under primary, alias, and short keys.
 
         Args:
             item (Mapping[str, SnapshotManifestNode]): Symbol definition record.
@@ -354,10 +354,17 @@ class GroundingValidator(Validator):
         api_path = item_dict.get("api_path")
         name = item_dict.get("name")
         mnemonic = item_dict.get("mnemonic")
+        class_name = item_dict.get("class_name")
 
-        keys = [str(k) for k in [api_path, name, mnemonic, default_key] if isinstance(k, str) and k]
+        keys = [str(k) for k in [api_path, name, mnemonic, class_name, default_key] if isinstance(k, str) and k]
         for k in keys:
             self.grounded_symbols[k] = item_dict
+
+        aliases = item_dict.get("aliases")
+        if isinstance(aliases, list):
+            for alias in aliases:
+                if isinstance(alias, str) and alias and alias not in self.grounded_symbols:
+                    self.grounded_symbols[alias] = item_dict
 
         if isinstance(api_path, str) and "." in api_path:
             unqualified = api_path.split(".")[-1]
@@ -580,7 +587,7 @@ class GroundingValidator(Validator):
 
     @classmethod
     def _extract_grounded_known_params(cls, match: Mapping[str, SnapshotManifestNode]) -> set[str]:
-        """Extract all known parameter, attribute, operand, and kwarg names from a symbol record.
+        """Extract all known parameter, attribute, operand, overload, and kwarg names from a symbol record.
 
         Args:
             match (Mapping[str, SnapshotManifestNode]): Grounded symbol dictionary.
@@ -590,6 +597,11 @@ class GroundingValidator(Validator):
         """
         known_params: set[str] = set()
         cls._extract_names_from_entry_list(match.get("params"), known_params)
+        overloads = match.get("overloads")
+        if isinstance(overloads, list):
+            for ov in overloads:
+                if isinstance(ov, dict):
+                    cls._extract_names_from_entry_list(ov.get("params"), known_params)
         attrs = match.get("attributes")
         if isinstance(attrs, dict):
             known_params.update(str(k) for k in attrs.keys())
