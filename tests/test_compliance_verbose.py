@@ -262,6 +262,8 @@ def test_compliance_snapshot_api_metadata_fallback(monkeypatch: pytest.MonkeyPat
         )
 
     # Branch where live module provides docstring, so only signature or neither needs snapshot update
+    import importlib
+    import inspect
     import types
 
     def _undocumented_fn(x: int) -> int:
@@ -275,12 +277,15 @@ def test_compliance_snapshot_api_metadata_fallback(monkeypatch: pytest.MonkeyPat
         """
         return x
 
+    orig_import = importlib.import_module
     monkeypatch.setattr(
-        "importlib.import_module",
-        lambda name, package=None: types.SimpleNamespace(fn=_undocumented_fn),
+        importlib,
+        "import_module",
+        lambda name, package=None: types.SimpleNamespace(fn=_undocumented_fn) if name == "custom_mod" else orig_import(name, package),
     )
     monkeypatch.setattr(
-        "inspect.signature",
+        inspect,
+        "signature",
         MagicMock(side_effect=ValueError("no sig")),
     )
     row_live_doc = _resolve_mapped_api_row("custom_mod.fn")
