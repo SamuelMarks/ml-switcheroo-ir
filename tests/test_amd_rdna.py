@@ -238,3 +238,38 @@ def test_extract_vgpr_helpers() -> None:
     )
     assert _extract_vgpr_indices(node5) == []
     assert _extract_dst_vgpr(node5) is None
+
+
+def test_vopd_destination_parity_and_single_literal_constraints() -> None:
+    """Verify GFX11 VOPD destination VGPR even/odd parity and single-literal bus validation."""
+    op_even_1 = LogicalNode(
+        id="x_even",
+        op_type="V_DUAL_FMAC_F32",
+        domain="amd_rdna",
+        inputs=["v1", "0x3f800000"],
+        attributes={"dst_vgpr": 2, "literal": [True, 1065353216]},
+    )
+    op_even_2 = LogicalNode(
+        id="y_even",
+        op_type="V_DUAL_ADD_F32",
+        domain="amd_rdna",
+        attributes={"dst_vgpr": 4, "imm": "0x40000000"},
+    )
+    errs = validate_vopd_pairing(op_even_1, op_even_2)
+    assert any("destination parity conflict" in e.message for e in errs)
+    assert any("single-literal violation" in e.message for e in errs)
+
+    # Identical literal across both slots with opposite parity is legal
+    op_shared_x = LogicalNode(
+        id="sx",
+        op_type="V_DUAL_ADD_F32",
+        domain="amd_rdna",
+        attributes={"dst_vgpr": 2, "literal": "0x3f800000"},
+    )
+    op_shared_y = LogicalNode(
+        id="sy",
+        op_type="V_DUAL_MUL_F32",
+        domain="amd_rdna",
+        attributes={"dst_vgpr": 3, "literal": "0x3f800000"},
+    )
+    assert validate_vopd_pairing(op_shared_x, op_shared_y) == []

@@ -33,7 +33,7 @@ The `Linear` operation (e.g., `torch.nn.Linear`) is mapped to the `Gemm` (Genera
 }
 ```
 
-*Note: In canonical serialization, `op_type` and `attributes` are used (the legacy aliases `kind` and `metadata` remain supported for backward compatibility). If no bias is present (`bias=False`), the `C` input should be omitted from the node inputs.*
+*Note: Canonical serialization strictly requires `op_type` and `attributes` (`LogicalNode` enforces `extra="forbid"`). If no bias is present (`bias=False`), the `C` input should be omitted from the node inputs.*
 
 ## 2. Convolutional Layers
 

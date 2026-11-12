@@ -59,7 +59,7 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 
 ## Ecosystem Architecture & Taxonomy
 
-`ml-switcheroo-ir` sits at **Tier 1** of the abstract machine compilation ecosystem, serving as the foundational contract with **minimal external dependencies** (`pydantic`, `zstandard`, and `black`):
+`ml-switcheroo-ir` sits at **Tier 1** of the abstract machine compilation ecosystem, serving as the foundational contract with **minimal external runtime dependencies** (`pydantic` and `zstandard`, with `black` as an optional `[format]` extra):
 
 | Ecosystem Tier | Description / Repositories |
 | :--- | :--- |
@@ -87,15 +87,15 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 
 ## Key Features
 
-- **Minimal External Dependencies:** Relies on a minimal set of core dependencies (`pydantic`, `zstandard`, and `black`) for maximum portability across air-gapped or resource-constrained environments.
-- **Dual-Mode Graph Topology:** Unified graph representation supporting both implicit input wiring (`LogicalNode.inputs`) and first-class directed edges (`LogicalEdge`). Nodes can be accessed via dictionary lookup (`graph["node_id"]`) or ordered sequences (`graph.nodes_list`).
+- **Minimal External Dependencies:** Relies strictly on `pydantic` and `zstandard` at runtime (with `black` optional via `ml-switcheroo-ir[format]`) for maximum portability across air-gapped or resource-constrained environments.
+- **Dual-Mode Graph Topology:** Unified graph representation supporting both implicit input wiring (`LogicalNode.inputs`) and immutable first-class directed edges (`LogicalGraph.edges: tuple[LogicalEdge, ...]`). Nodes are stored in a `NodeDict` keyed by `node.id` and can be accessed via dictionary lookup (`graph["node_id"]`), integer index (`graph.nodes[0]`), or `graph.iter_nodes()` / `graph.nodes_list`.
 - **Multi-Output & SSA Value Support:** Accurate modeling of nodes that emit multiple SSA outputs (e.g., `Split`, `BatchNorm`, `custom_call`, or multi-result MLIR operations) via `LogicalNode.outputs` and `graph.get_output_producer()`.
 - **Nested Subgraphs & Autodiff Sentinels:** Recursive hierarchical subgraphs in `LogicalNode.subgraphs` supporting control-flow constructs (`Loop`, `If`), custom autodiff (`bwd`, `jvp`), checkpointed computational regions, and first-class cotangent sentinels (`ZeroTangent`, `NoTangent` in domain `ml.switcheroo.ad`).
 - **Symbolic Shape Algebra & Constraint Solving (`ml_switcheroo_ir.shapes`):** Expression ASTs (`SymVar`, `SymConst`, `SymBinaryOp`, `SymUnaryOp`, `SymPiecewise`, `SymInt`), multivariate polynomial canonicalization (`Polynomial`), algebraic constraint solving (`SymbolicSolver`, `SymbolicConstraintTracker`), NumPy-compliant symbolic broadcasting, and `ShapeTracker` propagation.
 - **Distributed Sharding, Pipeline & WebRTC Topologies:** First-class tensor parallelism via `LogicalMesh`, `PartitionSpec`, and `LogicalAxis`; pipeline schedules and microbatch dependencies via `PipelineTopologyConfig`; browser/edge peer coordination via `WebRTCSignalingTopology`; SPMD sharding propagation validation, pipeline progression checks, and closed-form analytical communication cost estimation (`AllReduce`, `AllGather`, `ReduceScatter`, `AllToAll`, `P2P`).
 - **Extensive Precision & Quantization Types (`DType`):** Standard floats and ints, sub-byte formats (`int4`, `uint4`, `int2`), modern FP8 types (`float8_e4m3fn`, `float8_e5m2`), complex numbers (`complex64`, `complex128`), and quantization invariant auditing.
 - **Multi-Dialect Schema Registries:**
-  - **ONNX Canonical Dialect (`ai.onnx`):** 221 canonical operators derived and grounded against the official specification with zero hallucinated attributes or parameters. Loaded dynamically from upstream snapshots with typed Python fallbacks; schema generation is strictly an offline build step (`scripts/generate_registry.py`).
+  - **ONNX Canonical Dialect (`ai.onnx`):** 259 grounded entries (221 canonical ONNX operators and 38 runtime symbols) derived and grounded against `../ml-framework-snapshots` with zero hallucinated attributes or parameters. Bundled as grounded JSON catalogs under `ml_switcheroo_ir/schema/catalogs/` for standalone wheel integrity and lazily loaded under `REGISTRY_LOCK`.
   - **Modern Custom, State, Collective, Quantization & Autodiff Primitives:** Pre-registered schemas in `ml.switcheroo.custom` (`RMSNorm`, `RMSNormBackward`, `SwiGLU`, `RoPE`, `FlashAttention`, `PagedAttention`, `RaggedPagedAttention`, `VisionPatchEmbedding`, `LayerNorm`, `GroupNorm`, `GELU`, `EmbeddingLookup`, `ScaledDotProductAttention`), `ml.switcheroo.state` / `state` (`ReadVariable`, `AssignVariable`, `ScatterUpdate`), `collective` / `ml.switcheroo.collective` (`all_reduce`, `all_gather`, `reduce_scatter`, `all_to_all`), `quantization` / `ml.switcheroo.quant` (`block_quantize`, `dequantize_grouped_int4`), and `ml.switcheroo.ad` / `ad` (`ZeroTangent`, `NoTangent`).
   - **Framework & Universal Abstract Catalogs:** Universal Operation Definition Language (`ODL_CATALOG`, `get_abstract_op`), PyTorch ATen (`ATEN_REGISTRY`), Python Array API (`ARRAY_API_REGISTRY`), Chex (`CHEX_REGISTRY`), Grain (`GRAIN_REGISTRY`), Orbax (`ORBAX_REGISTRY`, `orbax` / `orbax.checkpoint`), and Optax (`OPTAX_REGISTRY`).
   - **StableHLO Dialect (`stablehlo`):** 121 grounded compiler operations with structured attribute schemas (`DotDimensionNumbersAttr`, `ConvDimensionNumbersAttr`, `GatherDimensionNumbersAttr`, `ScatterDimensionNumbersAttr`, `ComparisonDirectionAttr`, `PrecisionAttr`).
@@ -156,7 +156,7 @@ norm_node = LogicalNode(
     op_type="RMSNorm",
     domain="ml.switcheroo.custom",
     attributes={"eps": 1e-6},
-    inputs=["input_x"],
+    inputs=["input_x", "norm1_w"],
     outputs=["norm1_out"],
 )
 
@@ -165,15 +165,16 @@ proj_node = LogicalNode(
     op_type="Gemm",
     domain="ai.onnx",
     attributes={"alpha": 1.0, "beta": 1.0, "transB": 1},
-    inputs=["norm1_out"],
+    inputs=["norm1_out", "proj1_w"],
     outputs=["proj1_out"],
     sharding=PartitionSpec(axes=(None, "model")),
 )
 
-# 3. Assemble and inspect the graph
+# 3. Assemble and inspect the graph (nodes map node.id -> LogicalNode)
 graph = LogicalGraph(
     name="TransformerBlock",
     nodes={"input_x": input_node, "norm1": norm_node, "proj1": proj_node},
+    initializers={"norm1_w": [1.0, 1.0], "proj1_w": [[0.5, 0.5], [0.25, 0.25]]},
     outputs=["proj1_out"],
     mesh=mesh,
 )
@@ -188,10 +189,14 @@ for edge in graph.edges:
     print(f"{edge.source} -> {edge.target}")
 # Output:
 # input_x -> norm1
+# norm1_w -> norm1
 # norm1_out -> proj1
+# proj1_w -> proj1
 ```
 
 ### 2. Validating Against Operator Schemas
+
+`Validator.validate*` methods are **side-effect-free by default** (`populate_defaults=False`): they never mutate `node.attributes` unless `populate_defaults=True` or `validator.populate_defaults(node)` is explicitly requested.
 
 ```python
 from ml_switcheroo_ir import LogicalGraph, LogicalNode
@@ -253,9 +258,9 @@ for diagnostic in report.diagnostics:
 
 ```python
 # Export to canonical JSON with sorted keys and explicit edge mappings
-json_payload = graph.to_json(format="canonical", indent=2)
+json_payload = graph.to_json(indent=2)
 
-# Seamlessly deserialize from canonical or legacy list-based formats
+# Seamlessly deserialize from canonical JSON or streaming text/binary IO
 restored_graph = LogicalGraph.from_json(json_payload)
 assert len(restored_graph) == len(graph)
 
@@ -360,10 +365,11 @@ The package bundles the `ml-switcheroo-ir` command-line utility for CI/CD pipeli
 
 ### 1. Schema Validation (`validate`)
 
-Validates a serialized JSON graph against ONNX, StableHLO, and custom operator registries:
+Validates a serialized graph (`.json`, `.json.gz`, or `.json.zst`) against ONNX, StableHLO, MLIR, ISA, and custom operator registries without mutating node attributes:
 
 ```bash
 ml-switcheroo-ir validate model.json
+ml-switcheroo-ir validate model.json.zst --strict
 ```
 
 Use `--strict` to treat warnings as errors, or `--custom-ops` to inject custom schemas:
@@ -374,10 +380,10 @@ ml-switcheroo-ir validate model.json --strict --custom-ops my_custom_ops.json
 
 ### 2. Snapshot Grounding Audit (`ground`)
 
-Audits a graph against ground-truth framework snapshots (such as those from `ml-ecosystem-snapshots`) to prevent hallucinations:
+Audits a graph (`.json`, `.json.gz`, or `.json.zst`) against ground-truth framework snapshots in `../ml-framework-snapshots` to prevent hallucinations:
 
 ```bash
-ml-switcheroo-ir ground model.json --snapshots-dir /path/to/snapshots/
+ml-switcheroo-ir ground model.json --snapshots-dir ../ml-framework-snapshots
 ```
 
 ### 3. Framework Compliance Checking (`compliance`)
@@ -422,7 +428,7 @@ ml-switcheroo-ir verify-backend src/my_backend.py CustomBackend
 
 ### 7. Ghost Snapshot Dump (`dump-snapshot`)
 
-Exports all pre-registered ONNX and modern custom operator schemas to GhostRef format:
+Exports all public package classes, functions, and all 21 built-in operator registries into a GhostRef v2 `SnapshotEnvelope` JSON file:
 
 ```bash
 ml-switcheroo-ir dump-snapshot --output schemas_snapshot.json
@@ -446,7 +452,7 @@ ml-switcheroo-ir export-schema --typescript --ts-out types.ts
 
 `ml-switcheroo-ir` is maintained under strict engineering standards:
 
-- **100% Test Coverage:** Line and branch coverage enforced via `pytest --cov --cov-branch --cov-fail-under=100`.
+- **100% Test Coverage:** Function, line, and branch coverage enforced via `pytest --cov --cov-branch --cov-fail-under=100` and `scripts/check_function_coverage.py`.
 - **100% Documentation Coverage:** Every public class, method, function, parameter, and return value documented in Google style and verified via `interrogate --fail-under=100` and `scripts/check_docs.py`.
 - **Strict Static Typing & Anti-Reflection:** Verified with `mypy --strict`, `ruff`, and `scripts/lint_typing.py` (enforcing zero `Any`, `object`, `cast`, `getattr`/`setattr`, dunder attribute accesses, or dynamic code execution).
 - **Minimal Runtime Dependencies:** Relies on a minimal set of core dependencies.
@@ -454,7 +460,7 @@ ml-switcheroo-ir export-schema --typescript --ts-out types.ts
 Run the test and verification suite locally:
 
 ```bash
-# 1. Run tests with strict 100% line and branch coverage
+# 1. Run tests with strict 100% function, line, and branch coverage
 ./run_test_coverage.sh
 
 # 2. Verify 100% documentation coverage and granular AST docstring signatures
@@ -467,7 +473,7 @@ ruff check .
 python3 scripts/lint_typing.py
 mypy --strict src tests scripts
 
-# 4. Verify empirical snapshot grounding
+# 4. Verify empirical snapshot grounding against ../ml-framework-snapshots and ../ml-ecosystem-snapshots
 python3 scripts/verify_grounding.py --strict --snapshots-dir ../ml-framework-snapshots --ecosystem-snapshots-dir ../ml-ecosystem-snapshots
 ```
 

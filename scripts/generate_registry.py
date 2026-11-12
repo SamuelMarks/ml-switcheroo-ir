@@ -1,4 +1,4 @@
-"""Parser and code generator for ONNX operator schema registry."""
+"""Generator for ONNX operator schema catalog from structured snapshots and onnx.defs."""
 
 from __future__ import annotations
 
@@ -9,25 +9,42 @@ import re
 import sys
 import typing
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import pydantic
 import typing_extensions
 
+from ml_switcheroo_ir.schema.base import AttributeType, normalize_attribute_type
+from ml_switcheroo_ir.snapshots import get_default_snapshots_dir
 from ml_switcheroo_ir.types import JsonValue
 
 
 class OnnxAttrSpecModel(pydantic.BaseModel):
-    """Pydantic model for a parsed ONNX operator attribute specification."""
+    """Pydantic model for a parsed ONNX operator attribute specification.
+
+    Attributes:
+        type (str): Canonical AttributeType value string.
+        required (bool): Whether the attribute is mandatory.
+        default (JsonValue): Default attribute value when omitted.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
-    type: str = "Any"
+    type: str = AttributeType.ANY.value
     required: bool = False
     default: JsonValue = None
 
 
 class OnnxOpSpecModel(pydantic.BaseModel):
-    """Pydantic model for a parsed ONNX operator schema specification."""
+    """Pydantic model for a parsed ONNX operator schema specification.
+
+    Attributes:
+        domain (str): Operator domain (default 'ai.onnx').
+        version (int): Operator opset since_version.
+        attributes (dict[str, dict[str, JsonValue]]): Attribute specification dictionary.
+        inputs (list[str]): Formal input tensor names.
+        outputs (list[str]): Formal output tensor names.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
@@ -43,20 +60,296 @@ OnnxOpSpecModel.model_rebuild()
 
 
 class OnnxParamProtocol(typing.Protocol):
-    """Protocol for an upstream onnx.defs formal parameter."""
+    """Protocol for an upstream onnx.defs formal parameter.
+
+    Attributes:
+        name (str): Formal parameter name.
+    """
 
     name: str
 
 
+class OnnxDefaultProtoProtocol(typing.Protocol):
+    """Protocol for an upstream onnx AttributeProto default value message."""
+
+    def ByteSize(self) -> int:
+        """Return serialized protobuf byte size.
+
+        Returns:
+            int: Serialized byte count.
+        """
+
+
+class OnnxAttrDefProtocol(typing.Protocol):
+    """Protocol for an upstream onnx.defs OpSchema.Attribute descriptor.
+
+    Attributes:
+        name (str): Attribute name.
+        type (str | int): Upstream attribute type enum or string.
+        required (bool): Whether mandatory.
+        default_value (OnnxDefaultProtoProtocol): Protobuf default value message.
+    """
+
+    name: str
+    type: str | int
+    required: bool
+    default_value: OnnxDefaultProtoProtocol
+
+
 class OnnxSchemaProtocol(typing.Protocol):
-    """Protocol for an upstream onnx.defs OpSchema."""
+    """Protocol for an upstream onnx.defs OpSchema.
+
+    Attributes:
+        name (str): Operator name.
+        since_version (int): Opset version introducing this schema.
+        domain (str): Operator domain string.
+        deprecated (bool): Deprecation flag.
+        attributes (Mapping[str, OnnxAttrDefProtocol]): Attribute definitions mapping.
+        inputs (Sequence[OnnxParamProtocol]): Formal input parameters.
+        outputs (Sequence[OnnxParamProtocol]): Formal output parameters.
+    """
 
     name: str
     since_version: int
     domain: str
-    attributes: Mapping[str, JsonValue]
+    deprecated: bool
+    attributes: Mapping[str, OnnxAttrDefProtocol]
     inputs: Sequence[OnnxParamProtocol]
     outputs: Sequence[OnnxParamProtocol]
+
+
+OnnxOpEntryValue: typing_extensions.TypeAlias = typing.Union[
+    str,
+    int,
+    list[str],
+    list[dict[str, JsonValue]],
+    dict[str, dict[str, JsonValue]],
+]
+
+_RAW_ATTR_TYPE_MAP: dict[str, str] = {
+    "int": AttributeType.INT.value,
+    "float": AttributeType.FLOAT.value,
+    "str": AttributeType.STR.value,
+    "string": AttributeType.STR.value,
+    "bool": AttributeType.BOOL.value,
+    "ints": AttributeType.LIST_INT.value,
+    "list[int]": AttributeType.LIST_INT.value,
+    "list of ints": AttributeType.LIST_INT.value,
+    "floats": AttributeType.LIST_FLOAT.value,
+    "list[float]": AttributeType.LIST_FLOAT.value,
+    "list of floats": AttributeType.LIST_FLOAT.value,
+    "strings": AttributeType.LIST_STR.value,
+    "list[str]": AttributeType.LIST_STR.value,
+    "list of strings": AttributeType.LIST_STR.value,
+    "tensor": AttributeType.TENSOR.value,
+    "sparse_tensor": AttributeType.TENSOR.value,
+    "tensors": AttributeType.LIST.value,
+    "sparse_tensors": AttributeType.LIST.value,
+    "graph": AttributeType.GRAPH.value,
+    "graphs": AttributeType.LIST.value,
+    "type": AttributeType.DTYPE.value,
+    "type_proto": AttributeType.DTYPE.value,
+    "type_protos": AttributeType.LIST.value,
+}
+
+
+def map_onnx_attribute_type(raw_type: str) -> str:
+    """Map an ONNX attribute type descriptor to a canonical ``AttributeType`` string.
+
+    Args:
+        raw_type (str): Raw ONNX attribute type (e.g. ``'tensor'``, ``'graph'``, ``'ints'``).
+
+    Returns:
+        str: Canonical ``AttributeType`` string value.
+    """
+    cleaned = raw_type.strip()
+    if "." in cleaned:
+        cleaned = cleaned.rsplit(".", 1)[-1]
+    mapped = _RAW_ATTR_TYPE_MAP.get(cleaned.lower())
+    if mapped is not None:
+        return mapped
+    try:
+        return normalize_attribute_type(cleaned).value
+    except ValueError:
+        return AttributeType.ANY.value
+
+
+def _parse_proto_default_str(raw: str | None) -> JsonValue:
+    """Parse an ONNX AttributeProto text representation into a JSON-compatible default value.
+
+    Args:
+        raw (str | None): Raw protobuf text or string literal.
+
+    Returns:
+        JsonValue: Extracted scalar default or None.
+    """
+    if not raw or raw == "None":
+        return None
+    m_i = re.search(r"\bi:\s*(-?\d+)", raw)
+    if m_i:
+        return int(m_i.group(1))
+    m_f = re.search(r"\bf:\s*(-?[\d\.]+)", raw)
+    if m_f:
+        return float(m_f.group(1))
+    m_s = re.search(r'\bs:\s*"([^"]*)"', raw)
+    if m_s:
+        return m_s.group(1)
+    result: JsonValue = raw
+    try:
+        parsed: JsonValue = ast.literal_eval(raw)
+        if isinstance(parsed, (int, float, str, bool, list, dict)) or parsed is None:
+            result = parsed
+    except (ValueError, SyntaxError):
+        pass
+    return result
+
+
+def _collect_snapshot_items(data: Mapping[str, JsonValue]) -> list[Mapping[str, JsonValue]]:
+    """Collect operator item dictionaries from ``categories`` and ``operations`` sections.
+
+    Args:
+        data (Mapping[str, JsonValue]): Parsed snapshot manifest dictionary.
+
+    Returns:
+        list[Mapping[str, JsonValue]]: Flattened operator item dictionaries.
+    """
+    raw_items: list[Mapping[str, JsonValue]] = []
+    categories = data.get("categories")
+    if isinstance(categories, Mapping):
+        for items in categories.values():
+            if isinstance(items, list):
+                raw_items.extend(entry for entry in items if isinstance(entry, Mapping))
+    operations = data.get("operations")
+    if isinstance(operations, list):
+        raw_items.extend(entry for entry in operations if isinstance(entry, Mapping))
+    return raw_items
+
+
+def _snapshot_item_to_onnx_spec(item: Mapping[str, JsonValue]) -> dict[str, OnnxOpEntryValue]:
+    """Convert one ONNX snapshot item dictionary into a dumped ``OnnxOpSpecModel`` dictionary.
+
+    Args:
+        item (Mapping[str, JsonValue]): Raw snapshot operator dictionary.
+
+    Returns:
+        dict[str, OnnxOpEntryValue]: Serialized operator spec dictionary.
+    """
+    meta = item.get("domain_metadata")
+    domain = "ai.onnx"
+    version = 1
+    if isinstance(meta, Mapping):
+        raw_dom = meta.get("domain")
+        if isinstance(raw_dom, str) and raw_dom:
+            domain = raw_dom
+        raw_ver = meta.get("upstream_version") or item.get("version")
+        if isinstance(raw_ver, (int, str)) and str(raw_ver).isdigit():
+            version = int(raw_ver)
+
+    operands = item.get("operands")
+    inputs = (
+        [str(o["name"]) for o in operands if isinstance(o, Mapping) and o.get("name")]
+        if isinstance(operands, list)
+        else []
+    )
+    returns = item.get("returns")
+    outputs = (
+        [str(r["name"]) for r in returns if isinstance(r, Mapping) and r.get("name")]
+        if isinstance(returns, list)
+        else []
+    )
+    attrs_out: dict[str, dict[str, JsonValue]] = {}
+    raw_attrs = item.get("attributes")
+    if isinstance(raw_attrs, Mapping):
+        for a_name, a_spec in raw_attrs.items():
+            if isinstance(a_spec, Mapping):
+                def_raw = a_spec.get("default")
+                parsed_def = _parse_proto_default_str(def_raw) if isinstance(def_raw, str) else def_raw
+                attrs_out[str(a_name)] = OnnxAttrSpecModel(
+                    type=map_onnx_attribute_type(str(a_spec.get("type", "Any"))),
+                    required=bool(a_spec.get("required", False)),
+                    default=parsed_def,
+                ).model_dump()
+    return OnnxOpSpecModel(
+        domain=domain,
+        version=version,
+        attributes=attrs_out,
+        inputs=inputs,
+        outputs=outputs,
+    ).model_dump()
+
+
+def extract_onnx_from_snapshot_json(snapshot_file: Path | str) -> dict[str, dict[str, OnnxOpEntryValue]]:
+    """Extract ONNX operator schemas from a structured ``onnx_*.json`` snapshot manifest.
+
+    Args:
+        snapshot_file (Path | str): Path to ``onnx_*.json`` in ``../ml-framework-snapshots``.
+
+    Returns:
+        dict[str, dict[str, OnnxOpEntryValue]]: Extracted operator schema dictionary.
+    """
+    path = Path(snapshot_file)
+    if not path.is_file():
+        return {}
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, Mapping):
+        return {}
+
+    ops: dict[str, dict[str, OnnxOpEntryValue]] = {}
+    for item in _collect_snapshot_items(data):
+        name = str(item.get("name") or "")
+        if name and name not in ops:
+            ops[name] = _snapshot_item_to_onnx_spec(item)
+    return ops
+
+
+def extract_onnx_from_defs() -> dict[str, dict[str, OnnxOpEntryValue]]:
+    """Extract canonical ONNX operator schemas via ``onnx.defs.get_all_schemas_with_history()``.
+
+    Returns:
+        dict[str, dict[str, OnnxOpEntryValue]]: Grounded operator dictionary keyed by operator name.
+    """
+    ops: dict[str, dict[str, OnnxOpEntryValue]] = {}
+    try:
+        import onnx.defs
+
+        history_schemas: Sequence[OnnxSchemaProtocol] = onnx.defs.get_all_schemas_with_history()
+        latest_by_name: dict[str, OnnxSchemaProtocol] = {}
+        for schema in history_schemas:
+            if schema.domain not in ("", "ai.onnx") or schema.deprecated:
+                continue
+            if schema.name not in latest_by_name or schema.since_version > latest_by_name[schema.name].since_version:
+                latest_by_name[schema.name] = schema
+
+        current_schemas: Sequence[OnnxSchemaProtocol] = onnx.defs.get_all_schemas()
+        for schema in current_schemas:
+            if schema.domain not in ("", "ai.onnx") or schema.deprecated:
+                continue
+            if schema.name not in latest_by_name or schema.since_version >= latest_by_name[schema.name].since_version:
+                latest_by_name[schema.name] = schema
+
+        for op_name in sorted(latest_by_name):
+            s = latest_by_name[op_name]
+            attrs_out: dict[str, dict[str, JsonValue]] = {}
+            for attr_name, attr_def in s.attributes.items():
+                raw_type_str = str(attr_def.type).split(".")[-1].lower()
+                raw_def = str(attr_def.default_value).strip() if attr_def.default_value.ByteSize() > 0 else None
+                attrs_out[str(attr_name)] = OnnxAttrSpecModel(
+                    type=map_onnx_attribute_type(raw_type_str),
+                    required=bool(attr_def.required),
+                    default=_parse_proto_default_str(raw_def),
+                ).model_dump()
+            domain_str = str(s.domain) if s.domain else "ai.onnx"
+            ops[op_name] = OnnxOpSpecModel(
+                domain=domain_str,
+                version=int(s.since_version),
+                attributes=attrs_out,
+                inputs=[str(inp.name) for inp in s.inputs],
+                outputs=[str(out.name) for out in s.outputs],
+            ).model_dump()
+    except ImportError:
+        return {}
+    return ops
 
 
 def extract_section(block: str, section_name: str) -> str:
@@ -74,22 +367,10 @@ def extract_section(block: str, section_name: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-OnnxOpEntryValue: typing_extensions.TypeAlias = typing.Union[
-    str,
-    int,
-    list[str],
-    list[dict[str, JsonValue]],
-    dict[str, dict[str, JsonValue]],
-]
-
-
 def cross_validate_with_onnx_defs(
     ops: dict[str, dict[str, OnnxOpEntryValue]],
 ) -> dict[str, dict[str, OnnxOpEntryValue]]:
     """Cross-validate parsed operator schemas against official onnx.defs if available.
-
-    Eliminates hallucinated attributes, corrects inputs on zero-input operators, and
-    harmonizes domains.
 
     Args:
         ops (dict[str, dict[str, OnnxOpEntryValue]]): Parsed operator dictionary.
@@ -112,7 +393,9 @@ def cross_validate_with_onnx_defs(
                 s = schema_map[bare_name]
                 canonical_attrs = set(s.attributes.keys())
                 raw_attrs = op_data.get("attributes")
-                op_data["attributes"] = {k: v for k, v in (raw_attrs.items() if isinstance(raw_attrs, dict) else ()) if k in canonical_attrs}
+                op_data["attributes"] = {
+                    k: v for k, v in (raw_attrs.items() if isinstance(raw_attrs, dict) else ()) if k in canonical_attrs
+                }
                 op_data["inputs"] = [inp.name for inp in s.inputs]
                 op_data["outputs"] = [out.name for out in s.outputs]
                 if s.domain:
@@ -121,19 +404,6 @@ def cross_validate_with_onnx_defs(
         pass
 
     return ops
-
-
-_RAW_ATTR_TYPE_MAP: dict[str, str] = {
-    "int": "int",
-    "float": "float",
-    "string": "str",
-    "list of ints": "List[int]",
-    "list of floats": "List[float]",
-    "list of strings": "List[str]",
-    "tensor": "Any",
-    "graph": "Any",
-    "type": "str",
-}
 
 
 def _parse_onnx_default_val(rest: str) -> JsonValue:
@@ -157,7 +427,7 @@ def _parse_onnx_default_val(rest: str) -> JsonValue:
         parsed: JsonValue = ast.literal_eval(default_str)
         return parsed
     except (ValueError, SyntaxError):
-        return default_str.strip("'\"")
+        return default_str.strip("'").strip('"')
 
 
 def _parse_onnx_attributes_section(
@@ -182,7 +452,7 @@ def _parse_onnx_attributes_section(
         rest = tt_match.group(2).strip()
         raw_type = re.sub(r"\(.*?\)", "", rest).strip()
         attr_model = OnnxAttrSpecModel(
-            type=_RAW_ATTR_TYPE_MAP.get(raw_type, "Any"),
+            type=map_onnx_attribute_type(raw_type),
             required="(required)" in rest,
             default=_parse_onnx_default_val(rest),
         )
@@ -254,83 +524,101 @@ def parse_onnx_docs(md_file: str, cross_validate: bool = False) -> dict[str, dic
     return ops
 
 
-_ONNX_REGISTRY_TEMPLATE = '''"""Generated ONNX Operator Registry."""
-
-from __future__ import annotations
-
-import json
-from pathlib import Path
-import threading
-
-from ml_switcheroo_ir.schema.base import OpAttribute, OpSchema
-
-_LOCK = threading.Lock()
-ONNX_REGISTRY: dict[str, OpSchema] = {}
-
-
-def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema]:
-    """Dynamically load ONNX schemas from onnx_ops.json into ONNX_REGISTRY.
+def extract_grounded_onnx_catalog(
+    snapshots_dir: str | Path | None = None,
+) -> dict[str, dict[str, OnnxOpEntryValue]]:
+    """Build grounded ONNX catalog preferring structured ``onnx_*.json`` snapshots and ``onnx.defs``.
 
     Args:
-        json_path: Optional custom path to onnx_ops.json.
+        snapshots_dir (str | Path | None): Optional directory containing ``onnx_*.json`` manifests.
 
     Returns:
-        Mapping of operator names to OpSchema objects.
+        dict[str, dict[str, OnnxOpEntryValue]]: Grounded operator dictionary.
     """
-    with _LOCK:
-        if ONNX_REGISTRY and json_path is None:
-            return ONNX_REGISTRY
+    resolved_dir_str = str(snapshots_dir) if snapshots_dir is not None else get_default_snapshots_dir()
+    merged: dict[str, dict[str, OnnxOpEntryValue]] = extract_onnx_from_defs()
 
-        target = (
-            Path(json_path)
-            if json_path is not None
-            else Path(__file__).parent / "onnx_ops.json"
-        )
-        if not target.exists():
-            return dict(ONNX_REGISTRY) if json_path is not None else ONNX_REGISTRY
-
-        with open(target, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        loaded: dict[str, OpSchema] = {}
-        for op_name, op_data in data.items():
-            attributes = {
-                attr_name: OpAttribute(
-                    name=attr_name,
-                    type=attr_data.get("type", "Any"),
-                    required=attr_data.get("required", False),
-                    default=attr_data.get("default", None),
-                )
-                for attr_name, attr_data in op_data.get("attributes", {}).items()
-            }
-            loaded[op_name] = OpSchema(
-                name=op_name,
-                domain=op_data.get("domain", "ai.onnx"),
-                version=op_data.get("version", 1),
-                attributes=attributes,
-                inputs=op_data.get("inputs", []),
-                outputs=op_data.get("outputs", []),
-            )
-        if json_path is None:
-            ONNX_REGISTRY.clear()
-            ONNX_REGISTRY.update(loaded)
-            return ONNX_REGISTRY
-        return loaded
-
-
-load_onnx_schemas()
-'''
+    if resolved_dir_str:
+        snap_root = Path(resolved_dir_str)
+        if snap_root.is_dir():
+            for snap_file in sorted(snap_root.glob("onnx*.json")):
+                if snap_file.name == "onnx_ops.json":
+                    continue
+                snap_ops = extract_onnx_from_snapshot_json(snap_file)
+                for op_name, op_spec in snap_ops.items():
+                    if op_name not in merged:
+                        merged[op_name] = op_spec
+    return merged
 
 
 def render_registry_module() -> str:
-    """Render and AST-validate the generated onnx_registry.py source code.
+    """Render and AST-validate the canonical ``onnx_registry.py`` module source.
 
     Returns:
         str: Syntactically validated Python module source string.
     """
-    parsed_ast = ast.parse(_ONNX_REGISTRY_TEMPLATE)
+    canonical_src = (Path(__file__).resolve().parent.parent / "src/ml_switcheroo_ir/schema/onnx_registry.py").read_text(
+        encoding="utf-8"
+    )
+    parsed_ast = ast.parse(canonical_src)
     _ = ast.unparse(parsed_ast)
-    return _ONNX_REGISTRY_TEMPLATE
+    return canonical_src
+
+
+def _resolve_cli_paths(
+    md_file: str | None,
+    json_path: str | None,
+    registry_path: str | None,
+    onnx_dir: str | None,
+) -> tuple[str | None, str, str]:
+    """Resolve CLI input markdown path, output JSON path, and output registry module path.
+
+    Args:
+        md_file (str | None): Explicit Operators.md path if supplied.
+        json_path (str | None): Explicit output JSON path if supplied.
+        registry_path (str | None): Explicit output Python module path if supplied.
+        onnx_dir (str | None): Optional ONNX repository directory.
+
+    Returns:
+        tuple[str | None, str, str]: Resolved ``(target_md, target_json, target_reg)``.
+    """
+    resolved_onnx_dir = onnx_dir
+    args_list = sys.argv[1:]
+    for idx, arg in enumerate(args_list):
+        if arg == "--onnx-dir" and idx + 1 < len(args_list):
+            resolved_onnx_dir = args_list[idx + 1]
+
+    target_md: str | None
+    if md_file is not None:
+        target_md = md_file
+    elif resolved_onnx_dir is not None:
+        cand1 = os.path.join(resolved_onnx_dir, "docs", "Operators.md")
+        cand2 = os.path.join(resolved_onnx_dir, "Operators.md")
+        target_md = cand1 if os.path.exists(cand1) else cand2
+    elif len(args_list) > 0 and not args_list[0].startswith("-"):
+        target_md = args_list[0]
+    else:
+        target_md = None
+
+    target_json = (
+        json_path
+        if json_path is not None
+        else (
+            args_list[1]
+            if len(args_list) > 1 and not args_list[1].startswith("-")
+            else "src/ml_switcheroo_ir/schema/catalogs/onnx_ops.json"
+        )
+    )
+    target_reg = (
+        registry_path
+        if registry_path is not None
+        else (
+            args_list[2]
+            if len(args_list) > 2 and not args_list[2].startswith("-")
+            else "src/ml_switcheroo_ir/schema/onnx_registry.py"
+        )
+    )
+    return target_md, target_json, target_reg
 
 
 def main(
@@ -339,43 +627,31 @@ def main(
     registry_path: str | None = None,
     onnx_dir: str | None = None,
 ) -> None:
-    """Generate ONNX JSON schema and registry python module from documentation.
+    """Generate ONNX JSON schema catalog and registry module from snapshots, onnx.defs, or Operators.md.
 
     Args:
-        md_file: Path to ONNX Operators markdown documentation.
-        json_path: Destination path for generated JSON op schemas.
-        registry_path: Destination path for generated Python registry file.
-        onnx_dir: Optional path to an external ONNX repository directory.
+        md_file (str | None): Optional path to ONNX Operators markdown documentation.
+        json_path (str | None): Destination path for generated JSON op schemas.
+        registry_path (str | None): Destination path for generated Python registry file.
+        onnx_dir (str | None): Optional path to an external ONNX repository directory.
     """
-    resolved_onnx_dir = onnx_dir
-    args_list = sys.argv[1:]
-    for idx, arg in enumerate(args_list):
-        if arg == "--onnx-dir" and idx + 1 < len(args_list):
-            resolved_onnx_dir = args_list[idx + 1]
+    target_md, target_json, target_reg = _resolve_cli_paths(md_file, json_path, registry_path, onnx_dir)
 
-    if md_file is not None:
-        target_md = md_file
-    elif resolved_onnx_dir is not None:
-        cand1 = os.path.join(resolved_onnx_dir, "docs", "Operators.md")
-        cand2 = os.path.join(resolved_onnx_dir, "Operators.md")
-        target_md = cand1 if os.path.exists(cand1) else cand2
-    elif len(sys.argv) > 1 and not sys.argv[1].startswith("--"):
-        target_md = sys.argv[1]
+    if target_md is not None:
+        ops = parse_onnx_docs(target_md, cross_validate=True)
     else:
-        target_md = "docs/Operators.md"
+        ops = extract_grounded_onnx_catalog()
+        if not ops and os.path.exists("docs/Operators.md"):
+            ops = parse_onnx_docs("docs/Operators.md", cross_validate=True)
 
-    target_json = json_path if json_path is not None else (sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else "src/ml_switcheroo_ir/schema/onnx_ops.json")
-    target_reg = registry_path if registry_path is not None else (sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else "src/ml_switcheroo_ir/schema/onnx_registry.py")
-
-    ops = parse_onnx_docs(target_md, cross_validate=True)
-
+    Path(target_json).parent.mkdir(parents=True, exist_ok=True)
     with open(target_json, "w", encoding="utf-8") as f:
         json.dump(ops, f, indent=2)
 
     print(f"Parsed {len(ops)} operators.")
 
     loader_code = render_registry_module()
-
+    Path(target_reg).parent.mkdir(parents=True, exist_ok=True)
     with open(target_reg, "w", encoding="utf-8") as f:
         f.write(loader_code)
 

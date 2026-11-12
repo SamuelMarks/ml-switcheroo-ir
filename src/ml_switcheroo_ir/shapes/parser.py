@@ -7,6 +7,7 @@ from ml_switcheroo_ir.shapes.ast import (
     SymConst,
     SymInt,
     SymNode,
+    SymPiecewise,
     SymUnaryOp,
     SymVar,
 )
@@ -14,13 +15,18 @@ from ml_switcheroo_ir.shapes.ast import (
 __all__ = [
     "SymbolicExpressionParser",
     "SymbolicSolver",
-    "_parse_sym_str",
-    "_tokenize_expr",
+    "parse_symbolic_expr",
+    "tokenize_symbolic_expr",
 ]
 
 
 class SymbolicExpressionParser:
-    """Recursive-descent parser and tokenizer for symbolic dimension expressions."""
+    """Recursive-descent parser and tokenizer for symbolic dimension expressions.
+
+    Attributes:
+        tokens (list[str]): Sequence of lexical tokens to parse.
+        idx (int): Current zero-based cursor index in ``tokens``.
+    """
 
     def __init__(self, tokens: list[str]) -> None:
         """Initialize parser with a token stream.
@@ -30,19 +36,21 @@ class SymbolicExpressionParser:
         """
         self.tokens: list[str] = tokens
         self.idx: int = 0
-        self.failed: bool = False
 
     @staticmethod
-    def _consume_alnum_span(s: str, i: int, n: int) -> tuple[str | None, int]:
+    def _consume_alnum_span(s: str, i: int, n: int) -> tuple[str, int]:
         """Consume a contiguous numeric or identifier span starting at ``i``.
 
         Args:
             s (str): Expression string.
-            i (int): Current index.
+            i (int): Current zero-based character index.
             n (int): Total length of ``s``.
 
         Returns:
-            tuple[str | None, int]: ``(token_or_none, next_index)``.
+            tuple[str, int]: ``(token, next_index)``.
+
+        Raises:
+            ValueError: If an unrecognized character is encountered at index ``i``.
         """
         c = s[i]
         if c.isdigit():
@@ -55,31 +63,34 @@ class SymbolicExpressionParser:
             while end < n and (s[end].isalnum() or s[end] == "_"):
                 end += 1
             return s[i:end], end
-        return None, i + 1
+        raise ValueError(f"Unrecognized character {c!r} at position {i} in symbolic expression {s!r}.")
 
     @staticmethod
     def _consume_next_token(s: str, i: int, n: int) -> tuple[str | None, int]:
         """Consume a single token starting at index ``i`` in ``s``.
 
         Args:
-            s (str): Stripped expression string.
+            s (str): Expression string.
             i (int): Current index in ``s``.
             n (int): Total length of ``s``.
 
         Returns:
             tuple[str | None, int]: ``(token_or_none, next_index)``.
+
+        Raises:
+            ValueError: If an unrecognized character is encountered at index ``i``.
         """
         c = s[i]
-        if c.isspace():
-            return None, i + 1
-        if c in "(),+-%":
-            return c, i + 1
+        if c.isspace() or c in "(),+-%":
+            return (None if c.isspace() else c), i + 1
         if c in ("^", "*"):
             step = 2 if (c == "*" and i + 1 < n and s[i + 1] == "*") else 1
             return ("**" if (c == "^" or step == 2) else "*"), i + step
         if c in ("<", ">", "=", "!"):
-            step = 2 if (i + 1 < n and s[i + 1] == "=") else 1
-            return s[i : i + step], i + step
+            if i + 1 < n and s[i + 1] == "=":
+                return s[i : i + 2], i + 2
+            if c in ("<", ">"):
+                return c, i + 1
         if c == "/":
             return "//", (i + 2 if (i + 1 < n and s[i + 1] == "/") else i + 1)
         return SymbolicExpressionParser._consume_alnum_span(s, i, n)
@@ -100,13 +111,15 @@ class SymbolicExpressionParser:
 
         Returns:
             list[str]: Sequence of string tokens.
+
+        Raises:
+            ValueError: If an unrecognized character is encountered in ``expr_str``.
         """
         tokens: list[str] = []
         i = 0
-        s = expr_str.strip()
-        n = len(s)
+        n = len(expr_str)
         while i < n:
-            tok, i = SymbolicExpressionParser._consume_next_token(s, i, n)
+            tok, i = SymbolicExpressionParser._consume_next_token(expr_str, i, n)
             if tok is not None:
                 tokens.append(tok)
         return tokens
@@ -164,58 +177,114 @@ class SymbolicExpressionParser:
             node = SymBinaryOp(op, node, right)
         return node
 
-    def _parse_func_call(self, func_name: str) -> SymNode:
-        """Parse a function call expression such as abs(x), min(a, b), or max(a, b).
+    def _parse_call_args(self, func_name: str) -> list[SymNode]:
+        """Consume parenthesized comma-separated arguments for ``func_name``.
 
         Args:
-            func_name (str): Name of the function ('abs', 'min', or 'max').
+            func_name (str): Invoked function identifier.
 
         Returns:
-            SymNode: Parsed unary or binary operation node.
+            list[SymNode]: Parsed argument AST nodes.
+
+        Raises:
+            ValueError: If argument list is empty or missing closing ``')'``.
         """
         self.idx += 1  # consume '('
-        arg1 = self.parse_comparison()
-        if func_name == "abs":
-            if self.idx < len(self.tokens) and self.tokens[self.idx] == ")":
-                self.idx += 1
-            else:
-                self.failed = True
-            return SymUnaryOp("abs", arg1)
-
-        if self.idx < len(self.tokens) and self.tokens[self.idx] == ",":
+        if self.idx < len(self.tokens) and self.tokens[self.idx] == ")":
+            raise ValueError(f"Function '{func_name}' requires at least one argument.")
+        args: list[SymNode] = [self.parse_comparison()]
+        while self.idx < len(self.tokens) and self.tokens[self.idx] == ",":
             self.idx += 1
-            arg2 = self.parse_comparison()
-            if self.idx < len(self.tokens) and self.tokens[self.idx] == ")":
-                self.idx += 1
-            else:
-                self.failed = True
-            return SymBinaryOp(func_name, arg1, arg2)
+            args.append(self.parse_comparison())
+        if self.idx >= len(self.tokens) or self.tokens[self.idx] != ")":
+            raise ValueError(f"Unclosed '(' in call to '{func_name}'.")
+        self.idx += 1
+        return args
 
-        self.failed = True
-        return SymConst(0)
+    def _parse_func_call(self, func_name: str) -> SymNode:
+        """Parse ``abs(x)``, ``min(a, b, ...)``, or ``max(a, b, ...)`` into ``SymUnaryOp`` or ``SymPiecewise``.
+
+        Args:
+            func_name (str): Name of the function (``'abs'``, ``'min'``, or ``'max'``).
+
+        Returns:
+            SymNode: Lowered ``SymUnaryOp`` or ``SymPiecewise`` node.
+
+        Raises:
+            ValueError: If ``func_name`` is unsupported, unclosed, or called with invalid arity.
+        """
+        if func_name not in ("abs", "min", "max"):
+            raise ValueError(f"Unsupported function '{func_name}' in symbolic expression.")
+        args = self._parse_call_args(func_name)
+        if func_name == "abs":
+            if len(args) != 1:
+                raise ValueError(f"Function 'abs' expects 1 argument, got {len(args)}.")
+            return SymUnaryOp("abs", args[0])
+        if len(args) < 2:
+            raise ValueError(f"Function '{func_name}' expects at least 2 arguments, got {len(args)}.")
+        cmp_op = "<=" if func_name == "min" else ">="
+        acc = args[0]
+        for next_arg in args[1:]:
+            acc = SymPiecewise(
+                cases=[(SymBinaryOp(cmp_op, acc, next_arg), acc)],
+                default=next_arg,
+            )
+        return acc
+
+    def _maybe_parse_exponent(self, base_node: SymNode) -> SymNode:
+        """Parse optional right-associative ``**`` exponentiation suffix on ``base_node``.
+
+        Args:
+            base_node (SymNode): Base expression node.
+
+        Returns:
+            SymNode: Exponentiated node if followed by ``**``, else ``base_node``.
+        """
+        if self.idx < len(self.tokens) and self.tokens[self.idx] == "**":
+            self.idx += 1
+            exponent = self.parse_factor()
+            return SymBinaryOp("**", base_node, exponent)
+        return base_node
+
+    def _parse_atom(self, tok: str) -> SymNode:
+        """Parse an atomic literal, identifier, or function call starting with ``tok``.
+
+        Args:
+            tok (str): Leading token already consumed at ``self.idx - 1``.
+
+        Returns:
+            SymNode: Parsed atomic expression node.
+
+        Raises:
+            ValueError: If ``tok`` is not a valid integer literal or identifier.
+        """
+        if tok.isdigit():
+            return SymConst(int(tok))
+        if tok.isidentifier():
+            if self.idx < len(self.tokens) and self.tokens[self.idx] == "(":
+                return self._parse_func_call(tok)
+            return SymVar(tok)
+        raise ValueError(f"Unexpected token {tok!r} in symbolic expression.")
 
     def parse_factor(self) -> SymNode:
         """Parse factor, power expression, function call, parenthesized expression, or unary operator.
 
         Returns:
             SymNode: Root parsed factor node.
+
+        Raises:
+            ValueError: If expression ends prematurely, has unclosed parentheses, or contains invalid syntax.
         """
         if self.idx >= len(self.tokens):
-            self.failed = True
-            return SymConst(0)
+            raise ValueError("Unexpected end of symbolic expression.")
         tok = self.tokens[self.idx]
         if tok == "(":
             self.idx += 1
             node = self.parse_comparison()
-            if self.idx < len(self.tokens) and self.tokens[self.idx] == ")":
-                self.idx += 1
-            else:
-                self.failed = True
-            if self.idx < len(self.tokens) and self.tokens[self.idx] == "**":
-                self.idx += 1
-                exponent = self.parse_factor()
-                node = SymBinaryOp("**", node, exponent)
-            return node
+            if self.idx >= len(self.tokens) or self.tokens[self.idx] != ")":
+                raise ValueError("Unclosed '(' in symbolic expression.")
+            self.idx += 1
+            return self._maybe_parse_exponent(node)
         if tok == "+":
             self.idx += 1
             return self.parse_factor()
@@ -224,18 +293,11 @@ class SymbolicExpressionParser:
             inner = self.parse_factor()
             return SymBinaryOp("-", SymConst(0), inner)
         self.idx += 1
-        if tok in ("abs", "min", "max") and self.idx < len(self.tokens) and self.tokens[self.idx] == "(":
-            base_node = self._parse_func_call(tok)
-        else:
-            base_node = SymConst(int(tok)) if tok.isdigit() else SymVar(tok)
-        if self.idx < len(self.tokens) and self.tokens[self.idx] == "**":
-            self.idx += 1
-            exponent = self.parse_factor()
-            base_node = SymBinaryOp("**", base_node, exponent)
-        return base_node
+        base_node = self._parse_atom(tok)
+        return self._maybe_parse_exponent(base_node)
 
 
-def _tokenize_expr(expr_str: str) -> list[str]:
+def tokenize_symbolic_expr(expr_str: str) -> list[str]:
     """Tokenize a symbolic expression string into component tokens.
 
     Args:
@@ -247,25 +309,27 @@ def _tokenize_expr(expr_str: str) -> list[str]:
     return SymbolicExpressionParser.tokenize(expr_str)
 
 
-def _parse_sym_str(s: str) -> SymNode:
-    """Parse an algebraic string expression into a structured SymNode.
+def parse_symbolic_expr(expr_str: str) -> SymNode:
+    """Parse an algebraic string expression into a structured ``SymNode``.
 
     Args:
-        s (str): String expression.
+        expr_str (str): String expression to parse.
 
     Returns:
         SymNode: Structured symbolic expression node.
+
+    Raises:
+        ValueError: If ``expr_str`` is empty, contains unrecognized characters, or is syntactically malformed.
     """
-    tokens = _tokenize_expr(s)
+    tokens = tokenize_symbolic_expr(expr_str)
     if not tokens:
-        return SymVar(s)
+        raise ValueError(f"Empty symbolic expression: {expr_str!r}.")
 
     parser = SymbolicExpressionParser(tokens)
     node = parser.parse_comparison()
-    if not parser.failed and parser.idx == len(tokens):
-        return node
-
-    return SymVar(s)
+    if parser.idx != len(tokens):
+        raise ValueError(f"Unexpected trailing token {tokens[parser.idx]!r} in symbolic expression {expr_str!r}.")
+    return node
 
 
 class SymbolicSolver:
@@ -285,7 +349,12 @@ class SymbolicSolver:
         Returns:
             bool: True if expressions evaluate to identical canonical representations.
         """
-        if isinstance(expr1, int) and not isinstance(expr1, bool) and isinstance(expr2, int) and not isinstance(expr2, bool):
+        if (
+            isinstance(expr1, int)
+            and not isinstance(expr1, bool)
+            and isinstance(expr2, int)
+            and not isinstance(expr2, bool)
+        ):
             return expr1 == expr2
 
         n1 = SymNode.to_node(expr1)

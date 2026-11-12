@@ -18,16 +18,10 @@ def test_cli_compliance_no_targets(capsys: pytest.CaptureFixture[str]) -> None:
         cli_main(["compliance"])
 
 
-def test_cli_compliance_empty_targets(capsys: pytest.CaptureFixture[str]) -> None:
-    """Test run_compliance_check exit behavior when targets list is empty.
-
-    Args:
-        capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
-    """
-    with pytest.raises(SystemExit):
+def test_cli_compliance_empty_targets() -> None:
+    """Test run_compliance_check raises ValueError without side effects when targets list is empty."""
+    with pytest.raises(ValueError, match="No targets provided"):
         run_compliance_check([])
-    captured = capsys.readouterr()
-    assert "Error: No targets provided." in captured.out
 
 
 def test_cli_compliance_invalid_json(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -44,7 +38,9 @@ def test_cli_compliance_invalid_json(tmp_path: pathlib.Path, capsys: pytest.Capt
     assert "No IR, FrameworkAdapter, or DIALECT targets detected in the specified path." in captured.out
 
 
-def test_cli_compliance_onnx9000_adapter_and_decorator(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_compliance_onnx9000_adapter_and_decorator(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Verify compliance detection of JaxprImporter and @register_op decorators.
 
     Args:

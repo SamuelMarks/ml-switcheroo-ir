@@ -75,12 +75,20 @@ def test_validator_custom_op_in_onnx_registry_fallback() -> None:
 
 
 def test_validator_sharding_empty_list_axis() -> None:
-    """Test sharding axis containing an empty list or other non-string runtime types."""
+    """Test PartitionSpec rejects empty sub-sequences/booleans and Validator handles integer axis elements."""
+    import pydantic
+    import pytest
+
     mesh = LogicalMesh(shape={"data": 2})
     v = Validator()
-    malformed_axes: tuple[PartitionAxisElement, ...] = ([], 123)
-    spec = PartitionSpec(axes=malformed_axes)
-    node = LogicalNode(id="n_empty", op_type="Relu", sharding=spec)
+    with pytest.raises(pydantic.ValidationError, match="must not be empty"):
+        PartitionSpec(axes=([],))
+    with pytest.raises(pydantic.ValidationError, match="must not be empty"):
+        PartitionSpec(axes=(("data", ()),))
+    with pytest.raises(pydantic.ValidationError, match="Invalid PartitionSpec axis atom"):
+        PartitionSpec(axes=(True,))
+    spec = PartitionSpec(axes=(123, ("data", 0), None))
+    node = LogicalNode(id="n_int_axis", op_type="Relu", sharding=spec)
     assert not v.validate_sharding(node, mesh)
 
 
@@ -110,12 +118,35 @@ def test_grounding_validator_engine_exception_handling(tmp_path: Path) -> None:
     assert "relu" in gv2.grounded_symbols
     assert "torch.relu" in gv2.grounded_symbols
 
-    with patch(
-        "ml_ecosystem_snapshots.grounding.engine.GroundingEngine",
-        side_effect=RuntimeError("init failed"),
+    fake_engine_mod = MagicMock()
+    fake_engine_mod.GroundingEngine = MagicMock(side_effect=RuntimeError("init failed"))
+    fake_grounding_pkg = MagicMock(engine=fake_engine_mod)
+    fake_eco_pkg = MagicMock(grounding=fake_grounding_pkg)
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "ml_ecosystem_snapshots": fake_eco_pkg,
+            "ml_ecosystem_snapshots.grounding": fake_grounding_pkg,
+            "ml_ecosystem_snapshots.grounding.engine": fake_engine_mod,
+        },
     ):
         gv_fail = GroundingValidator()
         assert gv_fail._engine is None
+
+    # Also test working GroundingEngine initialization branch
+    ok_engine_inst = MagicMock()
+    ok_engine_mod = MagicMock(GroundingEngine=MagicMock(return_value=ok_engine_inst))
+    with patch.dict(
+        "sys.modules",
+        {
+            "ml_ecosystem_snapshots": fake_eco_pkg,
+            "ml_ecosystem_snapshots.grounding": fake_grounding_pkg,
+            "ml_ecosystem_snapshots.grounding.engine": ok_engine_mod,
+        },
+    ):
+        gv_ok_eng = GroundingValidator(snapshots_dir=str(test_dir))
+        assert gv_ok_eng._engine is ok_engine_inst
 
     with patch.dict("sys.modules", {"ml_ecosystem_snapshots.grounding.engine": None}):
         gv_fail_fallback = GroundingValidator()

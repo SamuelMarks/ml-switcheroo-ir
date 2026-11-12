@@ -236,8 +236,18 @@ def test_compliance_snapshot_api_metadata_fallback(monkeypatch: pytest.MonkeyPat
     fake_engine_cls = MagicMock()
     fake_engine_inst = MagicMock()
     fake_engine_cls.return_value = fake_engine_inst
+    fake_engine_mod = MagicMock(GroundingEngine=fake_engine_cls)
+    fake_grounding_pkg = MagicMock(engine=fake_engine_mod)
+    fake_eco_pkg = MagicMock(grounding=fake_grounding_pkg)
 
-    with patch("ml_ecosystem_snapshots.grounding.engine.GroundingEngine", fake_engine_cls):
+    with patch.dict(
+        "sys.modules",
+        {
+            "ml_ecosystem_snapshots": fake_eco_pkg,
+            "ml_ecosystem_snapshots.grounding": fake_grounding_pkg,
+            "ml_ecosystem_snapshots.grounding.engine": fake_engine_mod,
+        },
+    ):
         fake_engine_inst.get_symbol.return_value = fn_ref
         sig, doc = _lookup_snapshot_api_metadata("pkg", "pkg.my_fn", "my_fn")
         assert sig == "(*args: int, **kwargs = {}) -> Tensor"
@@ -252,42 +262,36 @@ def test_compliance_snapshot_api_metadata_fallback(monkeypatch: pytest.MonkeyPat
         row = _resolve_mapped_api_row("uninstalled_fw.submod.my_fn")
         assert row[5] == "()"
 
-    with patch(
-        "ml_ecosystem_snapshots.grounding.engine.GroundingEngine",
-        side_effect=RuntimeError("engine error"),
+    err_engine_mod = MagicMock(GroundingEngine=MagicMock(side_effect=RuntimeError("engine error")))
+    with patch.dict(
+        "sys.modules",
+        {
+            "ml_ecosystem_snapshots": fake_eco_pkg,
+            "ml_ecosystem_snapshots.grounding": fake_grounding_pkg,
+            "ml_ecosystem_snapshots.grounding.engine": err_engine_mod,
+        },
     ):
         assert _lookup_snapshot_api_metadata("pkg", "pkg.fn", "fn") == (
             "Unknown",
             "No docstring available.",
         )
 
-    # Branch where live module provides docstring, so only signature or neither needs snapshot update
-    import importlib
-    import inspect
-    import types
+    del monkeypatch
+    with patch.dict(
+        "sys.modules",
+        {
+            "ml_ecosystem_snapshots": fake_eco_pkg,
+            "ml_ecosystem_snapshots.grounding": fake_grounding_pkg,
+            "ml_ecosystem_snapshots.grounding.engine": fake_engine_mod,
+        },
+    ):
+        fake_engine_inst.get_symbol.return_value = cls_ref
+        row_jnp = _resolve_mapped_api_row("jnp.add")
+        assert row_jnp[1] == "jax"
+        assert row_jnp[2] == "jax.numpy"
+        assert row_jnp[5] == "Class/Type"
 
-    def _undocumented_fn(x: int) -> int:
-        """Short doc.
-
-        Args:
-            x (int): Input.
-
-        Returns:
-            int: Output.
-        """
-        return x
-
-    orig_import = importlib.import_module
-    monkeypatch.setattr(
-        importlib,
-        "import_module",
-        lambda name, package=None: types.SimpleNamespace(fn=_undocumented_fn) if name == "custom_mod" else orig_import(name, package),
-    )
-    monkeypatch.setattr(
-        inspect,
-        "signature",
-        MagicMock(side_effect=ValueError("no sig")),
-    )
-    row_live_doc = _resolve_mapped_api_row("custom_mod.fn")
-    assert row_live_doc[5] == "Built-in / No signature"
-    assert row_live_doc[6] == "Short doc."
+        row_tf = _resolve_mapped_api_row("tf.math.abs")
+        assert row_tf[1] == "tensorflow"
+        assert row_tf[2] == "tensorflow.math"
+        assert row_tf[5] == "Class/Type"

@@ -1,0 +1,19 @@
+{
+  "ops": [
+    {
+      "name": "simdgroup_multiply_accumulate",
+      "domain": "metal_msl",
+      "version": 1,
+      "inputs": [
+        "dest",
+        "a",
+        "b",
+        "c"
+      ],
+      "outputs": [
+        "res"
+      ],
+      "attributes": []
+    }
+  ]
+}

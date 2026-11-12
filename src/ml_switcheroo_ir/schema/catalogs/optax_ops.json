@@ -1,0 +1,176 @@
+{
+  "ops": [
+    {
+      "name": "adam",
+      "domain": "optax",
+      "version": 1,
+      "inputs": [],
+      "outputs": [
+        "tx"
+      ],
+      "attributes": [
+        {
+          "name": "learning_rate",
+          "type": "float",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "b1",
+          "type": "float",
+          "required": false,
+          "default": 0.9
+        },
+        {
+          "name": "b2",
+          "type": "float",
+          "required": false,
+          "default": 0.999
+        },
+        {
+          "name": "eps",
+          "type": "float",
+          "required": false,
+          "default": 1e-08
+        },
+        {
+          "name": "nesterov",
+          "type": "bool",
+          "required": false,
+          "default": false
+        }
+      ]
+    },
+    {
+      "name": "adamw",
+      "domain": "optax",
+      "version": 1,
+      "inputs": [],
+      "outputs": [
+        "tx"
+      ],
+      "attributes": [
+        {
+          "name": "learning_rate",
+          "type": "float",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "b1",
+          "type": "float",
+          "required": false,
+          "default": 0.9
+        },
+        {
+          "name": "b2",
+          "type": "float",
+          "required": false,
+          "default": 0.999
+        },
+        {
+          "name": "eps",
+          "type": "float",
+          "required": false,
+          "default": 1e-08
+        },
+        {
+          "name": "weight_decay",
+          "type": "float",
+          "required": false,
+          "default": 0.0001
+        },
+        {
+          "name": "nesterov",
+          "type": "bool",
+          "required": false,
+          "default": false
+        }
+      ]
+    },
+    {
+      "name": "sgd",
+      "domain": "optax",
+      "version": 1,
+      "inputs": [],
+      "outputs": [
+        "tx"
+      ],
+      "attributes": [
+        {
+          "name": "learning_rate",
+          "type": "float",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "momentum",
+          "type": "float",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "nesterov",
+          "type": "bool",
+          "required": false,
+          "default": false
+        }
+      ]
+    },
+    {
+      "name": "cosine_decay_schedule",
+      "domain": "optax",
+      "version": 1,
+      "inputs": [],
+      "outputs": [
+        "schedule"
+      ],
+      "attributes": [
+        {
+          "name": "init_value",
+          "type": "float",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "decay_steps",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "alpha",
+          "type": "float",
+          "required": false,
+          "default": 0.0
+        },
+        {
+          "name": "exponent",
+          "type": "float",
+          "required": false,
+          "default": 1.0
+        }
+      ]
+    },
+    {
+      "name": "softmax_cross_entropy",
+      "domain": "optax",
+      "version": 1,
+      "inputs": [
+        "logits",
+        "labels"
+      ],
+      "outputs": [
+        "loss"
+      ],
+      "attributes": [
+        {
+          "name": "axis",
+          "type": "int",
+          "required": false,
+          "default": -1
+        }
+      ]
+    }
+  ]
+}

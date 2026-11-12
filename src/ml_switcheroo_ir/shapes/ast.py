@@ -10,7 +10,7 @@ import pydantic_core
 import typing_extensions
 from pydantic_core import core_schema
 
-from ml_switcheroo_ir.shapes.polynomial import Polynomial, _poly_to_symnode
+from ml_switcheroo_ir.shapes.polynomial import Polynomial, poly_to_symnode
 
 __all__ = [
     "DimensionType",
@@ -42,6 +42,8 @@ class SymNode:
         Raises:
             TypeError: If val cannot be converted into a SymNode.
         """
+        if isinstance(val, bool):
+            raise TypeError(f"Boolean value {val!r} cannot be converted to SymNode.")
         if isinstance(val, SymNode):
             return val
         if isinstance(val, SymInt):
@@ -49,9 +51,9 @@ class SymNode:
         if isinstance(val, int):
             return SymConst(val)
         if isinstance(val, str):
-            from ml_switcheroo_ir.shapes.parser import _parse_sym_str
+            from ml_switcheroo_ir.shapes.parser import parse_symbolic_expr
 
-            return _parse_sym_str(val)
+            return parse_symbolic_expr(val)
         raise TypeError(f"Cannot convert {type(val)} to SymNode")
 
     def simplify(self) -> SymNode:
@@ -70,7 +72,7 @@ class SymNode:
         """
         poly = self.to_polynomial()
         if poly is not None:
-            return _poly_to_symnode(poly)
+            return poly_to_symnode(poly)
         return self.simplify()
 
     def to_polynomial(self) -> Polynomial | None:
@@ -315,7 +317,12 @@ class SymConst(SymNode):
 
         Args:
             value (int): Constant integer value.
+
+        Raises:
+            TypeError: If value is a boolean.
         """
+        if isinstance(value, bool):
+            raise TypeError(f"Boolean value {value!r} is not a valid SymConst integer.")
         self.value: int = int(value)
 
     def simplify(self) -> SymConst:
@@ -377,15 +384,17 @@ class SymConst(SymNode):
         """
         return f"SymConst({self.value})"
 
-    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Check equality with constant.
 
         Args:
-            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
+            other (object): Other value to compare.
 
         Returns:
             bool: True if values match.
         """
+        if isinstance(other, SymInt):
+            return other == self
         if isinstance(other, SymConst):
             return self.value == other.value
         if isinstance(other, int) and not isinstance(other, bool):
@@ -472,15 +481,17 @@ class SymVar(SymNode):
         """
         return f"SymVar({self.name!r})"
 
-    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Check equality with another variable.
 
         Args:
-            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
+            other (object): Other value to compare.
 
         Returns:
             bool: True if variable names match.
         """
+        if isinstance(other, SymInt):
+            return other == self
         if isinstance(other, SymVar):
             return self.name == other.name
         return False
@@ -535,6 +546,12 @@ class SymBinaryOp(SymNode):
             "**": lambda a, b: int(a**b),
             "min": min,
             "max": max,
+            "==": lambda a, b: int(a == b),
+            "!=": lambda a, b: int(a != b),
+            "<": lambda a, b: int(a < b),
+            "<=": lambda a, b: int(a <= b),
+            ">": lambda a, b: int(a > b),
+            ">=": lambda a, b: int(a >= b),
         }
         if op in table:
             return SymConst(table[op](v1, v2))
@@ -646,12 +663,17 @@ class SymBinaryOp(SymNode):
 
         Returns:
             SymNode | None: Simplified node or None.
+
+        Raises:
+            ZeroDivisionError: If dividing by constant zero.
         """
+        if isinstance(s_right, SymConst) and s_right.value == 0:
+            raise ZeroDivisionError("Division by zero in symbolic expression.")
         if isinstance(s_right, SymConst) and s_right.value == 1:
             return s_left
         if isinstance(s_left, SymConst) and s_left.value == 0:
             return SymConst(0)
-        if s_left == s_right and not (isinstance(s_right, SymConst) and s_right.value == 0):
+        if s_left == s_right:
             return SymConst(1)
         if isinstance(s_left, SymBinaryOp) and s_left.op == "*":
             return SymBinaryOp._cancel_floordiv_mul_factor(s_left, s_right)
@@ -667,12 +689,17 @@ class SymBinaryOp(SymNode):
 
         Returns:
             SymNode | None: Simplified node or None.
+
+        Raises:
+            ZeroDivisionError: If taking modulo by constant zero.
         """
+        if isinstance(s_right, SymConst) and s_right.value == 0:
+            raise ZeroDivisionError("Modulo by zero in symbolic expression.")
         if isinstance(s_right, SymConst) and s_right.value == 1:
             return SymConst(0)
         if isinstance(s_left, SymConst) and s_left.value == 0:
             return SymConst(0)
-        if s_left == s_right and not (isinstance(s_right, SymConst) and s_right.value == 0):
+        if s_left == s_right:
             return SymConst(0)
         return None
 
@@ -715,7 +742,11 @@ class SymBinaryOp(SymNode):
             return s_left
         if isinstance(s_left, SymBinaryOp) and s_left.op == op and (s_left.left == s_right or s_left.right == s_right):
             return s_left
-        if isinstance(s_right, SymBinaryOp) and s_right.op == op and (s_right.left == s_left or s_right.right == s_left):
+        if (
+            isinstance(s_right, SymBinaryOp)
+            and s_right.op == op
+            and (s_right.left == s_left or s_right.right == s_left)
+        ):
             return s_right
         return None
 
@@ -753,9 +784,33 @@ class SymBinaryOp(SymNode):
 
         poly = self.to_polynomial()
         if poly is not None:
-            return _poly_to_symnode(poly)
+            return poly_to_symnode(poly)
 
         return SymBinaryOp(self.op, s_left, s_right)
+
+    @staticmethod
+    def _poly_pow(base_poly: Polynomial, exp: int) -> Polynomial | None:
+        """Compute non-negative integer exponentiation of a Polynomial by repeated squaring.
+
+        Args:
+            base_poly (Polynomial): Base polynomial.
+            exp (int): Integer exponent.
+
+        Returns:
+            Polynomial | None: Resulting polynomial if ``exp >= 0``, else None.
+        """
+        if exp < 0:
+            return None
+        acc = Polynomial.from_const(1)
+        cur = base_poly
+        rem = exp
+        while rem > 0:
+            if rem & 1:
+                acc = acc.mul(cur)
+            rem >>= 1
+            if rem > 0:
+                cur = cur.mul(cur)
+        return acc
 
     def to_polynomial(self) -> Polynomial | None:
         """Convert binary operation to canonical Polynomial representation.
@@ -768,14 +823,17 @@ class SymBinaryOp(SymNode):
         if p_left is None or p_right is None:
             return None
 
-        if self.op == "+":
-            return p_left.add(p_right)
-        if self.op == "-":
-            return p_left.sub(p_right)
-        if self.op == "*":
-            return p_left.mul(p_right)
-        if self.op == "//":
-            return p_left.div_exact(p_right)
+        poly_ops: dict[str, Callable[[Polynomial, Polynomial], Polynomial | None]] = {
+            "+": lambda a, b: a.add(b),
+            "-": lambda a, b: a.sub(b),
+            "*": lambda a, b: a.mul(b),
+            "//": lambda a, b: a.div_exact(b),
+        }
+        handler = poly_ops.get(self.op)
+        if handler is not None:
+            return handler(p_left, p_right)
+        if self.op == "**" and p_right.is_const():
+            return self._poly_pow(p_left, p_right.get_const())
         return None
 
     def eval(self, env: dict[str, int]) -> int:
@@ -843,15 +901,17 @@ class SymBinaryOp(SymNode):
         """
         return f"SymBinaryOp({self.op!r}, {self.left!r}, {self.right!r})"
 
-    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
-        """Check structural equality with another binary operation node.
+    def __eq__(self, other: object) -> bool:
+        """Check structural equality with another binary operation node or SymInt.
 
         Args:
-            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
+            other (object): Other value to compare.
 
         Returns:
-            bool: True if other is a SymBinaryOp with identical op and operands.
+            bool: True if equal.
         """
+        if isinstance(other, SymInt):
+            return other == self
         if not isinstance(other, SymBinaryOp) or self.op != other.op:
             return False
         if self.left == other.left and self.right == other.right:
@@ -859,11 +919,16 @@ class SymBinaryOp(SymNode):
         return self.op in ("min", "max") and self.left == other.right and self.right == other.left
 
     def __hash__(self) -> int:
-        """Compute hash for binary operation.
+        """Compute hash consistent with canonical polynomial equivalence and SymInt.
 
         Returns:
-            int: Hash integer based on op, left, and right operands.
+            int: Hash integer.
         """
+        poly = self.to_polynomial()
+        if poly is not None:
+            if poly.is_const():
+                return hash(poly.get_const())
+            return hash(poly.canonical_str())
         if self.op in ("min", "max"):
             return hash((self.op, frozenset((self.left, self.right))))
         return hash((self.op, self.left, self.right))
@@ -952,15 +1017,17 @@ class SymUnaryOp(SymNode):
         """
         return f"SymUnaryOp({self.op!r}, {self.operand!r})"
 
-    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Check structural equality.
 
         Args:
-            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
+            other (object): Other value to compare.
 
         Returns:
             bool: True if op and operand match.
         """
+        if isinstance(other, SymInt):
+            return other == self
         if not isinstance(other, SymUnaryOp):
             return False
         return self.op == other.op and self.operand == other.operand
@@ -996,18 +1063,59 @@ class SymPiecewise(SymNode):
         self.cases: list[tuple[SymCondition, SymNode]] = list(cases or [])
         self.default: SymNode = default if default is not None else SymConst(0)
 
+    @staticmethod
+    def _canonicalize_minmax_piecewise(
+        cases: list[tuple[SymCondition, SymNode]],
+        default: SymNode,
+    ) -> SymNode:
+        """Canonicalize a two-way min/max ``SymPiecewise`` node so operand order is symmetric.
+
+        Args:
+            cases (list[tuple[SymCondition, SymNode]]): Simplified piecewise condition branches.
+            default (SymNode): Simplified default fallback expression.
+
+        Returns:
+            SymNode: Canonicalized ``SymPiecewise`` or folded operand when operands are equal.
+        """
+        if len(cases) == 1:
+            cond, expr = cases[0]
+            if (
+                isinstance(cond, SymBinaryOp)
+                and cond.op in ("<=", ">=")
+                and expr == cond.left
+                and default == cond.right
+            ):
+                if expr == default:
+                    return expr
+                if str(default) < str(expr):
+                    return SymPiecewise(
+                        cases=[(SymBinaryOp(cond.op, default, expr), default)],
+                        default=expr,
+                    )
+        return SymPiecewise(cases, default)
+
     def simplify(self) -> SymNode:
-        """Simplify piecewise expression.
+        """Simplify piecewise expression, folding constant conditions and symmetric min/max forms.
 
         Returns:
             SymNode: Simplified expression node.
         """
         simplified_cases: list[tuple[SymCondition, SymNode]] = []
         for cond, expr in self.cases:
+            s_expr = expr.simplify()
             if isinstance(cond, SymNode):
-                cond = cond.simplify()
-            simplified_cases.append((cond, expr.simplify()))
-        return SymPiecewise(simplified_cases, self.default.simplify())
+                s_cond = cond.simplify()
+                if isinstance(s_cond, SymConst):
+                    if s_cond.value != 0:
+                        return s_expr
+                else:
+                    simplified_cases.append((s_cond, s_expr))
+            else:
+                simplified_cases.append((cond, s_expr))
+        s_def = self.default.simplify()
+        if not simplified_cases:
+            return s_def
+        return self._canonicalize_minmax_piecewise(simplified_cases, s_def)
 
     def eval(self, env: dict[str, int]) -> int:
         """Evaluate piecewise expression given environment bindings.
@@ -1017,11 +1125,8 @@ class SymPiecewise(SymNode):
 
         Returns:
             int: Evaluated integer result from the first matching branch or default.
-
-        Raises:
-            TypeError: If a condition predicate is not a callable, SymNode, bool, or str.
         """
-        from ml_switcheroo_ir.shapes.parser import _parse_sym_str
+        from ml_switcheroo_ir.shapes.parser import parse_symbolic_expr
 
         for cond, expr in self.cases:
             if callable(cond):
@@ -1031,7 +1136,7 @@ class SymPiecewise(SymNode):
             elif isinstance(cond, bool):
                 is_met = cond
             else:
-                parsed = _parse_sym_str(cond)
+                parsed = parse_symbolic_expr(cond)
                 is_met = bool(parsed.eval(env))
             if is_met:
                 return expr.eval(env)
@@ -1066,15 +1171,17 @@ class SymPiecewise(SymNode):
         """
         return f"SymPiecewise(cases={self.cases!r}, default={self.default!r})"
 
-    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Check structural equality.
 
         Args:
-            other (SymNode | SymInt | int | float | str | bool | None): Other value to compare.
+            other (object): Other value to compare.
 
         Returns:
             bool: True if cases and default match.
         """
+        if isinstance(other, SymInt):
+            return other == self
         if not isinstance(other, SymPiecewise):
             return False
         return self.cases == other.cases and self.default == other.default
@@ -1102,7 +1209,12 @@ class SymInt:
         Args:
             name_or_expr (str | int | SymNode | SymInt): The variable name, expression,
                 integer, or underlying SymNode.
+
+        Raises:
+            TypeError: If name_or_expr is a boolean value.
         """
+        if isinstance(name_or_expr, bool):
+            raise TypeError(f"Boolean value {name_or_expr!r} is not a valid SymInt.")
         if isinstance(name_or_expr, SymInt):
             self.node: SymNode = name_or_expr.node
             self.expr: str = name_or_expr.expr
@@ -1367,16 +1479,18 @@ class SymInt:
         Returns:
             int: Hash integer.
         """
-        canon = self.node.canonical()
-        if isinstance(canon, SymConst):
-            return hash(canon.value)
-        return hash(str(canon))
+        poly = self.node.to_polynomial()
+        if poly is not None:
+            if poly.is_const():
+                return hash(poly.get_const())
+            return hash(poly.canonical_str())
+        return hash(self.node.simplify())
 
-    def __eq__(self, other: SymNode | SymInt | int | float | str | bool | None) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Evaluate equality using canonical polynomial consistency.
 
         Args:
-            other (SymNode | SymInt | int | float | str | bool | None): The other value to compare.
+            other (object): The other value to compare.
 
         Returns:
             bool: True if expressions are mathematically consistent.

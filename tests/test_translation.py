@@ -200,20 +200,22 @@ def test_translation_engine_merge_roles() -> None:
         engine = ParameterTranslationEngine()
 
         # Check that roles were merged correctly
-        op1_roles = engine.translations["matmul"]["roles"]
+        op1_roles = engine.translations["matmul"].roles
         assert "new_role" in op1_roles
         assert "jax" in op1_roles["weight"]
         assert "kernel_fallback" in op1_roles["weight"]["tf"]
         assert "kernel_main" in op1_roles["weight"]["tf"]
         assert "b" in op1_roles["bias"]["torch"]
 
-        # Check that aliases were canonicalized
+        # Check that aliases were canonicalized with isolated deep copies
         assert "kernel" in op1_roles
-        assert op1_roles["kernel"] is op1_roles["weight"]
+        assert op1_roles["kernel"] == op1_roles["weight"]
+        assert op1_roles["kernel"] is not op1_roles["weight"]
 
-        op2_roles = engine.translations["op2"]["roles"]
+        op2_roles = engine.translations["op2"].roles
         assert "weight" in op2_roles
-        assert op2_roles["weight"] is op2_roles["kernel"]
+        assert op2_roles["weight"] == op2_roles["kernel"]
+        assert op2_roles["weight"] is not op2_roles["kernel"]
 
 
 def test_parameter_translation_engine_bundled_fallback() -> None:
@@ -226,7 +228,7 @@ def test_parameter_translation_engine_bundled_fallback() -> None:
             "/nonexistent_snapshots_dir",
         ),
         patch(
-            "ml_switcheroo_ir.translation.DEFAULT_SNAPSHOT_DIR",
+            "ml_switcheroo_ir.snapshots.DEFAULT_SNAPSHOT_DIR",
             "/nonexistent_snapshots_dir",
         ),
     ):

@@ -12,7 +12,8 @@ from collections.abc import Iterable, Mapping, Sequence
 import pydantic
 import typing_extensions
 
-from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR
+from ml_switcheroo_ir.schema.ghost import StandardMap
+from ml_switcheroo_ir.snapshots import get_effective_snapshot_dir
 from ml_switcheroo_ir.types import AttributeValue, JsonValue
 
 _logger = logging.getLogger(__name__)
@@ -31,7 +32,15 @@ def _is_4d_nested_sequence(
     Returns:
         typing.TypeGuard[Sequence[Sequence[Sequence[Sequence[JsonValue]]]]]: True if 4D nested sequence.
     """
-    return isinstance(val, (list, tuple)) and len(val) > 0 and isinstance(val[0], (list, tuple)) and len(val[0]) > 0 and isinstance(val[0][0], (list, tuple)) and len(val[0][0]) > 0 and isinstance(val[0][0][0], (list, tuple))
+    return (
+        isinstance(val, (list, tuple))
+        and len(val) > 0
+        and isinstance(val[0], (list, tuple))
+        and len(val[0]) > 0
+        and isinstance(val[0][0], (list, tuple))
+        and len(val[0][0]) > 0
+        and isinstance(val[0][0][0], (list, tuple))
+    )
 
 
 class OperationTranslationSpec(pydantic.BaseModel):
@@ -46,52 +55,6 @@ class OperationTranslationSpec(pydantic.BaseModel):
 
     roles: dict[str, RoleFrameworkMap] = pydantic.Field(default_factory=dict)
     defaults: dict[str, dict[str, JsonValue]] | None = None
-
-    def __getitem__(self, key: str) -> dict[str, RoleFrameworkMap]:
-        """Support dictionary-style lookup for 'roles'.
-
-        Args:
-            key (str): Field name ('roles').
-
-        Returns:
-            dict[str, RoleFrameworkMap]: Roles mapping.
-        """
-        del key
-        return self.roles
-
-    def get(
-        self,
-        key: str,
-        default: dict[str, RoleFrameworkMap] | None = None,
-    ) -> dict[str, RoleFrameworkMap]:
-        """Retrieve 'roles' mapping or default.
-
-        Args:
-            key (str): Field key ('roles').
-            default (dict[str, RoleFrameworkMap] | None): Fallback value.
-
-        Returns:
-            dict[str, RoleFrameworkMap]: Roles mapping or fallback.
-        """
-        del key, default
-        return self.roles
-
-    def setdefault(
-        self,
-        key: str,
-        default: dict[str, RoleFrameworkMap],
-    ) -> dict[str, RoleFrameworkMap]:
-        """Return 'roles' mapping or set default.
-
-        Args:
-            key (str): Field key ('roles').
-            default (dict[str, RoleFrameworkMap]): Default roles mapping.
-
-        Returns:
-            dict[str, RoleFrameworkMap]: Roles mapping.
-        """
-        del key, default
-        return self.roles
 
 
 class TranslationMap(pydantic.BaseModel):
@@ -168,17 +131,19 @@ class TranslationMap(pydantic.BaseModel):
 
     def __eq__(
         self,
-        other: TranslationMap | Mapping[str, JsonValue | OperationTranslationSpec] | JsonValue,
+        other: object,
     ) -> bool:
         """Compare equality against another TranslationMap or dict.
 
         Args:
-            other (TranslationMap | Mapping[str, JsonValue | OperationTranslationSpec] | JsonValue): Other value to compare.
+            other (object): Other value to compare.
 
         Returns:
             bool: True if equivalent.
         """
-        return isinstance(other, Mapping) and {k: v.model_dump(exclude_none=True) for k, v in self.operations.items()} == dict(other)
+        return isinstance(other, Mapping) and {
+            k: v.model_dump(exclude_none=True) for k, v in self.operations.items()
+        } == dict(other)
 
     def values(self) -> Iterable[OperationTranslationSpec]:
         """Return operation translation specs.
@@ -283,23 +248,23 @@ class SplittableTensorProtocol(typing.Protocol):
         """
 
 
-if typing.TYPE_CHECKING:
-    NestedTensorSequence: typing_extensions.TypeAlias = Sequence[int | float | bool | str | "NestedTensorSequence"]
-    TensorLike: typing_extensions.TypeAlias = TensorLikeProtocol | TransposableTensorProtocol | PermutableTensorProtocol | SplittableTensorProtocol | list[list[list[list[JsonValue]]]] | NestedTensorSequence | Sequence[JsonValue] | Mapping[str, JsonValue] | tuple[str, tuple[int, ...]] | JsonValue
-else:
-    NestedTensorSequence = Sequence
-    TensorLike = (
-        TensorLikeProtocol,
-        TransposableTensorProtocol,
-        PermutableTensorProtocol,
-        SplittableTensorProtocol,
-        Sequence,
-        Mapping,
-        int,
-        float,
-        bool,
-        str,
-    )
+NestedTensorSequence: typing_extensions.TypeAlias = Sequence[
+    typing.Union[int, float, bool, str, "NestedTensorSequence"]
+]
+TensorLike: typing_extensions.TypeAlias = typing.Union[
+    TensorLikeProtocol,
+    TransposableTensorProtocol,
+    PermutableTensorProtocol,
+    SplittableTensorProtocol,
+    list[list[list[list[JsonValue]]]],
+    Sequence[Sequence[JsonValue]],
+    NestedTensorSequence,
+    Sequence[JsonValue],
+    Sequence["TensorLike"],
+    Mapping[str, JsonValue],
+    tuple[str, tuple[int, ...]],
+    JsonValue,
+]
 
 
 class PermutedWeightDescriptor(typing.NamedTuple):
@@ -690,11 +655,12 @@ class ParameterTranslationEngine:
         """Initialize translation engine with parameter translation mapping.
 
         Args:
-            translations (TranslationMap | Mapping[str, OperationTranslationSpec | Mapping[str, dict[str, RoleFrameworkMap]]] | None):
-                Pre-loaded parameter translations mapping.
+            translations: Pre-loaded parameter translations mapping.
             concept_map_path (str | None): Path to concept_map.json file.
         """
-        self.translations: TranslationMap = TranslationMap.model_validate(translations) if translations is not None else TranslationMap()
+        self.translations: TranslationMap = (
+            TranslationMap.model_validate(translations) if translations is not None else TranslationMap()
+        )
         if not self.translations:
             self._load_default_translations(concept_map_path)
 
@@ -704,7 +670,7 @@ class ParameterTranslationEngine:
             if op not in self.translations:
                 self.translations[op] = copy.deepcopy(op_dict)
                 continue
-            roles = self.translations[op].setdefault("roles", {})
+            roles = self.translations[op].roles
             for r_name, r_map in op_dict.get("roles", {}).items():
                 if r_name not in roles:
                     roles[r_name] = copy.deepcopy(r_map)
@@ -718,10 +684,10 @@ class ParameterTranslationEngine:
                                     roles[r_name][fw].append(p)
 
     def _canonicalize_role_aliases(self) -> None:
-        """Synchronize role aliases (e.g. 'kernel' <-> 'weight') across all operations."""
+        """Synchronize role aliases (e.g. 'kernel' <-> 'weight') across all operations using isolated deep copies."""
         role_aliases = {"kernel": "weight"}
         for op_data in self.translations.values():
-            roles = op_data.get("roles", {})
+            roles = op_data.roles
             for alias, canonical in role_aliases.items():
                 if alias in roles and canonical in roles:
                     for fw, fw_params in roles[alias].items():
@@ -731,11 +697,11 @@ class ParameterTranslationEngine:
                             for p in fw_params:
                                 if p not in roles[canonical][fw]:
                                     roles[canonical][fw].append(p)
-                    roles[alias] = roles[canonical]
+                    roles[alias] = copy.deepcopy(roles[canonical])
                 elif alias in roles:
-                    roles[canonical] = roles[alias]
+                    roles[canonical] = copy.deepcopy(roles[alias])
                 elif canonical in roles:
-                    roles[alias] = roles[canonical]
+                    roles[alias] = copy.deepcopy(roles[canonical])
 
     def _load_default_translations(self, path: str | None = None) -> None:
         """Load default translations from concept_map.json in snapshot directory or package root.
@@ -746,9 +712,10 @@ class ParameterTranslationEngine:
         if path is not None:
             candidates = [path]
         else:
+            effective_dir = get_effective_snapshot_dir()
             candidates = [
-                os.path.join(DEFAULT_SNAPSHOT_DIR, "concept_map.json"),
-                os.path.join(os.path.dirname(DEFAULT_SNAPSHOT_DIR), "concept_map.json"),
+                os.path.join(effective_dir, "concept_map.json"),
+                os.path.join(os.path.dirname(effective_dir), "concept_map.json"),
             ]
         for cand in candidates:
             if cand and os.path.isfile(cand):
@@ -763,6 +730,29 @@ class ParameterTranslationEngine:
         if path is None:
             self._merge_fallback_translations()
         self._canonicalize_role_aliases()
+
+    def _find_matching_roles(
+        self,
+        operation: str,
+        param_name: str,
+        source_framework: str,
+    ) -> list[tuple[str, RoleFrameworkMap]]:
+        """Return all ``(role_name, fw_mappings)`` pairs matching ``param_name`` in ``source_framework``.
+
+        Args:
+            operation (str): Canonical operation name.
+            param_name (str): Source parameter name.
+            source_framework (str): Source framework identifier.
+
+        Returns:
+            list[tuple[str, RoleFrameworkMap]]: Matching role specifications in declaration order.
+        """
+        roles = self.translations[operation].roles
+        return [
+            (role_name, fw_mappings)
+            for role_name, fw_mappings in roles.items()
+            if param_name in fw_mappings.get(source_framework, [])
+        ]
 
     def translate_parameter(
         self,
@@ -789,16 +779,52 @@ class ParameterTranslationEngine:
         if operation not in self.translations:
             raise KeyError(f"No parameter translations defined for operation '{operation}'.")
 
-        roles = self.translations[operation].get("roles", {})
-        for role_name, fw_mappings in roles.items():
-            src_params = fw_mappings.get(source_framework, [])
-            if param_name in src_params:
-                target_params = fw_mappings.get(target_framework, [])
-                if not target_params:
-                    raise ValueError(f"Target framework '{target_framework}' does not support role '{role_name}' for operation '{operation}'.")
-                return str(target_params[0])
+        matches = self._find_matching_roles(operation, param_name, source_framework)
+        if matches:
+            role_name, fw_mappings = matches[0]
+            target_params = fw_mappings.get(target_framework, [])
+            if not target_params:
+                raise ValueError(
+                    f"Target framework '{target_framework}' does not support role '{role_name}' "
+                    f"for operation '{operation}'."
+                )
+            return str(target_params[0])
 
-        raise KeyError(f"Parameter '{param_name}' is not recognized as a valid '{source_framework}' parameter for '{operation}'.")
+        raise KeyError(
+            f"Parameter '{param_name}' is not recognized as a valid '{source_framework}' parameter for '{operation}'."
+        )
+
+    def _unpack_packed_tuple_attribute(
+        self,
+        matches: list[tuple[str, RoleFrameworkMap]],
+        val: Sequence[AttributeValue],
+        target_framework: str,
+        result: dict[str, AttributeValue],
+    ) -> bool:
+        """Unpack a packed tuple attribute (e.g. PyTorch ``betas=(0.9, 0.999)``) into distinct target scalar roles.
+
+        Args:
+            matches (list[tuple[str, RoleFrameworkMap]]): Roles sharing this source parameter name.
+            val (Sequence[AttributeValue]): Sequence value to unpack.
+            target_framework (str): Target framework identifier.
+            result (dict[str, AttributeValue]): Output dictionary to populate.
+
+        Returns:
+            bool: True if unpacked across distinct target scalar parameters, False otherwise.
+        """
+        if len(matches) < 2 or len(val) != len(matches):
+            return False
+        tgt_keys: list[str] = []
+        for _, fw_map in matches:
+            t_list = fw_map.get(target_framework, [])
+            if not t_list:
+                return False
+            tgt_keys.append(str(t_list[0]))
+        if len(set(tgt_keys)) != len(tgt_keys):
+            return False
+        for tgt_k, elem in zip(tgt_keys, val):
+            result[tgt_k] = elem
+        return True
 
     def translate_attributes(
         self,
@@ -809,6 +835,9 @@ class ParameterTranslationEngine:
         allow_passthrough: bool = False,
     ) -> dict[str, AttributeValue]:
         """Translate all attributes/keyword arguments from source framework to target framework.
+
+        Supports 1-to-1 renames, 1-to-many tuple unpacking (e.g. ``betas`` -> ``b1``, ``b2``),
+        and many-to-1 tuple packing (e.g. ``b1``, ``b2`` -> ``betas``).
 
         Args:
             operation (str): Canonical operation name.
@@ -825,20 +854,122 @@ class ParameterTranslationEngine:
             ValueError: If unknown parameter is encountered and allow_passthrough is False.
         """
         result: dict[str, AttributeValue] = {}
+        packed_buckets: dict[str, list[AttributeValue]] = {}
+
         for k, v in attributes.items():
             try:
+                if operation not in self.translations:
+                    raise KeyError(f"No parameter translations defined for operation '{operation}'.")
+                matches = self._find_matching_roles(operation, k, source_framework)
+                if (
+                    len(matches) > 1
+                    and isinstance(v, (tuple, list))
+                    and self._unpack_packed_tuple_attribute(matches, v, target_framework, result)
+                ):
+                    continue
                 translated_key = self.translate_parameter(
                     operation=operation,
                     param_name=k,
                     source_framework=source_framework,
                     target_framework=target_framework,
                 )
-                result[translated_key] = v
+                # Detect many-to-1 collision onto a shared packed parameter (e.g. b1 + b2 -> betas)
+                target_role_count = sum(
+                    1
+                    for r_map in self.translations[operation].roles.values()
+                    if translated_key in r_map.get(target_framework, []) and len(r_map.get(source_framework, [])) > 0
+                )
+                if target_role_count > 1 and not isinstance(v, (tuple, list)):
+                    packed_buckets.setdefault(translated_key, []).append(v)
+                    result[translated_key] = (
+                        tuple(packed_buckets[translated_key]) if len(packed_buckets[translated_key]) > 1 else v
+                    )
+                else:
+                    result[translated_key] = v
             except (KeyError, ValueError) as err:
                 if allow_passthrough:
                     result[k] = v
                 else:
-                    raise ValueError(f"Ungrounded parameter '{k}' during translation from '{source_framework}' to '{target_framework}': {err}") from err
+                    raise ValueError(
+                        f"Ungrounded parameter '{k}' during translation from "
+                        f"'{source_framework}' to '{target_framework}': {err}"
+                    ) from err
+        return result
+
+    def register_standard_map(
+        self,
+        operation: str,
+        framework: str,
+        spec: StandardMap,
+    ) -> None:
+        """Register a Ghost Protocol StandardMap specification for an operation and framework.
+
+        Args:
+            operation (str): Canonical middle-layer operation name.
+            framework (str): Target framework identifier (e.g. 'torch', 'jax', 'optax').
+            spec (StandardMap): Framework parameter mapping specification.
+        """
+        if operation not in self.translations:
+            self.translations[operation] = {"roles": {}}
+        roles = self.translations[operation].roles
+        if spec.args is not None:
+            for role_name, target_spec in spec.args.items():
+                target_param: str | None = None
+                if isinstance(target_spec, str):
+                    target_param = spec.pack_to_tuple if spec.pack_to_tuple is not None else target_spec
+                elif spec.pack_to_tuple is not None and target_spec is not None:
+                    target_param = spec.pack_to_tuple
+                if target_param is not None:
+                    role_entry = roles.setdefault(role_name, {})
+                    fw_list = role_entry.setdefault(framework, [])
+                    if target_param not in fw_list:
+                        fw_list.append(target_param)
+        self._canonicalize_role_aliases()
+
+    def apply_standard_map(
+        self,
+        spec: StandardMap,
+        attributes: Mapping[str, AttributeValue],
+        allow_passthrough: bool = False,
+    ) -> dict[str, AttributeValue]:
+        """Transform middle-layer attributes using a Ghost Protocol StandardMap specification.
+
+        Args:
+            spec (StandardMap): Target framework mapping rule (renames, tuple packing, injections).
+            attributes (Mapping[str, AttributeValue]): Canonical role-keyed attribute values.
+            allow_passthrough (bool): Whether unmapped attributes are preserved verbatim.
+
+        Returns:
+            dict[str, AttributeValue]: Transformed framework keyword arguments.
+
+        Raises:
+            ValueError: If an unmapped attribute is encountered while ``allow_passthrough`` is False.
+        """
+        result: dict[str, AttributeValue] = {}
+        packed_values: list[AttributeValue] = []
+        args_map = spec.args or {}
+
+        for key, value in attributes.items():
+            if key in args_map:
+                mapped = args_map[key]
+                if mapped is None:
+                    continue
+                if spec.pack_to_tuple is not None and isinstance(mapped, str):
+                    packed_values.append(value)
+                elif isinstance(mapped, str):
+                    result[mapped] = value
+                else:
+                    result[key] = mapped
+            elif allow_passthrough:
+                result[key] = value
+            else:
+                raise ValueError(f"Ungrounded attribute '{key}' is not mapped in StandardMap '{spec.api}'.")
+
+        if spec.pack_to_tuple is not None and packed_values:
+            result[spec.pack_to_tuple] = tuple(packed_values)
+        if spec.inject_args is not None:
+            for inj_k, inj_v in spec.inject_args.items():
+                result[inj_k] = inj_v
         return result
 
     def translate_weight_name(
@@ -957,44 +1088,100 @@ class ParameterTranslationEngine:
             return self._permute_4d_nested_sequence(weights, perm)
         return PermutedWeightDescriptor(weights, tuple(perm))
 
+    @staticmethod
+    def _split_sequence_qkv(
+        seq: Sequence[TensorLike],
+        q_size: int,
+        kv_size: int,
+        split_dim: int,
+    ) -> tuple[TensorLike, TensorLike, TensorLike]:
+        """Split a 1D or 2D Python list/tuple QKV weight along ``split_dim``.
+
+        Args:
+            seq (Sequence[TensorLike]): Input 1D or 2D Python sequence.
+            q_size (int): Query projection size (`num_heads * head_dim`).
+            kv_size (int): Key/Value projection size (`num_kv_heads * head_dim`).
+            split_dim (int): Axis along which Q, K, and V are concatenated (0 or 1 / -1).
+
+        Returns:
+            tuple[TensorLike, TensorLike, TensorLike]: ``(q, k, v)`` sequences preserving list/tuple type.
+
+        Raises:
+            ValueError: If sequence dimensions do not match ``q_size + 2 * kv_size`` along ``split_dim``.
+        """
+        total_expected = q_size + 2 * kv_size
+        is_tup = isinstance(seq, tuple)
+        if split_dim in (1, -1) and seq and all(isinstance(r, (list, tuple)) for r in seq):
+            rows: list[Sequence[TensorLike]] = [r for r in seq if isinstance(r, (list, tuple))]
+            if any(len(r) != total_expected for r in rows):
+                raise ValueError(f"2D QKV sequence inner size must equal {total_expected} along split_dim={split_dim}.")
+            if is_tup:
+                q_tup: Sequence[Sequence[TensorLike]] = tuple(tuple(r[:q_size]) for r in rows)
+                k_tup: Sequence[Sequence[TensorLike]] = tuple(tuple(r[q_size : q_size + kv_size]) for r in rows)
+                v_tup: Sequence[Sequence[TensorLike]] = tuple(tuple(r[q_size + kv_size :]) for r in rows)
+                return (q_tup, k_tup, v_tup)
+            q_lst: Sequence[Sequence[TensorLike]] = [list(r[:q_size]) for r in rows]
+            k_lst: Sequence[Sequence[TensorLike]] = [list(r[q_size : q_size + kv_size]) for r in rows]
+            v_lst: Sequence[Sequence[TensorLike]] = [list(r[q_size + kv_size :]) for r in rows]
+            return (q_lst, k_lst, v_lst)
+
+        if len(seq) != total_expected:
+            raise ValueError(
+                f"QKV sequence length ({len(seq)}) does not match expected {total_expected} (q={q_size}, kv={kv_size})."
+            )
+        q_flat: TensorLike = tuple(seq[:q_size]) if is_tup else list(seq[:q_size])
+        k_flat: TensorLike = tuple(seq[q_size : q_size + kv_size]) if is_tup else list(seq[q_size : q_size + kv_size])
+        v_flat: TensorLike = tuple(seq[q_size + kv_size :]) if is_tup else list(seq[q_size + kv_size :])
+        return (q_flat, k_flat, v_flat)
+
     def split_qkv_weights(
         self,
         qkv_weight: TensorLike,
         num_heads: int,
         head_dim: int,
         split_dim: int = 0,
+        num_kv_heads: int | None = None,
     ) -> tuple[
         TensorLike | SplitQKVSliceDescriptor,
         TensorLike | SplitQKVSliceDescriptor,
         TensorLike | SplitQKVSliceDescriptor,
     ]:
-        """Split combined QKV projection weights into separate Q, K, and V weights.
+        """Split combined QKV projection weights into separate Q, K, and V weights (MHA, GQA, and MQA).
 
         Args:
             qkv_weight (TensorLike): Combined QKV weight array or sequence.
-            num_heads (int): Number of attention heads.
+            num_heads (int): Number of query attention heads.
             head_dim (int): Dimensionality of each attention head.
             split_dim (int): Dimension along which to split (default 0).
+            num_kv_heads (int | None): Optional key/value head count for GQA/MQA (defaults to ``num_heads``).
 
         Returns:
-            tuple[TensorLike | SplitQKVSliceDescriptor, TensorLike | SplitQKVSliceDescriptor, TensorLike | SplitQKVSliceDescriptor]:
-                (q_weight, k_weight, v_weight) tuple.
+            tuple[
+                TensorLike | SplitQKVSliceDescriptor,
+                TensorLike | SplitQKVSliceDescriptor,
+                TensorLike | SplitQKVSliceDescriptor,
+            ]: ``(q_weight, k_weight, v_weight)`` tuple.
 
         Raises:
-            ValueError: If num_heads or head_dim is non-positive.
+            ValueError: If head dimensions are non-positive or concrete sequence length mismatches.
         """
-        if num_heads <= 0 or head_dim <= 0:
-            raise ValueError(f"num_heads ({num_heads}) and head_dim ({head_dim}) must be positive.")
+        kv_heads = num_heads if num_kv_heads is None else num_kv_heads
+        if num_heads <= 0 or head_dim <= 0 or kv_heads <= 0:
+            raise ValueError(
+                f"num_heads ({num_heads}), num_kv_heads ({kv_heads}), and head_dim ({head_dim}) must be positive."
+            )
 
-        proj_size = num_heads * head_dim
-        if not isinstance(qkv_weight, (str, bytes)) and isinstance(qkv_weight, SplittableTensorProtocol):
-            parts = qkv_weight.split(proj_size, dim=split_dim)
+        q_size = num_heads * head_dim
+        kv_size = kv_heads * head_dim
+        if (
+            not isinstance(qkv_weight, (str, bytes))
+            and isinstance(qkv_weight, SplittableTensorProtocol)
+            and q_size == kv_size
+        ):
+            parts = qkv_weight.split(q_size, dim=split_dim)
             return (parts[0], parts[1], parts[2])
-        if isinstance(qkv_weight, (list, tuple)) and len(qkv_weight) == 3 * proj_size:
-            q = qkv_weight[:proj_size]
-            k = qkv_weight[proj_size : 2 * proj_size]
-            v = qkv_weight[2 * proj_size :]
-            return (q, k, v)
+        if isinstance(qkv_weight, (list, tuple)):
+            return self._split_sequence_qkv(qkv_weight, q_size, kv_size, split_dim)
         return (
             SplitQKVSliceDescriptor("q", qkv_weight),
             SplitQKVSliceDescriptor("k", qkv_weight),
@@ -1019,7 +1206,32 @@ class ParameterTranslationEngine:
         Returns:
             TensorLike | MergedQKVWeightDescriptor:
                 Merged QKV weight object.
+
+        Raises:
+            ValueError: If 2D sequences concatenated along dim 1 have mismatched outer row counts.
         """
-        if isinstance(q_weight, list) and isinstance(k_weight, list) and isinstance(v_weight, list):
-            return [*q_weight, *k_weight, *v_weight]
+        if (
+            isinstance(q_weight, (list, tuple))
+            and isinstance(k_weight, (list, tuple))
+            and isinstance(v_weight, (list, tuple))
+        ):
+            is_tup = isinstance(q_weight, tuple) and isinstance(k_weight, tuple) and isinstance(v_weight, tuple)
+            if (
+                concat_dim in (1, -1)
+                and q_weight
+                and all(isinstance(r, (list, tuple)) for r in q_weight)
+                and all(isinstance(r, (list, tuple)) for r in k_weight)
+                and all(isinstance(r, (list, tuple)) for r in v_weight)
+            ):
+                if not (len(q_weight) == len(k_weight) == len(v_weight)):
+                    raise ValueError("Cannot concatenate 2D Q, K, V sequences along dim 1 with mismatched row counts.")
+                rows_q = [r for r in q_weight if isinstance(r, (list, tuple))]
+                rows_k = [r for r in k_weight if isinstance(r, (list, tuple))]
+                rows_v = [r for r in v_weight if isinstance(r, (list, tuple))]
+                merged_rows: list[Sequence[TensorLike]] = [
+                    tuple([*rq, *rk, *rv]) if is_tup else [*rq, *rk, *rv] for rq, rk, rv in zip(rows_q, rows_k, rows_v)
+                ]
+                return tuple(merged_rows) if is_tup else merged_rows
+            merged_flat = [*q_weight, *k_weight, *v_weight]
+            return tuple(merged_flat) if is_tup else merged_flat
         return MergedQKVWeightDescriptor("qkv", (q_weight, k_weight, v_weight), concat_dim)

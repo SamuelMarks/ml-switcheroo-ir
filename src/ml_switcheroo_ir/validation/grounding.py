@@ -20,7 +20,6 @@ from ml_switcheroo_ir.schema.onnx_registry import OpSchema
 from ml_switcheroo_ir.snapshots import (
     get_effective_snapshot_dir as _get_snapshot_dir,
 )
-from ml_switcheroo_ir.types import JsonValue
 from ml_switcheroo_ir.validation.core import (
     KNOWN_SYNONYMS,
     ValidationError,
@@ -44,10 +43,16 @@ __all__ = [
     "audit_graph_grounding",
 ]
 
-if typing.TYPE_CHECKING:
-    SnapshotManifestNode: typing_extensions.TypeAlias = str | int | float | bool | None | Collection["SnapshotManifestNode"] | Sequence["SnapshotManifestNode"] | Mapping[str, "SnapshotManifestNode"]
-else:
-    SnapshotManifestNode: typing_extensions.TypeAlias = JsonValue
+SnapshotManifestNode: typing_extensions.TypeAlias = typing.Union[
+    str,
+    int,
+    float,
+    bool,
+    None,
+    Collection["SnapshotManifestNode"],
+    Sequence["SnapshotManifestNode"],
+    Mapping[str, "SnapshotManifestNode"],
+]
 
 SnapshotManifestType: typing_extensions.TypeAlias = typing.Union[
     Mapping[str, SnapshotManifestNode],
@@ -111,53 +116,14 @@ class GroundingEngineProtocol(typing.Protocol):
         """
 
 
-class GroundingAuditReport(pydantic.BaseModel):
-    """Audit report detailing graph grounding against ground-truth framework snapshots.
+class DiagnosticSeverity(str, Enum):
+    """Severity classification for grounding diagnostics.
 
     Attributes:
-        total_nodes (int): Total number of nodes in graph.
-        grounded_count (int): Number of nodes successfully grounded against snapshot.
-        ungrounded_count (int): Number of ungrounded or hallucinated nodes.
-        hallucination_score (float): Percentage of nodes that are ungrounded (0.0 to 1.0).
-        diagnostics (list[ValidationError]): Diagnostic error reports.
+        INFO (DiagnosticSeverity): Informational grounding note.
+        WARNING (DiagnosticSeverity): Non-fatal grounding discrepancy warning.
+        ERROR (DiagnosticSeverity): Fatal ungrounded or invalid symbol error.
     """
-
-    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
-
-    total_nodes: int
-    grounded_count: int
-    ungrounded_count: int
-    hallucination_score: float
-    diagnostics: list[ValidationError]
-
-    def __init__(
-        self,
-        total_nodes: int,
-        grounded_count: int,
-        ungrounded_count: int,
-        hallucination_score: float,
-        diagnostics: list[ValidationError],
-    ) -> None:
-        """Initialize GroundingAuditReport.
-
-        Args:
-            total_nodes (int): Total number of nodes in graph.
-            grounded_count (int): Number of nodes successfully grounded against snapshot.
-            ungrounded_count (int): Number of ungrounded or hallucinated nodes.
-            hallucination_score (float): Percentage of nodes that are ungrounded (0.0 to 1.0).
-            diagnostics (list[ValidationError]): Diagnostic error reports.
-        """
-        super().__init__(
-            total_nodes=total_nodes,
-            grounded_count=grounded_count,
-            ungrounded_count=ungrounded_count,
-            hallucination_score=hallucination_score,
-            diagnostics=diagnostics,
-        )
-
-
-class DiagnosticSeverity(str, Enum):
-    """Severity classification for grounding diagnostics."""
 
     INFO = "INFO"
     WARNING = "WARNING"
@@ -172,7 +138,10 @@ class GroundingDiagnostic(pydantic.BaseModel):
         message (str): Human-readable diagnostic explanation.
         severity (DiagnosticSeverity): Severity level of the diagnostic.
         suggested_fix (str | None): Suggested replacement or typo correction.
+        node_id (str): Optional graph node identifier associated with this diagnostic.
     """
+
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     field: str = pydantic.Field(description="The component, attribute, or operand evaluated.")
     message: str = pydantic.Field(description="Human-readable diagnostic explanation.")
@@ -184,23 +153,55 @@ class GroundingDiagnostic(pydantic.BaseModel):
         default=None,
         description="Suggested replacement or typo correction.",
     )
+    node_id: str = pydantic.Field(default="", description="Optional graph node ID.")
+
+    @property
+    def attribute(self) -> str:
+        """Return ``field`` as an alias matching ``ValidationError.attribute``.
+
+        Returns:
+            str: Evaluated field or attribute name.
+        """
+        return self.field
+
+    @property
+    def level(self) -> ValidationLevel:
+        """Map ``DiagnosticSeverity`` to ``ValidationLevel``.
+
+        Returns:
+            ValidationLevel: Corresponding validation severity level.
+        """
+        return ValidationLevel.ERROR if self.severity == DiagnosticSeverity.ERROR else ValidationLevel.WARNING
 
 
 class GroundingReport(pydantic.BaseModel):
-    """Comprehensive validation report for a verified operation or symbol.
+    """Unified grounding report covering both single-symbol verification and full-graph audits.
 
     Attributes:
-        is_grounded (bool): True if the symbol is grounded and valid without fatal errors.
-        target (str): Target framework, dialect, or ISA.
-        symbol (str): Queried symbol, mnemonic, or operation identifier.
-        diagnostics (list[GroundingDiagnostic]): Collection of diagnostics produced.
+        is_grounded (bool): True if grounded without fatal errors.
+        target (str): Target framework, dialect, ISA, or ``'graph'``.
+        symbol (str): Queried symbol, mnemonic, or graph name.
+        total_nodes (int): Total number of evaluated nodes (1 for single symbol).
+        grounded_count (int): Number of grounded nodes.
+        ungrounded_count (int): Number of ungrounded or hallucinated nodes.
+        hallucination_score (float): Fraction of ungrounded nodes (0.0 to 1.0).
+        diagnostics (list[GroundingDiagnostic | ValidationError]): Emitted diagnostics.
         matched_ref (ExtendedGhostRef | None): Resolved ground-truth reference object if discovered.
     """
 
-    is_grounded: bool = pydantic.Field(description="True if the symbol is grounded and valid without fatal errors.")
-    target: str = pydantic.Field(description="Target framework, dialect, or ISA.")
-    symbol: str = pydantic.Field(description="Queried symbol, mnemonic, or operation identifier.")
-    diagnostics: list[GroundingDiagnostic] = pydantic.Field(
+    model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    is_grounded: bool = pydantic.Field(
+        default=True,
+        description="True if grounded without fatal errors.",
+    )
+    target: str = pydantic.Field(default="graph", description="Target framework, dialect, or ISA.")
+    symbol: str = pydantic.Field(default="", description="Queried symbol, mnemonic, or graph name.")
+    total_nodes: int = pydantic.Field(default=1, description="Total number of evaluated nodes.")
+    grounded_count: int = pydantic.Field(default=1, description="Number of grounded nodes.")
+    ungrounded_count: int = pydantic.Field(default=0, description="Number of ungrounded nodes.")
+    hallucination_score: float = pydantic.Field(default=0.0, description="Fraction of ungrounded nodes.")
+    diagnostics: list[GroundingDiagnostic | ValidationError] = pydantic.Field(
         default_factory=list,
         description="Collection of diagnostics produced during verification.",
     )
@@ -216,7 +217,12 @@ class GroundingReport(pydantic.BaseModel):
         Returns:
             bool: True if any diagnostic is an ERROR, False otherwise.
         """
-        return any(d.severity == DiagnosticSeverity.ERROR for d in self.diagnostics)
+        for d in self.diagnostics:
+            if isinstance(d, GroundingDiagnostic) and d.severity == DiagnosticSeverity.ERROR:
+                return True
+            if isinstance(d, ValidationError) and d.level == ValidationLevel.ERROR:
+                return True
+        return False
 
     def add_diagnostic(
         self,
@@ -225,7 +231,7 @@ class GroundingReport(pydantic.BaseModel):
         severity: DiagnosticSeverity = DiagnosticSeverity.ERROR,
         suggested_fix: str | None = None,
     ) -> None:
-        """Append a new diagnostic message and update is_grounded status.
+        """Append a new diagnostic message and update grounding metrics.
 
         Args:
             field (str): Component or attribute path.
@@ -235,6 +241,10 @@ class GroundingReport(pydantic.BaseModel):
         """
         if severity == DiagnosticSeverity.ERROR:
             self.is_grounded = False
+            if self.ungrounded_count == 0 and self.total_nodes == 1:
+                self.grounded_count = 0
+                self.ungrounded_count = 1
+                self.hallucination_score = 1.0
         self.diagnostics.append(
             GroundingDiagnostic(
                 field=field,
@@ -245,6 +255,9 @@ class GroundingReport(pydantic.BaseModel):
         )
 
 
+GroundingAuditReport = GroundingReport
+
+
 class GroundingValidator(Validator):
     """Validator that audits graphs strictly against external ground-truth snapshot manifests."""
 
@@ -252,7 +265,7 @@ class GroundingValidator(Validator):
         self,
         snapshot_manifest: SnapshotManifestType = None,
         snapshots_dir: str | None = None,
-        registry: dict[str, OpSchema] | None = None,
+        registry: Mapping[str, OpSchema] | None = None,
         use_default_if_none: bool = False,
     ) -> None:
         """Initialize GroundingValidator with external snapshot file, directory, list, or dict.
@@ -261,7 +274,7 @@ class GroundingValidator(Validator):
             snapshot_manifest (SnapshotManifestType): Snapshot dictionary,
                 list of records, file path, directory path, or collection.
             snapshots_dir (str | None): Explicit path to snapshots directory.
-            registry (dict[str, OpSchema] | None): Base operator registry.
+            registry (Mapping[str, OpSchema] | None): Base operator registry.
             use_default_if_none (bool): If True and snapshot_manifest is None, load from DEFAULT_SNAPSHOT_DIR.
         """
         super().__init__(registry=registry)
@@ -284,7 +297,7 @@ class GroundingValidator(Validator):
             if os.path.isdir(default_dir) and default_dir not in search_dirs:
                 search_dirs.append(default_dir)
             self._engine = GroundingEngine(base_dirs=search_dirs if search_dirs else None)
-        except (ImportError, AttributeError, ValueError, OSError, RuntimeError) as exc:
+        except (ImportError, SyntaxError, AttributeError, ValueError, OSError, RuntimeError) as exc:
             logger.debug("Failed initializing GroundingEngine: %s", exc)
             self._engine = None
 
@@ -307,7 +320,11 @@ class GroundingValidator(Validator):
         elif isinstance(target, Mapping):
             self._load_snapshot_data(target)
         elif isinstance(target, list):
-            if target and all(isinstance(item, str) or (isinstance(item, Mapping) and not ("api_path" in item or "name" in item or "mnemonic" in item)) for item in target):
+            if target and all(
+                isinstance(item, str)
+                or (isinstance(item, Mapping) and not ("api_path" in item or "name" in item or "mnemonic" in item))
+                for item in target
+            ):
                 for item in target:
                     self._ingest_manifest_target(item)
             else:
@@ -393,7 +410,19 @@ class GroundingValidator(Validator):
         Args:
             data (Mapping[str, SnapshotManifestNode]): Flat snapshot dictionary.
         """
-        known_fws = ("torch", "jax", "tensorflow", "tf", "stablehlo", "numpy", "chex", "grain", "orbax", "orbax_checkpoint", "optax")
+        known_fws = (
+            "torch",
+            "jax",
+            "tensorflow",
+            "tf",
+            "stablehlo",
+            "numpy",
+            "chex",
+            "grain",
+            "orbax",
+            "orbax_checkpoint",
+            "optax",
+        )
         for k, v in data.items():
             if k == "_parameter_translations":
                 continue
@@ -407,6 +436,16 @@ class GroundingValidator(Validator):
                     if isinstance(item, Mapping):
                         self._register_symbol_record(item)
 
+    def _register_record_sequence(self, items: Sequence[SnapshotManifestNode]) -> None:
+        """Register every mapping element inside ``items`` as a grounded symbol record.
+
+        Args:
+            items (Sequence[SnapshotManifestNode]): Sequence of candidate symbol dictionaries.
+        """
+        for item in items:
+            if isinstance(item, Mapping):
+                self._register_symbol_record(item)
+
     def _load_snapshot_data(
         self,
         data: Mapping[str, SnapshotManifestNode] | Sequence[SnapshotManifestNode],
@@ -417,9 +456,7 @@ class GroundingValidator(Validator):
             data (Mapping[str, SnapshotManifestNode] | Sequence[SnapshotManifestNode]): Parsed snapshot data.
         """
         if isinstance(data, list):
-            for item in data:
-                if isinstance(item, Mapping):
-                    self._register_symbol_record(item)
+            self._register_record_sequence(data)
             return
 
         if isinstance(data, Mapping):
@@ -427,6 +464,11 @@ class GroundingValidator(Validator):
             if isinstance(raw_pt, Mapping):
                 for pk, pv in raw_pt.items():
                     self.parameter_translations[str(pk)] = pv
+
+            for list_key in ("operations", "instructions"):
+                raw_list = data.get(list_key)
+                if isinstance(raw_list, list):
+                    self._register_record_sequence(raw_list)
 
             raw_cats = data.get("categories")
             if isinstance(raw_cats, Mapping):
@@ -475,7 +517,14 @@ class GroundingValidator(Validator):
         Returns:
             str | None: Suggested symbol or None.
         """
-        if self._engine is None or not domain or (isinstance(self._engine, TargetFileDiscovererProtocol) and not self._engine._discover_target_files(domain)):
+        if (
+            self._engine is None
+            or not domain
+            or (
+                isinstance(self._engine, TargetFileDiscovererProtocol)
+                and not self._engine._discover_target_files(domain)
+            )
+        ):
             return None
         try:
             engine_cand = self._engine.suggest_closest_symbol(domain, op_type, max_distance=3)
@@ -553,8 +602,18 @@ class GroundingValidator(Validator):
             Mapping[str, SnapshotManifestNode] | None: Matched symbol dictionary or None.
         """
         full_path = f"{node.domain}.{node.op_type}"
-        match: Mapping[str, SnapshotManifestNode] | None = self.grounded_symbols.get(full_path) or self.grounded_symbols.get(node.op_type)
-        if match is None and self._engine is not None and node.domain and (not isinstance(self._engine, TargetFileDiscovererProtocol) or bool(self._engine._discover_target_files(node.domain))):
+        match: Mapping[str, SnapshotManifestNode] | None = self.grounded_symbols.get(
+            full_path
+        ) or self.grounded_symbols.get(node.op_type)
+        if (
+            match is None
+            and self._engine is not None
+            and node.domain
+            and (
+                not isinstance(self._engine, TargetFileDiscovererProtocol)
+                or bool(self._engine._discover_target_files(node.domain))
+            )
+        ):
             try:
                 ref = self._engine.get_symbol(node.domain, node.op_type)
                 if ref is not None:
@@ -623,7 +682,9 @@ class GroundingValidator(Validator):
         match = self._resolve_grounded_symbol_record(node)
         if match is None:
             suggestion = self._find_best_symbol_match(node.op_type, node.domain)
-            msg = f"Ungrounded symbol '{node.op_type}' in domain '{node.domain}'. Symbol not found in framework snapshot."
+            msg = (
+                f"Ungrounded symbol '{node.op_type}' in domain '{node.domain}'. Symbol not found in framework snapshot."
+            )
             if suggestion:
                 msg += f" Did you mean '{suggestion}'?"
             return [
@@ -642,7 +703,10 @@ class GroundingValidator(Validator):
             for attr_key in node.attributes:
                 if attr_key not in known_params:
                     attr_suggestion = self._find_best_attr_match(attr_key, known_params)
-                    msg = f"Ungrounded attribute '{attr_key}' on '{node.op_type}'. Allowed attributes/params: {sorted(known_params)}."
+                    msg = (
+                        f"Ungrounded attribute '{attr_key}' on '{node.op_type}'. "
+                        f"Allowed attributes/params: {sorted(known_params)}."
+                    )
                     if attr_suggestion:
                         msg += f" Did you mean '{attr_suggestion}'?"
                     errors.append(
@@ -656,30 +720,45 @@ class GroundingValidator(Validator):
                     )
         return errors
 
-    def audit_graph(self, graph: LogicalGraph) -> GroundingAuditReport:
+    def audit_graph(self, graph: LogicalGraph) -> GroundingReport:
         """Audit an entire graph for anti-hallucination grounding against snapshots.
 
         Args:
             graph (LogicalGraph): Graph to audit.
 
         Returns:
-            GroundingAuditReport: Comprehensive grounding report.
+            GroundingReport: Comprehensive unified grounding report.
         """
-        diagnostics: list[ValidationError] = []
+        diagnostics: list[GroundingDiagnostic | ValidationError] = []
         grounded_count = 0
-        total_nodes = len(graph.nodes)
+        total_nodes = 0
 
-        for node in graph.nodes.values():
-            node_errors = self.validate_grounding(node)
-            if node_errors:
-                diagnostics.extend(node_errors)
-            else:
-                grounded_count += 1
+        def _audit_recursive(cur_graph: LogicalGraph) -> None:
+            """Recursively audit nodes in ``cur_graph`` and any nested ``LogicalGraph`` subgraphs.
 
+            Args:
+                cur_graph (LogicalGraph): Current graph scope to audit.
+            """
+            nonlocal grounded_count, total_nodes
+            for node in cur_graph.nodes.values():
+                total_nodes += 1
+                node_errors = self.validate_grounding(node)
+                if node_errors:
+                    diagnostics.extend(node_errors)
+                else:
+                    grounded_count += 1
+                for sub_val in node.subgraphs.values():
+                    if isinstance(sub_val, LogicalGraph):
+                        _audit_recursive(sub_val)
+
+        _audit_recursive(graph)
         ungrounded_count = total_nodes - grounded_count
         score = (ungrounded_count / total_nodes) if total_nodes > 0 else 0.0
 
-        return GroundingAuditReport(
+        return GroundingReport(
+            is_grounded=(ungrounded_count == 0),
+            target="graph",
+            symbol=graph.name,
             total_nodes=total_nodes,
             grounded_count=grounded_count,
             ungrounded_count=ungrounded_count,
@@ -691,7 +770,7 @@ class GroundingValidator(Validator):
 def audit_graph_grounding(
     graph: LogicalGraph,
     snapshots_path: SnapshotManifestType = None,
-) -> GroundingAuditReport:
+) -> GroundingReport:
     """Audit a LogicalGraph against framework snapshots.
 
     Args:
@@ -700,7 +779,7 @@ def audit_graph_grounding(
             directory, or loaded dictionary/list.
 
     Returns:
-        GroundingAuditReport: Resulting grounding audit report.
+        GroundingReport: Resulting unified grounding report.
     """
     default_dir = _get_snapshot_dir()
     resolved_path: SnapshotManifestType

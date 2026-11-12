@@ -1,56 +1,97 @@
-"""Tests for CLI dump-snapshot command and validate command enhancements."""
+"""Tests for CLI dump-snapshot command and SnapshotEnvelope schema conformance across all registries."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from ml_switcheroo_ir.cli import main as cli_main
+from ml_switcheroo_ir.schema.ghost import SnapshotEnvelope
 
 
 def test_cli_dump_snapshot(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Test dump-snapshot command generating GhostRef schema JSON.
+    """Test dump-snapshot exports all 21+ registries inside a valid SnapshotEnvelope.
 
     Args:
         tmp_path (Path): Pytest temporary directory fixture.
         capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
     """
     out_file = tmp_path / "snapshot.json"
-    cli_main(["dump-snapshot", "--output", str(out_file)])
+    exit_code = cli_main(["dump-snapshot", "--output", str(out_file)])
+    assert exit_code == 0
 
     captured = capsys.readouterr()
     assert f"Dumped snapshot to {out_file}" in captured.out
     assert out_file.exists()
 
-    with open(out_file, encoding="utf-8") as f:
-        data = json.load(f)
+    raw_text = out_file.read_text(encoding="utf-8")
+    envelope = SnapshotEnvelope.model_validate_json(raw_text)
+    assert envelope.schema_version == "2.0.0"
+    assert envelope.target == "ml-switcheroo-ir"
 
-    # Verify both ONNX and Custom operators are present
-    assert "ai.onnx.Relu" in data
-    assert "ml.switcheroo.custom.RMSNorm" in data
-    assert "ml.switcheroo.custom.SwiGLU" in data
-    assert "ml.switcheroo.custom.FlashAttention" in data
-    assert "stablehlo.dot_general" in data
+    expected_categories = {
+        "classes",
+        "functions",
+        "onnx",
+        "custom",
+        "stablehlo",
+        "mlir",
+        "rdna",
+        "sass",
+        "wgsl",
+        "ptx",
+        "metal",
+        "wasm",
+        "webgl",
+        "aten",
+        "array_api",
+        "chex",
+        "grain",
+        "orbax",
+        "optax",
+        "collective",
+        "quantization",
+        "state",
+        "odl",
+    }
+    assert expected_categories.issubset(set(envelope.categories.keys()))
 
-    # Verify SnapshotEnvelope metadata
-    assert data["schema_version"] == "2.0.0"
-    assert data["target"] == "ml-switcheroo-ir"
-    assert "classes" in data["categories"]
-    assert "functions" in data["categories"]
-    assert "onnx" in data["categories"]
-    assert "custom" in data["categories"]
-    assert "stablehlo" in data["categories"]
+    assert isinstance(envelope.operations, list)
+    op_paths = {(entry["api_path"] if isinstance(entry, dict) else entry.api_path) for entry in envelope.operations}
+    assert "ai.onnx.Relu" in op_paths
+    assert "ml.switcheroo.custom.RMSNorm" in op_paths
+    assert "ml.switcheroo.custom.SwiGLU" in op_paths
+    assert "ml.switcheroo.custom.FlashAttention" in op_paths
+    assert "stablehlo.dot_general" in op_paths
+    assert "ml_switcheroo_ir.LogicalGraph" in op_paths
+    assert "ml_switcheroo_ir.topological_sort" in op_paths
 
-    assert "ml_switcheroo_ir.LogicalGraph" in data
-    assert "ml_switcheroo_ir.topological_sort" in data
-    ts_entry = data["ml_switcheroo_ir.topological_sort"]
-    assert ts_entry["kind"] == "function"
-    assert ts_entry["docstring"]
-    assert any(p["name"] == "strict" and p["default"] == "False" for p in ts_entry["params"])
 
-    rmsnorm_entry = data["ml.switcheroo.custom.RMSNorm"]
-    assert rmsnorm_entry["name"] == "RMSNorm"
-    assert rmsnorm_entry["api_path"] == "ml.switcheroo.custom.RMSNorm"
-    assert any(p["name"] == "eps" for p in rmsnorm_entry["params"])
+def test_cli_ast_symbol_extractor_edge_cases() -> None:
+    """Test AST symbol and parameter extraction edge branches in cli.py."""
+    import ast
+
+    from ml_switcheroo_ir.cli import (
+        _build_symbol_ghost_params,
+        _extract_ast_args_to_ghost_params,
+        _resolve_package_symbol_ast,
+    )
+    from ml_switcheroo_ir.schema.ghost import ParameterKind
+
+    visited_set = {("ml_switcheroo_ir", "LogicalNode")}
+    assert _resolve_package_symbol_ast("ml_switcheroo_ir", "LogicalNode", visited=visited_set) is None
+    assert _resolve_package_symbol_ast("ml_switcheroo_ir.nonexistent_submod", "Foo") is None
+    assert _build_symbol_ghost_params("NonExistentPublicSymbol") == []
+
+    fn_src = """def f(a: int, /, b: str = 'x', *args: float, kw: bool = True, **kwargs: int) -> None:
+    pass
+"""
+    fn_ast = ast.parse(fn_src).body[0]
+    assert isinstance(fn_ast, ast.FunctionDef)
+    extracted = _extract_ast_args_to_ghost_params(fn_ast.args, skip_self=False)
+    kinds = {p.name: p.kind for p in extracted}
+    assert kinds["a"] == ParameterKind.POSITIONAL_ONLY
+    assert kinds["args"] == ParameterKind.VAR_POSITIONAL
+    assert kinds["kw"] == ParameterKind.KEYWORD_ONLY
+    assert kinds["kwargs"] == ParameterKind.VAR_KEYWORD

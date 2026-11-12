@@ -101,13 +101,18 @@ def test_framework_registries_loader_with_json_and_dialects(
     with open(custom_file, "w", encoding="utf-8") as f:
         json.dump(custom_data, f)
 
-    res = framework_registries._load_framework_schema_file("custom_fw.json", "custom_fw", json_path=custom_file)
-    assert "custom_add" in res
-    assert "custom_no_dialects" in res
-    assert framework_registries.ODL_DIALECT_MAPPINGS.get("custom_add") == {
-        "torch": "torch.add",
-        "jax": "jax.numpy.add",
-    }
+    saved_odl_mappings = framework_registries.ODL_DIALECT_MAPPINGS.copy()
+    try:
+        res = framework_registries._load_framework_schema_file("custom_fw.json", "custom_fw", json_path=custom_file)
+        assert "custom_add" in res
+        assert "custom_no_dialects" in res
+        assert framework_registries.ODL_DIALECT_MAPPINGS.get("custom_add") == {
+            "torch": "torch.add",
+            "jax": "jax.numpy.add",
+        }
+    finally:
+        framework_registries.ODL_DIALECT_MAPPINGS.clear()
+        framework_registries.ODL_DIALECT_MAPPINGS.update(saved_odl_mappings)
 
 
 def test_framework_registries_non_empty_initialization() -> None:
@@ -485,25 +490,62 @@ def test_onnx_loader_framework_dict_attrs_and_exceptions() -> None:
             "attributes": None,
         },
     ]
+    fake_onnx_spec = mock.MagicMock(_load_onnx_ops=lambda: mock_ops)
+    fake_fw_pkg = mock.MagicMock(onnx_spec=fake_onnx_spec)
+    fake_root_pkg = mock.MagicMock(frameworks=fake_fw_pkg)
+
     with (
-        mock.patch(
-            "ml_ecosystem_snapshots.frameworks.onnx_spec._load_onnx_ops",
-            return_value=mock_ops,
+        mock.patch.dict(
+            "sys.modules",
+            {
+                "ml_ecosystem_snapshots": fake_root_pkg,
+                "ml_ecosystem_snapshots.frameworks": fake_fw_pkg,
+                "ml_ecosystem_snapshots.frameworks.onnx_spec": fake_onnx_spec,
+            },
         ),
         mock.patch.dict(onnx_registry.ONNX_REGISTRY, {}, clear=True),
+        mock.patch("ml_switcheroo_ir.schema.onnx_registry.find_schema_file", return_value=None),
+        mock.patch("ml_switcheroo_ir.schema.onnx_registry.load_bundled_catalog_json", return_value=None),
     ):
         res = onnx_registry.load_onnx_schemas()
         assert "OpWithDictAttrs" in res
         assert "OpWithMixedListAttrs" in res
         assert "OpWithNoneAttrs" in res
 
-    # Exception path
+    # Standalone bundled importlib.resources catalog loads when external snapshots are absent
     with (
-        mock.patch(
-            "ml_ecosystem_snapshots.frameworks.onnx_spec._load_onnx_ops",
-            side_effect=ImportError("Mock import failure"),
+        mock.patch.dict(onnx_registry.ONNX_REGISTRY, {}, clear=True),
+        mock.patch("ml_switcheroo_ir.schema.onnx_registry.find_schema_file", return_value=None),
+    ):
+        bundled_res = onnx_registry.load_onnx_schemas()
+        assert "Add" in bundled_res
+        assert "Conv" in bundled_res
+
+    # Exception path
+    def _raise_import_err() -> list[dict[str, str]]:
+        """Raise ImportError to test fallback handling.
+
+        Returns:
+            list[dict[str, str]]: Never returns.
+
+        Raises:
+            ImportError: Always raised to simulate missing upstream spec loader.
+        """
+        raise ImportError("Mock import failure")
+
+    broken_onnx_spec = mock.MagicMock(_load_onnx_ops=_raise_import_err)
+    with (
+        mock.patch.dict(
+            "sys.modules",
+            {
+                "ml_ecosystem_snapshots": fake_root_pkg,
+                "ml_ecosystem_snapshots.frameworks": fake_fw_pkg,
+                "ml_ecosystem_snapshots.frameworks.onnx_spec": broken_onnx_spec,
+            },
         ),
         mock.patch.dict(onnx_registry.ONNX_REGISTRY, {}, clear=True),
+        mock.patch("ml_switcheroo_ir.schema.onnx_registry.find_schema_file", return_value=None),
+        mock.patch("ml_switcheroo_ir.schema.onnx_registry.load_bundled_catalog_json", return_value=None),
     ):
         res_err = onnx_registry.load_onnx_schemas()
         assert res_err == {}
@@ -540,19 +582,23 @@ def test_snapshots_discovery_precedence(tmp_path: Path) -> None:
     env_fw_dir = tmp_path / "env_fw_snapshots"
     env_fw_dir.mkdir()
     (env_fw_dir / "sample.json").write_text("{}", encoding="utf-8")
-    from ml_switcheroo_ir.snapshots import get_effective_snapshot_dir
+    from ml_switcheroo_ir.snapshots import get_effective_snapshot_dir, resolve_snapshots_path
 
     with mock.patch.dict("os.environ", {"ML_FRAMEWORK_SNAPSHOTS_DIR": str(env_fw_dir)}):
         assert get_default_snapshots_dir() == str(env_fw_dir.resolve())
         assert get_effective_snapshot_dir() == str(env_fw_dir.resolve())
 
-    # Sibling repo root with empty snapshots subdir honors explicit path by default, or falls back when allow_default_fallback=True
-    from ml_switcheroo_ir.snapshots import DEFAULT_SNAPSHOT_DIR, resolve_snapshots_path
-
+    # Sibling repo root with empty snapshots subdir honors explicit path, or falls back with allow_default_fallback=True
     sibling_root = Path(__file__).resolve().parent.parent.parent / "ml-ecosystem-snapshots"
     with mock.patch("ml_switcheroo_ir.snapshots._has_snapshot_files", return_value=False):
-        assert resolve_snapshots_path(sibling_root) == (sibling_root / "src" / "ml_ecosystem_snapshots" / "snapshots").resolve()
-        assert resolve_snapshots_path(sibling_root, allow_default_fallback=True) == Path(DEFAULT_SNAPSHOT_DIR).resolve()
+        assert (
+            resolve_snapshots_path(sibling_root)
+            == (sibling_root / "src" / "ml_ecosystem_snapshots" / "snapshots").resolve()
+        )
+        assert (
+            resolve_snapshots_path(sibling_root, allow_default_fallback=True)
+            == Path(get_effective_snapshot_dir()).resolve()
+        )
 
     direct_snaps_root = tmp_path / "custom_repo"
     direct_snaps = direct_snaps_root / "snapshots"
@@ -660,3 +706,256 @@ def test_override_registry_context_manager() -> None:
     with override_registry(onnx_registry.ONNX_REGISTRY, clear=True) as reg:
         assert len(reg) == 0
     assert len(onnx_registry.ONNX_REGISTRY) == orig_len
+
+
+def test_schema_registry_lazy_metadata_attribute_types_and_fallbacks(tmp_path: Path) -> None:
+    """Exercise SchemaRegistry, LazyMetadataMap, normalize_attribute_type, MLIR resolver, and loader fallbacks.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
+    import pytest
+
+    from ml_switcheroo_ir.schema import (
+        AttributeType,
+        LazyMetadataMap,
+        OpAttribute,
+        OpSchema,
+        SchemaRegistry,
+        normalize_attribute_type,
+    )
+
+    # AttributeType normalization branches
+    assert normalize_attribute_type(AttributeType.INT) == AttributeType.INT
+    assert normalize_attribute_type("AnyAttrOf<[I64Attr, StrAttr]>") == AttributeType.ANY
+    assert normalize_attribute_type("ConfinedAttr<I64AttrArray, [NonEmpty]>") == AttributeType.LIST_INT
+    assert normalize_attribute_type("DenseI64ArrayAttr") == AttributeType.LIST_INT
+    assert normalize_attribute_type("OptionalAttr<DenseI64ArrayAttr>") == AttributeType.LIST_INT
+    assert normalize_attribute_type("OptionalAttr<ArrayAttr>") == AttributeType.LIST
+    assert normalize_attribute_type("ConvDimensionNumbersAttr") == AttributeType.DICT
+    assert normalize_attribute_type("StableHLO_ComparisonDirectionAttr") == AttributeType.STR
+    with pytest.raises(ValueError, match="cannot be empty"):
+        normalize_attribute_type("   ")
+    with pytest.raises(ValueError, match="Unsupported AttributeType"):
+        normalize_attribute_type("CompletelyUnknownType")
+
+    attr = OpAttribute("x", "int", False, 1)
+    assert attr.to_op_attribute() is attr
+
+    # SchemaRegistry initializers, secondary aliases, deletion, and resolve
+    op_a = OpSchema("CanonOp", "ai.onnx", aliases=("canon_alias", ""))
+    sr_iter = SchemaRegistry("iter_reg", initial=[op_a])
+    sr_iter._ensure_loaded()
+    assert sr_iter.resolve("canon_alias") is op_a
+    assert sr_iter.alias_index == {"canon_alias": "CanonOp"}
+    del sr_iter["canon_alias"]
+    assert sr_iter.alias_index == {}
+    sr_map = SchemaRegistry("map_reg", initial={"CanonOp": op_a, "SecondOp": OpSchema("SecondOp", "ai.onnx")})
+    del sr_map["SecondOp"]
+    assert sr_map.resolve("canon_alias") is op_a
+    del sr_map["CanonOp"]
+    assert len(sr_map) == 0
+    with pytest.raises(KeyError):
+        _ = sr_map["missing"]
+    with pytest.raises(KeyError):
+        del sr_map["missing"]
+
+    # LazyMetadataMap lazy loader, set/del, copy, clear
+    def _populate_lmap() -> None:
+        """Populate lmap during lazy initialization."""
+        lmap["k"] = 7
+
+    lmap: LazyMetadataMap[int] = LazyMetadataMap("test_meta", loader=_populate_lmap)
+    assert lmap["k"] == 7
+    lmap._run_loader_locked()
+    assert list(lmap) == ["k"]
+    assert len(lmap) == 1
+    assert lmap.copy() == {"k": 7}
+    del lmap["k"]
+    lmap.clear()
+    assert len(lmap) == 0
+
+
+def test_schema_catalog_entry_parsing_and_onnx_edge_cases(tmp_path: Path) -> None:
+    """Verify parse_op_schema_entry, load_op_schema_catalog, and _parse_onnx_json_dict edge branches.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
+    import pydantic
+    import pytest
+
+    from ml_switcheroo_ir.schema import OpSchema, override_registry, sass_registry
+    from ml_switcheroo_ir.schema.base import (
+        load_bundled_catalog_json,
+        load_op_schema_catalog,
+        parse_op_schema_entry,
+    )
+    from ml_switcheroo_ir.schema.onnx_registry import _parse_onnx_json_dict, _parse_onnx_proto_default
+    from ml_switcheroo_ir.schema.stablehlo import parse_stablehlo_exhaustive_operations
+
+    # parse_op_schema_entry dict attributes, OSError in load_bundled_catalog_json, non-dict entry in ops list
+    parsed_dict_attrs = parse_op_schema_entry(
+        {
+            "name": "DictAttrOp",
+            "attributes": {"alpha": {"type": "float", "default": 1.0}, "skip_bad": "not_a_mapping"},
+        },
+        domain_default="ai.onnx",
+    )
+    assert parsed_dict_attrs.attributes["alpha"].default == 1.0
+
+    with pytest.raises(pydantic.ValidationError):
+        parse_op_schema_entry({"name": "IntAttrPayload", "attributes": 123}, domain_default="ai.onnx")
+    mixed_ops_json = tmp_path / "mixed_ops.json"
+    mixed_ops_json.write_text('{"ops": ["not_a_dict", {"name": "OkOp", "attributes": ["bad_attr"]}]}', encoding="utf-8")
+    assert "OkOp" in load_op_schema_catalog("mixed_ops.json", "ai.onnx", json_path=mixed_ops_json)
+    with mock.patch("ml_switcheroo_ir.schema.base.find_schema_file", return_value=None):
+        bundled_state = load_op_schema_catalog("state_ops.json", "ml.switcheroo.state")
+        assert "ReadVariable" in bundled_state
+    with mock.patch("importlib.resources.files", side_effect=OSError("bad pkg")):
+        assert load_bundled_catalog_json("onnx_ops.json") is None
+
+    # onnx_registry float default & _parse_onnx_json_dict edge branches & non-mapping target json
+    assert _parse_onnx_proto_default("f: 0.25") == 0.25
+    parsed_onnx_edge = _parse_onnx_json_dict(
+        {
+            "bad_entry": "not_a_dict",
+            "EdgeOp": {"attributes": {"ok": {"type": "int"}, "bad": 5}, "inputs": [], "outputs": []},
+            "NonMapAttrs": {"attributes": [], "inputs": ["x"], "outputs": ["y"]},
+        }
+    )
+    assert "EdgeOp" in parsed_onnx_edge and "NonMapAttrs" in parsed_onnx_edge
+    list_onnx_json = tmp_path / "list_onnx.json"
+    list_onnx_json.write_text("[1, 2]", encoding="utf-8")
+    assert onnx_registry.load_onnx_schemas(json_path=list_onnx_json) == {}
+
+    # stablehlo convolution dimension_numbers & sass latency fallback
+    shlo_conv = parse_stablehlo_exhaustive_operations(
+        [{"name": "convolution", "attributes": [{"name": "dimension_numbers", "type": "str", "required": False}]}]
+    )
+    assert shlo_conv["convolution"].attributes["dimension_numbers"].required is True
+    sass_alt_json = tmp_path / "sass_alt.json"
+    sass_alt_json.write_text('{"ops": [{"name": "FADD_ALT", "latency": 5}]}', encoding="utf-8")
+    saved_sass_lat = sass_registry.SASS_PIPELINE_LATENCIES.copy()
+    try:
+        with override_registry(sass_registry.SASS_REGISTRY, clear=True):
+            sass_registry._load_sass_schemas(json_path=sass_alt_json)
+            assert sass_registry.SASS_PIPELINE_LATENCIES["FADD_ALT"] == 5
+    finally:
+        sass_registry.SASS_PIPELINE_LATENCIES.clear()
+        sass_registry.SASS_PIPELINE_LATENCIES.update(saved_sass_lat)
+    _ = OpSchema
+
+
+def test_unified_mlir_resolution_and_missing_catalogs(tmp_path: Path) -> None:
+    """Verify resolve_mlir_op_schema, build_core_mlir_dialects, and missing explicit catalog paths.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
+    from ml_switcheroo_ir.schema import (
+        OpSchema,
+        SchemaRegistry,
+        build_core_mlir_dialects,
+        custom_ops,
+        mlir_registry,
+        override_registry,
+        resolve_mlir_op_schema,
+    )
+    from ml_switcheroo_ir.schema.base import load_bundled_catalog_json, load_op_schema_catalog
+
+    missing_p = tmp_path / "missing_catalog.json"
+    custom_ops._load_collective_schemas(json_path=missing_p)
+    custom_ops._load_quantization_schemas(json_path=missing_p)
+    custom_ops._load_custom_schemas(json_path=missing_p)
+    custom_ops._load_state_schemas(json_path=missing_p)
+
+    # Unified MLIR resolution when direct op has mismatched domain and build_core_mlir_dialects unknown dialect
+    custom_mlir = {"arith.addf": OpSchema("arith.addf", "other_dom"), "unk.op": OpSchema("unk.op", "mlir.unk")}
+    assert resolve_mlir_op_schema("mlir.arith", "arith.addf", registry=custom_mlir) is None
+    assert build_core_mlir_dialects(registry=custom_mlir)["arith"] == {"addf": 0}
+    assert build_core_mlir_dialects(registry=custom_mlir)["math"] == {}
+    SchemaRegistry("noop_reg", initial=[OpSchema("Op", "ai.onnx")])._run_loader_locked()
+
+    # Bundled catalog loader missing file branch & non-mapping catalog branch
+    assert load_bundled_catalog_json("does_not_exist_catalog.json") is None
+    list_json = tmp_path / "list_root.json"
+    list_json.write_text("[1, 2, 3]", encoding="utf-8")
+    assert load_op_schema_catalog("list_root.json", "ai.onnx", json_path=list_json) == {}
+    bad_ops_json = tmp_path / "bad_ops.json"
+    bad_ops_json.write_text('{"ops": "not_a_list"}', encoding="utf-8")
+    assert load_op_schema_catalog("bad_ops.json", "ai.onnx", json_path=bad_ops_json) == {}
+
+    # Unified MLIR resolution across mlir.<dialect>, mlir, and short <dialect> conventions
+    assert resolve_mlir_op_schema("mlir.arith", "arith.addf") is not None
+    assert resolve_mlir_op_schema("mlir.arith", "addf") is not None
+    assert resolve_mlir_op_schema("mlir.arith", "nonexistent") is None
+    assert resolve_mlir_op_schema("arith", "addf") is not None
+    assert resolve_mlir_op_schema("unknown_dom", "addf") is None
+    with override_registry(mlir_registry.MLIR_REGISTRY, {"nodot": OpSchema("nodot", "mlir")}):
+        dialects = build_core_mlir_dialects()
+        assert dialects["arith"]["addf"] == 2
+
+
+def test_canonical_in_memory_registry_fallbacks() -> None:
+    """Exercise canonical in-memory fallbacks when external and bundled JSON catalogs are absent."""
+    from ml_switcheroo_ir.schema import (
+        custom_ops,
+        mlir_registry,
+        override_registry,
+        rdna_registry,
+        sass_registry,
+    )
+
+    # Exercise canonical in-memory fallbacks when external & bundled JSON catalogs are mocked out
+    with (
+        mock.patch("ml_switcheroo_ir.schema.base.find_schema_file", return_value=None),
+        mock.patch("ml_switcheroo_ir.schema.base.load_bundled_catalog_json", return_value=None),
+        mock.patch("ml_switcheroo_ir.schema.rdna_registry.find_schema_file", return_value=None),
+        mock.patch("ml_switcheroo_ir.schema.sass_registry.find_schema_file", return_value=None),
+        mock.patch("ml_switcheroo_ir.schema.mlir_registry.find_schema_file", return_value=None),
+        mock.patch("ml_switcheroo_ir.schema.framework_registries.find_schema_file", return_value=None),
+    ):
+        with override_registry(custom_ops.COLLECTIVE_OPS_REGISTRY, clear=True):
+            custom_ops._load_collective_schemas()
+            assert "collective.all_reduce" in custom_ops.COLLECTIVE_OPS_REGISTRY
+        with override_registry(custom_ops.QUANTIZATION_OPS_REGISTRY, clear=True):
+            custom_ops._load_quantization_schemas()
+            assert "quantization.block_quantize" in custom_ops.QUANTIZATION_OPS_REGISTRY
+        with override_registry(custom_ops.CUSTOM_OPS_REGISTRY, clear=True):
+            custom_ops._load_custom_schemas()
+            assert "FlashAttention" in custom_ops.CUSTOM_OPS_REGISTRY
+        with override_registry(custom_ops.STATE_OPS_REGISTRY, clear=True):
+            custom_ops._load_state_schemas()
+            assert "ReadVariable" in custom_ops.STATE_OPS_REGISTRY
+        with override_registry(mlir_registry.MLIR_REGISTRY, clear=True):
+            mlir_registry._load_mlir_schemas()
+            assert "arith.addf" in mlir_registry.MLIR_REGISTRY
+        saved_slots = rdna_registry.RDNA_VOPD_SLOTS.copy()
+        saved_vmap = rdna_registry.RDNA_TO_VOPD_MAP.copy()
+        try:
+            with override_registry(rdna_registry.RDNA_REGISTRY, clear=True):
+                rdna_registry._load_rdna_schemas()
+                assert "V_DUAL_FMAC_F32" in rdna_registry.RDNA_REGISTRY
+        finally:
+            rdna_registry.RDNA_VOPD_SLOTS.clear()
+            rdna_registry.RDNA_VOPD_SLOTS.update(saved_slots)
+            rdna_registry.RDNA_TO_VOPD_MAP.clear()
+            rdna_registry.RDNA_TO_VOPD_MAP.update(saved_vmap)
+        saved_lat = sass_registry.SASS_PIPELINE_LATENCIES.copy()
+        try:
+            with override_registry(sass_registry.SASS_REGISTRY, clear=True):
+                sass_registry._load_sass_schemas()
+                assert "HMMA" in sass_registry.SASS_REGISTRY
+        finally:
+            sass_registry.SASS_PIPELINE_LATENCIES.clear()
+            sass_registry.SASS_PIPELINE_LATENCIES.update(saved_lat)
+        saved_odl_map = framework_registries.ODL_DIALECT_MAPPINGS.copy()
+        try:
+            with override_registry(framework_registries.ODL_CATALOG, clear=True):
+                framework_registries.ODL_DIALECT_MAPPINGS.clear()
+                framework_registries._initialize_framework_registries()
+                assert "matmul" in framework_registries.ODL_DIALECT_MAPPINGS
+        finally:
+            framework_registries.ODL_DIALECT_MAPPINGS.clear()
+            framework_registries.ODL_DIALECT_MAPPINGS.update(saved_odl_map)

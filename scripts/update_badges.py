@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -29,10 +30,10 @@ def get_color(pct: float) -> str:
     """Determine shield badge color based on coverage percentage.
 
     Args:
-        pct: Coverage percentage between 0.0 and 100.0.
+        pct (float): Coverage percentage between 0.0 and 100.0.
 
     Returns:
-        String color name for shields.io badge.
+        str: String color name for shields.io badge.
     """
     if pct >= 100:
         return "brightgreen"
@@ -51,10 +52,10 @@ def format_cov(cov: float) -> str:
     """Format coverage float into string for badges.
 
     Args:
-        cov: Coverage percentage as a floating-point number.
+        cov (float): Coverage percentage as a floating-point number.
 
     Returns:
-        Formatted string without decimal places if whole number, else one decimal.
+        str: Formatted string without decimal places if whole number, else one decimal.
     """
     if int(cov) == cov:
         return str(int(cov))
@@ -67,10 +68,10 @@ def get_coverage_metrics(
     """Extract overall, statement, and branch coverage percentages from coverage.json.
 
     Args:
-        coverage_json_path: Optional path to the JSON coverage file to inspect or generate.
+        coverage_json_path (str | None): Optional path to an existing JSON coverage file to inspect.
 
     Returns:
-        Tuple[float, float, float]: (overall_pct, statement_pct, branch_pct).
+        tuple[float, float, float]: ``(overall_pct, statement_pct, branch_pct)``.
     """
     actual_path = coverage_json_path
     is_temp = False
@@ -117,10 +118,10 @@ def get_test_coverage(coverage_json_path: str | None = None) -> float:
     """Extract total test coverage percentage from coverage.json or run coverage tool.
 
     Args:
-        coverage_json_path: Optional path to the JSON coverage file to inspect or generate.
+        coverage_json_path (str | None): Optional path to the JSON coverage file to inspect or generate.
 
     Returns:
-        Total coverage percentage as a float.
+        float: Total coverage percentage as a float.
     """
     overall, _, _ = get_coverage_metrics(coverage_json_path=coverage_json_path)
     return overall
@@ -130,7 +131,7 @@ def get_doc_coverage() -> float:
     """Determine documentation coverage percentage using interrogate.
 
     Returns:
-        Doc coverage percentage as a float.
+        float: Doc coverage percentage as a float.
 
     Raises:
         ValueError: If documentation coverage cannot be determined or is 0%.
@@ -173,10 +174,10 @@ def count_shields(content: str) -> tuple[int, int, int]:
     """Count occurrences of test, doc, and branch coverage shields.
 
     Args:
-        content: Markdown content string to analyze.
+        content (str): Markdown content string to analyze.
 
     Returns:
-        Tuple of (test_count, doc_count, branch_count).
+        tuple[int, int, int]: Tuple of ``(test_count, doc_count, branch_count)``.
     """
     test_count = len(TEST_BADGE_RE.findall(content))
     doc_count = len(DOC_BADGE_RE.findall(content))
@@ -188,7 +189,7 @@ def enforce_coverage_shields(readme_path: str = "README.md") -> None:
     """Enforce that markdown file contains exactly one test shield and one doc shield.
 
     Args:
-        readme_path: Path to the markdown file to inspect.
+        readme_path (str): Path to the markdown file to inspect.
 
     Raises:
         FileNotFoundError: If the markdown file does not exist.
@@ -213,37 +214,56 @@ def enforce_coverage_shields(readme_path: str = "README.md") -> None:
 
 
 def parse_args(args: list[str]) -> tuple[bool, str]:
-    """Parse command-line arguments for update and enforcement operations.
+    """Parse command-line arguments for update and enforcement operations via ``argparse``.
 
     Args:
-        args: List of command-line argument strings.
+        args (list[str]): List of command-line argument strings.
 
     Returns:
-        Tuple of (enforce_only: bool, target_readme: str).
+        tuple[bool, str]: Tuple of ``(enforce_only, target_readme)``.
     """
-    enforce_only = False
-    target_readme = "README.md"
-    for arg in args:
-        if arg in ("--enforce", "--check", "-c"):
-            enforce_only = True
-        elif not arg.startswith("-"):
-            target_readme = arg
-    return enforce_only, target_readme
+    parser = argparse.ArgumentParser(
+        description="Update and enforce README.md test and documentation coverage shields."
+    )
+    parser.add_argument(
+        "readme",
+        nargs="?",
+        default="README.md",
+        help="Path to target README markdown file (default: README.md).",
+    )
+    parser.add_argument(
+        "-c",
+        "--check",
+        "--enforce",
+        dest="enforce",
+        action="store_true",
+        help="Check shield invariants without modifying the README file.",
+    )
+    parsed = parser.parse_args(args)
+    return bool(parsed.enforce), str(parsed.readme)
+
+
+_NL: str = chr(10)
+_HTAB: str = chr(9)
 
 
 def _apply_badge_replacements(content: str, test_badge: str, doc_badge: str) -> str:
     """Update or insert test and doc coverage badges in README markdown content.
 
     Args:
-        content: Original README markdown text.
-        test_badge: Rendered Test Coverage markdown badge.
-        doc_badge: Rendered Doc Coverage markdown badge.
+        content (str): Original README markdown text.
+        test_badge (str): Rendered Test Coverage markdown badge.
+        doc_badge (str): Rendered Doc Coverage markdown badge.
 
     Returns:
-        Updated README markdown text.
+        str: Updated README markdown text.
     """
+    ws_cls = f"[ {_HTAB}]*"
     content = re.sub(
-        r"[ \t]*\[?\!\[Branch\s+Coverage\]\(https://img\.shields\.io/badge/(?:branch_)?coverage-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?\n?",
+        ws_cls
+        + r"\[?\!\[Branch\s+Coverage\]\(https://img\.shields\.io/badge/(?:branch_)?coverage-[0-9.]+%25-[a-z]+\.svg\)\]?(?:\(#\))?"
+        + _NL
+        + "?",
         "",
         content,
         flags=re.IGNORECASE,
@@ -252,7 +272,7 @@ def _apply_badge_replacements(content: str, test_badge: str, doc_badge: str) -> 
     if TEST_BADGE_RE.search(content):
         content = TEST_BADGE_RE.sub("__TEST_BADGE_PLACEHOLDER__", content, count=1)
         content = re.sub(
-            r"[ \t]*" + TEST_BADGE_RE.pattern + r"\n?",
+            ws_cls + TEST_BADGE_RE.pattern + _NL + "?",
             "",
             content,
             flags=re.IGNORECASE,
@@ -260,26 +280,26 @@ def _apply_badge_replacements(content: str, test_badge: str, doc_badge: str) -> 
         content = content.replace("__TEST_BADGE_PLACEHOLDER__", test_badge)
     elif DOC_BADGE_RE.search(content):
         content = re.sub(
-            r"([ \t]*\[?\!\[Doc\s+Coverage\])",
-            rf"{test_badge}\n\g<1>",
+            r"(" + ws_cls + r"\[?\!\[Doc\s+Coverage\])",
+            test_badge + _NL + r"\g<1>",
             content,
             count=1,
             flags=re.IGNORECASE,
         )
-    elif re.search(r"(#[^\n]*\n+)", content):
+    elif re.search(f"(#[^\\r{_NL}]*{_NL}+)", content):
         content = re.sub(
-            r"(#[^\n]*\n+)",
-            rf"\g<1>{test_badge}\n",
+            f"(#[^\\r{_NL}]*{_NL}+)",
+            r"\g<1>" + test_badge + _NL,
             content,
             count=1,
         )
     else:
-        content = f"{test_badge}\n{content}"
+        content = f"{test_badge}{_NL}{content}"
 
     if DOC_BADGE_RE.search(content):
         content = DOC_BADGE_RE.sub("__DOC_BADGE_PLACEHOLDER__", content, count=1)
         content = re.sub(
-            r"[ \t]*" + DOC_BADGE_RE.pattern + r"\n?",
+            ws_cls + DOC_BADGE_RE.pattern + _NL + "?",
             "",
             content,
             flags=re.IGNORECASE,
@@ -287,15 +307,15 @@ def _apply_badge_replacements(content: str, test_badge: str, doc_badge: str) -> 
         content = content.replace("__DOC_BADGE_PLACEHOLDER__", doc_badge)
     else:
         content = re.sub(
-            r"(\[\!\[(?:Test\s+)?Coverage\].*?\n)",
-            rf"\g<1>{doc_badge}\n",
+            r"(\[\!\[(?:Test\s+)?Coverage\].*?" + _NL + ")",
+            r"\g<1>" + doc_badge + _NL,
             content,
             count=1,
             flags=re.IGNORECASE,
         )
 
     return re.sub(
-        r"(\[!\[(?:Test\s+)?Coverage\].*?\n)\s*(\[!\[Doc\s+Coverage\])",
+        r"(\[!\[(?:Test\s+)?Coverage\].*?" + _NL + r")\s*(\[!\[Doc\s+Coverage\])",
         r"\g<1>\g<2>",
         content,
     )
@@ -305,13 +325,17 @@ def update_readme(readme_path: str | None = None, coverage_json_path: str | None
     """Update test and doc coverage shields in README.md, enforcing exactly one of each.
 
     Args:
-        readme_path: Path to the README.md file to update.
-        coverage_json_path: Optional path to the coverage.json file to inspect.
+        readme_path (str | None): Path to the README.md file to update.
+        coverage_json_path (str | None): Optional path to an existing coverage.json file to inspect.
 
     Raises:
-        ValueError: If shield enforcement fails after generation.
+        ValueError: If shield enforcement fails after generation or coverage is 0%.
     """
-    target_readme = readme_path if readme_path is not None else (sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "README.md")
+    target_readme = (
+        readme_path
+        if readme_path is not None
+        else (sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else "README.md")
+    )
     if not os.path.exists(target_readme):
         return
 
@@ -352,10 +376,10 @@ def main(args: list[str] | None = None) -> int:
     """Run main CLI entry point for badge update and enforcement.
 
     Args:
-        args: Command-line arguments list or None for sys.argv[1:].
+        args (list[str] | None): Command-line arguments list or None for ``sys.argv[1:]``.
 
     Returns:
-        Integer exit status code (0 for success, non-zero for error).
+        int: Integer exit status code (0 for success, non-zero for error).
     """
     cli_args = sys.argv[1:] if args is None else args
     enforce_only, target_readme = parse_args(cli_args)
@@ -368,7 +392,7 @@ def main(args: list[str] | None = None) -> int:
             enforce_coverage_shields(readme_path=target_readme)
         return 0
     except (ValueError, FileNotFoundError) as err:
-        sys.stderr.write(f"Error: {err}\n")
+        print(f"Error: {err}", file=sys.stderr)
         return 1
 
 

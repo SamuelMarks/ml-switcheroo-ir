@@ -100,7 +100,9 @@ def _extract_sass_registers(node: LogicalNode, role: str = "src") -> list[str]:
     Returns:
         list[str]: Normalized register names.
     """
-    primary_key, alt_key, ports = ("dst_reg", "dst", node.outputs) if role == "dst" else ("src_regs", "srcs", node.inputs)
+    primary_key, alt_key, ports = (
+        ("dst_reg", "dst", node.outputs) if role == "dst" else ("src_regs", "srcs", node.inputs)
+    )
     raw = node.attributes.get(primary_key)
     if raw is None:
         raw = node.attributes.get(alt_key)
@@ -117,14 +119,84 @@ def _extract_sass_registers(node: LogicalNode, role: str = "src") -> list[str]:
     return list(dict.fromkeys(regs))
 
 
+def _extract_vopd_literals(node: LogicalNode) -> set[str]:
+    """Extract 32-bit literal immediate tokens referenced by a GFX11 VOPD instruction node.
+
+    Args:
+        node (LogicalNode): VOPD Slot X or Slot Y candidate node.
+
+    Returns:
+        set[str]: Normalized literal constant strings referenced by ``node``.
+    """
+    literals: set[str] = set()
+    for key in ("literal", "imm", "imm32"):
+        val = node.attributes.get(key)
+        if isinstance(val, list):
+            for elem in val:
+                if elem is not None and not isinstance(elem, bool):
+                    literals.add(str(elem).strip().lower())
+        elif val is not None and not isinstance(val, bool):
+            literals.add(str(val).strip().lower())
+    for inp in node.inputs:
+        tok = str(inp).strip().lower()
+        if tok.startswith("0x"):
+            literals.add(tok)
+    return literals
+
+
+def _check_vopd_slot(node: LogicalNode, slot_label: str) -> list[ValidationError]:
+    """Verify domain and Slot X/Y eligibility for one VOPD instruction operand.
+
+    Args:
+        node (LogicalNode): Instruction node (`opX` or `opY`).
+        slot_label (str): ``'X'`` or ``'Y'``.
+
+    Returns:
+        list[ValidationError]: Domain or slot eligibility errors.
+    """
+    errors: list[ValidationError] = []
+    param_label = f"op{slot_label}"
+    if node.domain != "amd_rdna":
+        errors.append(
+            ValidationError(
+                node_id=node.id,
+                attribute="domain",
+                message=f"{param_label} domain must be 'amd_rdna', got '{node.domain}'.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+    canon = RDNA_TO_VOPD_MAP.get(node.op_type, node.op_type)
+    allowed_slot = RDNA_VOPD_SLOTS.get(canon, "")
+    if canon not in RDNA_REGISTRY or not allowed_slot:
+        errors.append(
+            ValidationError(
+                node_id=node.id,
+                attribute="vopd_opcode",
+                message=f"Opcode '{node.op_type}' is not a valid RDNA3 VOPD instruction.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+    elif slot_label not in allowed_slot and allowed_slot != "BOTH":
+        errors.append(
+            ValidationError(
+                node_id=node.id,
+                attribute="vopd_slot",
+                message=f"Opcode '{node.op_type}' cannot be issued in VOPD Slot {slot_label}.",
+                level=ValidationLevel.ERROR,
+            )
+        )
+    return errors
+
+
 def validate_vopd_pairing(
     opX: LogicalNode,
     opY: LogicalNode,
 ) -> list[ValidationError]:
     """Validate AMD RDNA3 / GFX11 dual-issue VOPD instruction pairing rules.
 
-    Checks opcode pairing matrix, Slot X/Y compatibility, register bank conflict
-    exclusivity, and destination register collisions.
+    Checks opcode pairing matrix, Slot X/Y compatibility, GFX11 destination VGPR
+    parity (``vdst_x % 2 != vdst_y % 2``), single 32-bit literal bus sharing, and
+    4-bank source VGPR exclusivity.
 
     Args:
         opX (LogicalNode): Instruction for VOPD Slot X.
@@ -134,77 +206,44 @@ def validate_vopd_pairing(
         list[ValidationError]: Detected VOPD pairing violations.
     """
     errors: list[ValidationError] = []
-
-    if opX.domain != "amd_rdna":
-        errors.append(
-            ValidationError(
-                node_id=opX.id,
-                attribute="domain",
-                message=f"opX domain must be 'amd_rdna', got '{opX.domain}'.",
-                level=ValidationLevel.ERROR,
-            )
-        )
-    if opY.domain != "amd_rdna":
-        errors.append(
-            ValidationError(
-                node_id=opY.id,
-                attribute="domain",
-                message=f"opY domain must be 'amd_rdna', got '{opY.domain}'.",
-                level=ValidationLevel.ERROR,
-            )
-        )
-
-    canon_x = RDNA_TO_VOPD_MAP.get(opX.op_type, opX.op_type)
-    canon_y = RDNA_TO_VOPD_MAP.get(opY.op_type, opY.op_type)
-
-    slot_x = RDNA_VOPD_SLOTS.get(canon_x, "")
-    if canon_x not in RDNA_REGISTRY or not slot_x:
-        errors.append(
-            ValidationError(
-                node_id=opX.id,
-                attribute="vopd_opcode",
-                message=f"Opcode '{opX.op_type}' is not a valid RDNA3 VOPD instruction.",
-                level=ValidationLevel.ERROR,
-            )
-        )
-    elif "X" not in slot_x and slot_x != "BOTH":
-        errors.append(
-            ValidationError(
-                node_id=opX.id,
-                attribute="vopd_slot",
-                message=f"Opcode '{opX.op_type}' cannot be issued in VOPD Slot X.",
-                level=ValidationLevel.ERROR,
-            )
-        )
-
-    slot_y = RDNA_VOPD_SLOTS.get(canon_y, "")
-    if canon_y not in RDNA_REGISTRY or not slot_y:
-        errors.append(
-            ValidationError(
-                node_id=opY.id,
-                attribute="vopd_opcode",
-                message=f"Opcode '{opY.op_type}' is not a valid RDNA3 VOPD instruction.",
-                level=ValidationLevel.ERROR,
-            )
-        )
-    elif "Y" not in slot_y and slot_y != "BOTH":
-        errors.append(
-            ValidationError(
-                node_id=opY.id,
-                attribute="vopd_slot",
-                message=f"Opcode '{opY.op_type}' cannot be issued in VOPD Slot Y.",
-                level=ValidationLevel.ERROR,
-            )
-        )
+    errors.extend(_check_vopd_slot(opX, "X"))
+    errors.extend(_check_vopd_slot(opY, "Y"))
 
     dst_x = _extract_dst_vgpr(opX)
     dst_y = _extract_dst_vgpr(opY)
-    if dst_x is not None and dst_y is not None and dst_x == dst_y:
+    if dst_x is not None and dst_y is not None:
+        if dst_x == dst_y:
+            errors.append(
+                ValidationError(
+                    node_id=opY.id,
+                    attribute="vopd_destination",
+                    message=f"VOPD destination conflict: opX and opY both write to VGPR v{dst_x}.",
+                    level=ValidationLevel.ERROR,
+                )
+            )
+        elif (dst_x % 2) == (dst_y % 2):
+            errors.append(
+                ValidationError(
+                    node_id=opY.id,
+                    attribute="vopd_destination",
+                    message=(
+                        f"GFX11 VOPD destination parity conflict: v{dst_x} and v{dst_y} "
+                        "share even/odd parity (requires vdst_x % 2 != vdst_y % 2)."
+                    ),
+                    level=ValidationLevel.ERROR,
+                )
+            )
+
+    literals_union = _extract_vopd_literals(opX) | _extract_vopd_literals(opY)
+    if len(literals_union) > 1:
         errors.append(
             ValidationError(
                 node_id=opY.id,
-                attribute="vopd_destination",
-                message=f"VOPD destination conflict: opX and opY both write to VGPR v{dst_x}.",
+                attribute="vopd_literal",
+                message=(
+                    f"GFX11 VOPD single-literal violation: dual-issued instructions reference "
+                    f"{len(literals_union)} distinct 32-bit literals {sorted(literals_union)} (max 1)."
+                ),
                 level=ValidationLevel.ERROR,
             )
         )
@@ -220,7 +259,10 @@ def validate_vopd_pairing(
                 ValidationError(
                     node_id=opX.id,
                     attribute="vopd_bank_conflict",
-                    message=(f"VOPD register bank conflict on bank {bank}: opX reads VGPRs {sorted(bank_x_regs)} and opY reads VGPRs {sorted(bank_y_regs)}."),
+                    message=(
+                        f"VOPD register bank conflict on bank {bank}: "
+                        f"opX reads VGPRs {sorted(bank_x_regs)} and opY reads VGPRs {sorted(bank_y_regs)}."
+                    ),
                     level=ValidationLevel.ERROR,
                 )
             )
@@ -273,7 +315,10 @@ def _validate_rdna_isa(node: LogicalNode, level: ValidationLevel) -> list[Valida
                 ValidationError(
                     node_id=node.id,
                     attribute="vgpr_operands",
-                    message=f"VGPR bank conflict detected in instruction '{node.op_type}': operands map to same bank ({banks}).",
+                    message=(
+                        f"VGPR bank conflict detected in instruction '{node.op_type}': "
+                        f"operands map to same bank ({banks})."
+                    ),
                     level=lvl,
                 )
             )
@@ -347,7 +392,11 @@ def _validate_sass_isa(node: LogicalNode) -> list[ValidationError]:
     """
     errors: list[ValidationError] = []
     barrier = node.attributes.get("barrier_predicate")
-    if barrier is not None and isinstance(barrier, str) and not (barrier.startswith(("@P", "@!P")) or barrier in ("@PT", "@!PT")):
+    if (
+        barrier is not None
+        and isinstance(barrier, str)
+        and not (barrier.startswith(("@P", "@!P")) or barrier in ("@PT", "@!PT"))
+    ):
         errors.append(
             ValidationError(
                 node_id=node.id,
@@ -426,7 +475,12 @@ def _validate_wgsl_isa(node: LogicalNode) -> list[ValidationError]:
     """
     errors: list[ValidationError] = []
     wg_size = node.attributes.get("workgroup_size")
-    if wg_size is not None and (not isinstance(wg_size, (list, tuple)) or len(wg_size) < 1 or len(wg_size) > 3 or not all(isinstance(x, int) and not isinstance(x, bool) and x > 0 for x in wg_size)):
+    if wg_size is not None and (
+        not isinstance(wg_size, (list, tuple))
+        or len(wg_size) < 1
+        or len(wg_size) > 3
+        or not all(isinstance(x, int) and not isinstance(x, bool) and x > 0 for x in wg_size)
+    ):
         errors.append(
             ValidationError(
                 node_id=node.id,
@@ -457,7 +511,11 @@ def _validate_wgsl_isa(node: LogicalNode) -> list[ValidationError]:
             )
 
     if qualifier == "uniform":
-        align = node.attributes.get("struct_alignment") if "struct_alignment" in node.attributes else node.attributes.get("alignment")
+        align = (
+            node.attributes.get("struct_alignment")
+            if "struct_alignment" in node.attributes
+            else node.attributes.get("alignment")
+        )
         if align is not None and (not isinstance(align, int) or isinstance(align, bool) or align % 16 != 0):
             errors.append(
                 ValidationError(
@@ -490,19 +548,26 @@ def _validate_wgsl_isa(node: LogicalNode) -> list[ValidationError]:
             )
         )
 
-    if qualifier in ("storage, read", "storage_read") and (node.op_type in WGSL_MUTATING_OPS or bool(node.attributes.get("is_mutating", False))):
+    if qualifier in ("storage, read", "storage_read") and (
+        node.op_type in WGSL_MUTATING_OPS or bool(node.attributes.get("is_mutating", False))
+    ):
         errors.append(
             ValidationError(
                 node_id=node.id,
                 attribute="address_space",
-                message=f"Mutating operation '{node.op_type}' is illegal on read-only storage buffer with address space '{qualifier}'.",
+                message=(
+                    f"Mutating operation '{node.op_type}' is illegal on read-only "
+                    f"storage buffer with address space '{qualifier}'."
+                ),
                 level=ValidationLevel.ERROR,
             )
         )
     return errors
 
 
-def validate_isa_instruction_node(node: LogicalNode, level: ValidationLevel = ValidationLevel.WARNING) -> list[ValidationError]:
+def validate_isa_instruction_node(
+    node: LogicalNode, level: ValidationLevel = ValidationLevel.WARNING
+) -> list[ValidationError]:
     """Validate GPU accelerator ISA instructions (AMD RDNA, NVIDIA SASS, and WebGPU WGSL).
 
     Args:
@@ -575,7 +640,12 @@ def validate_sass_scoreboarding_sequence(
                     ValidationError(
                         node_id=node.id,
                         attribute="scoreboarding",
-                        message=(f"Scoreboard dependency hazard: consumer '{node.id}' ({node.op_type}) reads register '{reg}' produced by '{prod_id}' ({prod_op}) before pipeline latency satisfied ({rem_cycles} stall cycles remaining) without barrier synchronization."),
+                        message=(
+                            f"Scoreboard dependency hazard: consumer '{node.id}' ({node.op_type}) "
+                            f"reads register '{reg}' produced by '{prod_id}' ({prod_op}) before "
+                            f"pipeline latency satisfied ({rem_cycles} stall cycles remaining) "
+                            "without barrier synchronization."
+                        ),
                         level=lvl,
                     )
                 )
@@ -593,8 +663,12 @@ def validate_sass_scoreboarding_sequence(
 
         stall = node.attributes.get("stall_count")
         if stall is None:
-            stall = node.attributes.get("stall", 0)
-        stall_cycles = stall if isinstance(stall, int) and not isinstance(stall, bool) else 0
-        pending_writes = {r: (p_id, p_op, rem - stall_cycles, wb) for r, (p_id, p_op, rem, wb) in pending_writes.items() if rem - stall_cycles > 0}
+            stall = node.attributes.get("stall")
+        elapsed_cycles = max(1, stall) if isinstance(stall, int) and not isinstance(stall, bool) and stall >= 0 else 1
+        pending_writes = {
+            r: (p_id, p_op, rem - elapsed_cycles, wb)
+            for r, (p_id, p_op, rem, wb) in pending_writes.items()
+            if rem - elapsed_cycles > 0
+        }
 
     return errors

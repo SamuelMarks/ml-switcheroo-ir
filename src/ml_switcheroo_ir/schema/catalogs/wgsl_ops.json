@@ -1,0 +1,86 @@
+{
+  "ops": [
+    {
+      "name": "workgroupBarrier",
+      "domain": "wgsl",
+      "version": 1,
+      "inputs": [],
+      "outputs": [],
+      "attributes": []
+    },
+    {
+      "name": "storageBarrier",
+      "domain": "wgsl",
+      "version": 1,
+      "inputs": [],
+      "outputs": [],
+      "attributes": []
+    },
+    {
+      "name": "fma",
+      "domain": "wgsl",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b",
+        "c"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "dot",
+      "domain": "wgsl",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "textureSample",
+      "domain": "wgsl",
+      "version": 1,
+      "inputs": [
+        "texture",
+        "sampler",
+        "coords"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "storageStore",
+      "domain": "wgsl",
+      "version": 1,
+      "inputs": [
+        "buffer",
+        "index",
+        "value"
+      ],
+      "outputs": [],
+      "attributes": []
+    },
+    {
+      "name": "atomicAdd",
+      "domain": "wgsl",
+      "version": 1,
+      "inputs": [
+        "atomic_ptr",
+        "value"
+      ],
+      "outputs": [
+        "old_value"
+      ],
+      "attributes": []
+    }
+  ]
+}

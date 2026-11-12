@@ -23,19 +23,14 @@ def _eval_exported_code(code: str, fn_name: str = "build_graph") -> sw_ir.Logica
     Returns:
         sw_ir.LogicalGraph: Reconstructed graph.
     """
-    import importlib.util
-    import inspect
+    import runpy
     import tempfile
 
     with tempfile.NamedTemporaryFile("w", suffix=".py", encoding="utf-8") as tmp:
         tmp.write(code)
         tmp.flush()
-        spec = importlib.util.spec_from_file_location("_exported_ir_mod", tmp.name)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        members = dict(inspect.getmembers(module))
-        builder = members[fn_name]
+        ns = runpy.run_path(tmp.name)
+        builder = ns[fn_name]
         assert callable(builder)
         graph = builder()
         assert isinstance(graph, sw_ir.LogicalGraph)
@@ -212,7 +207,10 @@ def test_export_to_python_sym_nodes() -> None:
     assert _format_sym_node(bin_op) == "sw_ir.SymBinaryOp('+', sw_ir.SymVar('B'), sw_ir.SymConst(2))"
     assert _format_sym_node(un_op) == "sw_ir.SymUnaryOp('-', sw_ir.SymVar('T'))"
     assert _format_sym_node(sym_int) == "sw_ir.SymInt(sw_ir.SymVar('B'))"
-    assert _format_sym_node(piecewise) == "sw_ir.SymPiecewise(cases=[('B > 0', sw_ir.SymVar('B'))], default=sw_ir.SymConst(2))"
+    assert (
+        _format_sym_node(piecewise)
+        == "sw_ir.SymPiecewise(cases=[('B > 0', sw_ir.SymVar('B'))], default=sw_ir.SymConst(2))"
+    )
 
     # Test single-dimension shape tuple formatting
     assert _format_shape_tuple(None) == "None"
@@ -264,7 +262,8 @@ def test_export_to_python_subgraphs_and_missing_black(
     )
 
     code = export_to_python(graph)
-    assert "LogicalGraph.from_dict(" in code
+    assert "sw_ir.LogicalGraph(" in code
+    assert "LogicalGraph.from_dict(" not in code
     reconstructed = _eval_exported_code(code, "build_graph")
     body_sub = reconstructed.nodes["scan_op"].subgraphs["body"]
     assert isinstance(body_sub, sw_ir.LogicalGraph)
@@ -298,3 +297,92 @@ def test_export_to_python_special_characters_and_sanitization() -> None:
 
     code_empty = export_to_python(graph, function_name="!!!")
     assert "def build_graph() -> sw_ir.LogicalGraph:" in code_empty
+
+
+def test_export_to_python_sentinels_tuples_and_rich_nested_subgraph() -> None:
+    """Verify export_to_python preserves all Sentinel fields, tuple/scalar shapes, and rich nested subgraphs."""
+    webrtc = sw_ir.WebRTCSignalingTopology(
+        signaling_url="wss://sub.local",
+        peers=[sw_ir.WebRTCPeerConfig(peer_id="p0")],
+    )
+    pipe = sw_ir.PipelineTopologyConfig(
+        microbatch_splitting=sw_ir.MicrobatchSplittingConfig(num_microbatches=2),
+        mesh_mapping=sw_ir.MeshMappingConfig(devices_per_stage=1),
+        stage_communication=sw_ir.StageCommunicationConfig(protocol="nccl"),
+    )
+    sub_in = sw_ir.LogicalNode(id="s_in", op_type="Input", shape_metadata=(), dtype=sw_ir.DType.float32)
+    sub_out = sw_ir.LogicalNode(id="s_out", op_type="Relu", shape_metadata=(4,))
+    nested_with_webrtc = sw_ir.LogicalGraph(
+        name="RichSub",
+        nodes={"s_in": sub_in, "s_out": sub_out},
+        outputs=["s_out"],
+        initializers={"sub_w": {"buf": b"\x10\x20", "arr": [1, 2]}},
+        mesh=sw_ir.LogicalMesh(shape={"d": 1}, webrtc_topology=webrtc),
+        pipeline_topology=pipe,
+        attributes={"t0": (), "t1": (1,), "t2": (1, 2)},
+        loop_options={"iters": 3},
+        edges=[sw_ir.LogicalEdge("s_in", "s_out", value_name="s_edge")],
+    )
+    nested_plain_mesh = sw_ir.LogicalGraph(
+        name="PlainMeshSub",
+        nodes={"m": sw_ir.LogicalNode(id="m", op_type="Relu")},
+        outputs=["m"],
+        mesh=sw_ir.LogicalMesh(shape={"tp": 2}),
+    )
+
+    pw = sw_ir.SymPiecewise(
+        cases=[
+            (sw_ir.SymBinaryOp(">", sw_ir.SymVar("B"), sw_ir.SymConst(1)), sw_ir.SymVar("B")),
+            ("B == 1", sw_ir.SymConst(1)),
+        ],
+        default=sw_ir.SymConst(2),
+    )
+    zt = sw_ir.ZeroTangent(
+        id="zt_full",
+        shape=(sw_ir.SymUnaryOp("abs", sw_ir.SymVar("B")), pw),
+        dtype=sw_ir.DType.bfloat16,
+        version=2,
+        attributes={
+            "dt": sw_ir.DType.float16,
+            "sym": sw_ir.SymInt("B + 1"),
+            "tshape": sw_ir.TensorShape((2, 4)),
+            "tspec": sw_ir.TensorSpec(shape=(2,), dtype=sw_ir.DType.int32),
+            "raw": b"abc",
+        },
+        inputs=["ext_in"],
+        outputs=["zt_ssa"],
+        source_ast_ref="model.py:10",
+        sharding=sw_ir.PartitionSpec(axes=("d", None)),
+        output_specs=[sw_ir.TensorSpec(shape=(2, 4), dtype=sw_ir.DType.bfloat16, sparsity="2:4")],
+        subgraphs={"sub1": nested_with_webrtc, "sub2": nested_plain_mesh},
+        device="cuda:0",
+        stream="s0",
+    )
+    nt = sw_ir.NoTangent(
+        id="nt_full",
+        version=3,
+        attributes={"note": "detached"},
+        inputs=["zt_ssa"],
+        outputs=["nt_ssa"],
+        shape_metadata=(),
+        source_ast_ref="model.py:11",
+        sharding=sw_ir.PartitionSpec(axes=(None,)),
+        dtype=sw_ir.DType.float32,
+        device="cpu",
+        stream="s1",
+    )
+    top = sw_ir.LogicalGraph(
+        name="TopSentinelExport",
+        nodes={"zt_full": zt, "nt_full": nt},
+        outputs=["nt_ssa"],
+        initializers={"top_w": [1.0, 2.0]},
+        edges=[sw_ir.LogicalEdge("zt_full", "nt_full", value_name="cotangent_edge")],
+    )
+    assert (top == 123) is False
+    code = export_to_python(top)
+    reconstructed = _eval_exported_code(code)
+    assert isinstance(reconstructed.nodes["zt_full"], sw_ir.ZeroTangent)
+    assert isinstance(reconstructed.nodes["nt_full"], sw_ir.NoTangent)
+    assert reconstructed.nodes["zt_full"] == zt
+    assert reconstructed.nodes["nt_full"] == nt
+    assert reconstructed.edges == top.edges

@@ -197,3 +197,29 @@ def test_graph_clone_with_pipeline_topology() -> None:
     assert cloned.pipeline_topology == g.pipeline_topology
     assert cloned.pipeline_topology.microbatch_splitting.num_microbatches == 4
     assert cloned.pipeline_topology.mesh_mapping.devices_per_stage == 1
+
+
+def test_node_clone_extra_overrides_and_invalid_shape() -> None:
+    """Test LogicalNode.clone with nested mapping/sequence/iterable extra overrides and invalid shape_metadata."""
+    import pytest
+
+    from ml_switcheroo_ir import DType
+
+    n = LogicalNode(id="n", op_type="Custom", dtype=DType.float32)
+    c1 = n.clone(
+        nested_map={"a": 1},
+        nested_seq=[2, 3],
+        nested_set={4},
+        dtype="float16",
+        shape_metadata=[2, 4],
+        sharding=None,
+        source_ast_ref=None,
+    )
+    assert c1.attributes["nested_map"] == {"a": 1}
+    assert c1.attributes["nested_seq"] == [2, 3]
+    assert c1.attributes["nested_set"] == [4]
+    assert c1.dtype is DType.float16
+    assert c1.shape_metadata == (2, 4)
+
+    with pytest.raises(TypeError, match="Invalid shape_metadata override"):
+        n.clone(shape_metadata="bad_shape_str")

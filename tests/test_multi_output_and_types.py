@@ -599,3 +599,82 @@ def test_node_invalid_shape_metadata_and_output_indexing() -> None:
     s_neg = TensorShape((SymConst(-1),))
     with pytest.raises(ValueError, match="dynamic or symbolic"):
         _ = s_neg.static_shape
+
+
+def test_runtime_attribute_and_initializer_validation_and_typeguards() -> None:
+    """Test runtime AttributeValue/InitializerValue validation, JSON schemas, TypeGuards, and describe_value_type."""
+    import pydantic
+
+    from ml_switcheroo_ir.shapes import SymConst, SymInt, SymVar
+    from ml_switcheroo_ir.types import (
+        InitializerValue,
+        describe_value_type,
+        is_dynamic_dimension,
+        is_symbolic_dimension,
+    )
+
+    init_schema = LogicalGraph.model_json_schema()
+    assert "initializers" in init_schema["properties"]
+    assert "anyOf" in pydantic.TypeAdapter(InitializerValue).json_schema()
+
+    valid_graph = LogicalGraph(
+        name="ValidInit",
+        initializers={"weights": [1, 2.5, True, "tag", b"raw", {"nested": [3]}]},
+    )
+    assert valid_graph.initializers["weights"] is not None
+
+    with pytest.raises(pydantic.ValidationError, match="Unsupported InitializerValue"):
+        LogicalGraph.model_validate({"name": "BadInit", "initializers": {"bad": {1, 2}}})
+
+    with pytest.raises(pydantic.ValidationError, match="Initializer dictionary key must be str"):
+        LogicalGraph.model_validate({"name": "BadKeyInit", "initializers": {"bad": {123: "val"}}})
+
+    with pytest.raises(pydantic.ValidationError, match="Unsupported AttributeValue"):
+        LogicalNode.model_validate({"id": "n_bad_attr", "op_type": "Op", "attributes": {"bad": {1, 2}}})
+
+    with pytest.raises(pydantic.ValidationError, match="Attribute mapping key must be str"):
+        LogicalNode.model_validate({"id": "n_bad_key", "op_type": "Op", "attributes": {"nested": {99: 1}}})
+
+    assert is_symbolic_dimension("B") is True
+    assert is_symbolic_dimension("4") is False
+    assert is_symbolic_dimension(SymVar("N")) is True
+    assert is_symbolic_dimension(SymInt("N + 1")) is True
+    assert is_symbolic_dimension(-1) is False
+    assert is_symbolic_dimension(8) is False
+    with pytest.raises(TypeError, match="Boolean value"):
+        is_symbolic_dimension(True)
+    with pytest.raises(TypeError, match="Boolean value"):
+        is_dynamic_dimension(False)
+    with pytest.raises(TypeError, match="Boolean value"):
+        TensorShape((True,))
+    assert is_dynamic_dimension({"not": "dim"}) is True
+
+    import typing
+
+    class _NoQuoteMeta(type):
+        """Metaclass returning angle-bracket type string without single quotes."""
+
+        def __str__(cls) -> str:
+            """Return unquoted representation.
+
+            Returns:
+                str: Custom string.
+            """
+            return "<pkg.UnquotedCustomType>"
+
+    class _UnquotedObj(metaclass=_NoQuoteMeta):
+        """Helper iterable satisfying DescribeValueTarget."""
+
+        def __iter__(self) -> typing.Iterator[int]:
+            """Return empty iterator.
+
+            Returns:
+                typing.Iterator[int]: Empty iterator.
+            """
+            return iter(())
+
+    assert describe_value_type(None) == "NoneType"
+    assert describe_value_type(TensorShape((2, 3))) == "TensorShape"
+    assert describe_value_type(TensorSpec((2, 3), DType.float32)) == "TensorSpec"
+    assert describe_value_type(SymConst(1)) == "SymNode"
+    assert describe_value_type(_UnquotedObj()) == "UnquotedCustomType"

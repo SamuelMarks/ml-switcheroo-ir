@@ -1,0 +1,206 @@
+{
+  "ops": [
+    {
+      "name": "collective.all_reduce",
+      "domain": "collective",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "reduction_op",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mesh_axis",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "channel_id",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "comm",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "stream",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "datatype",
+          "type": "str",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "all_reduce"
+      ]
+    },
+    {
+      "name": "collective.all_gather",
+      "domain": "collective",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "gather_dimension",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mesh_axis",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "comm",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "stream",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "datatype",
+          "type": "str",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "all_gather"
+      ]
+    },
+    {
+      "name": "collective.reduce_scatter",
+      "domain": "collective",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "scatter_dimension",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "reduction_op",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mesh_axis",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "comm",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "stream",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "datatype",
+          "type": "str",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "reduce_scatter"
+      ]
+    },
+    {
+      "name": "collective.all_to_all",
+      "domain": "collective",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "split_dimension",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "concat_dimension",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mesh_axis",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "comm",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "stream",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "datatype",
+          "type": "str",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "all_to_all"
+      ]
+    }
+  ]
+}

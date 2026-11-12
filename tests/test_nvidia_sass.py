@@ -226,7 +226,7 @@ def test_sass_scoreboarding_latency_hazard_detection() -> None:
     )
     assert v.validate_sass_scoreboarding([producer_stalled, consumer]) == []
 
-    # 3. Hazard avoided by barrier synchronization: LDG (latency 200) write_barrier=0, consumer wait_barrier_mask=1 (bit 0)
+    # 3. Hazard avoided by barrier sync: LDG (latency 200) write_barrier=0, consumer wait_barrier_mask=1 (bit 0)
     ldg = LogicalNode(
         id="inst_ldg",
         op_type="LDG",
@@ -289,3 +289,18 @@ def test_sass_scoreboarding_latency_hazard_detection() -> None:
         attributes={"stall": 1, "wait_barrier_mask": "0-----"},
     )
     assert v.validate_sass_scoreboarding([producer, consumer_str_mask]) == []
+
+    # 8. Intervening instructions omitting stall_count advance scoreboard timer by 1 cycle each
+    filler = [
+        LogicalNode(id=f"nop_{i}", op_type="FADD", domain="nvidia_sass", inputs=["R10", "R11"], outputs=[f"R2{i}"])
+        for i in range(3)
+    ]
+    consumer_no_mask = LogicalNode(
+        id="cons_after_fillers",
+        op_type="FADD",
+        domain="nvidia_sass",
+        inputs=["R2", "R3"],
+        outputs=["R5"],
+    )
+    # Producer (1 cycle) + 3 fillers (3 cycles) = 4 cycles elapsed -> latency-4 write to R2 retired!
+    assert v.validate_sass_scoreboarding([producer, *filler, consumer_no_mask]) == []

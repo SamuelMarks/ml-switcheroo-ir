@@ -14,7 +14,7 @@ MonomialType: typing_extensions.TypeAlias = tuple[tuple[str, int], ...]
 __all__ = [
     "MonomialType",
     "Polynomial",
-    "_poly_to_symnode",
+    "poly_to_symnode",
 ]
 
 
@@ -245,11 +245,11 @@ class Polynomial:
         )
         return "".join(self._format_monomial_term(i, mono, self.terms[mono]) for i, mono in enumerate(sorted_monos))
 
-    def __eq__(self, other: Polynomial | int | float | str | bool | None) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Evaluate equality between two polynomials.
 
         Args:
-            other (Polynomial | int | float | str | bool | None): Other value to compare against.
+            other (object): Other value to compare against.
 
         Returns:
             bool: True if both polynomials have identical canonical terms.
@@ -321,7 +321,10 @@ def _build_monomial_symnode(mono: MonomialType, coeff: int) -> SymNode:
     if coeff != 1 or not mono:
         var_factors.append(SymConst(coeff))
     for var, power in mono:
-        var_factors.extend(SymVar(var) for _ in range(power))
+        if power == 1:
+            var_factors.append(SymVar(var))
+        else:
+            var_factors.append(SymBinaryOp("**", SymVar(var), SymConst(power)))
 
     term_node = var_factors[0]
     for f in var_factors[1:]:
@@ -329,7 +332,7 @@ def _build_monomial_symnode(mono: MonomialType, coeff: int) -> SymNode:
     return term_node
 
 
-def _poly_to_symnode(poly: Polynomial) -> SymNode:
+def poly_to_symnode(poly: Polynomial) -> SymNode:
     """Convert a canonical Polynomial back into a simplified SymNode expression tree.
 
     Args:
@@ -349,17 +352,15 @@ def _poly_to_symnode(poly: Polynomial) -> SymNode:
         poly.terms.keys(),
         key=lambda m: (-sum(p for _, p in m), [v for v, _ in m]),
     )
-    res_node: SymNode | None = None
+    first_mono = sorted_monos[0]
+    first_coeff = poly.terms[first_mono]
+    first_term = _build_monomial_symnode(first_mono, abs(first_coeff))
+    res_node: SymNode = SymBinaryOp("-", SymConst(0), first_term) if first_coeff < 0 else first_term
 
-    for mono in sorted_monos:
+    for mono in sorted_monos[1:]:
         raw_coeff = poly.terms[mono]
         term_node = _build_monomial_symnode(mono, abs(raw_coeff))
+        op = "-" if raw_coeff < 0 else "+"
+        res_node = SymBinaryOp(op, res_node, term_node)
 
-        if res_node is None:
-            res_node = SymBinaryOp("-", SymConst(0), term_node) if raw_coeff < 0 else term_node
-        elif raw_coeff < 0:
-            res_node = SymBinaryOp("-", res_node, term_node)
-        else:
-            res_node = SymBinaryOp("+", res_node, term_node)
-
-    return res_node or SymConst(0)
+    return res_node

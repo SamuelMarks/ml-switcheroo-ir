@@ -1,0 +1,210 @@
+{
+  "ops": [
+    {
+      "name": "add",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": [],
+      "dialects": {
+        "torch": "torch.add",
+        "jax": "jax.numpy.add",
+        "tensorflow": "tf.math.add",
+        "keras3": "keras.ops.add",
+        "mlx": "mlx.core.add",
+        "onnx": "Add",
+        "stablehlo": "stablehlo.add"
+      }
+    },
+    {
+      "name": "subtract",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "multiply",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "divide",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "matmul",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": [],
+      "dialects": {
+        "torch": "torch.matmul",
+        "jax": "jax.numpy.matmul",
+        "tensorflow": "tf.linalg.matmul",
+        "keras3": "keras.ops.matmul",
+        "mlx": "mlx.core.matmul",
+        "onnx": "MatMul",
+        "stablehlo": "stablehlo.dot_general"
+      }
+    },
+    {
+      "name": "relu",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "x"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "gelu",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "x"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "silu",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "x"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "softmax",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "x"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": [
+        {
+          "name": "dim",
+          "type": "int",
+          "required": false,
+          "default": -1
+        }
+      ]
+    },
+    {
+      "name": "layer_norm",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "x",
+        "scale",
+        "bias"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": [
+        {
+          "name": "eps",
+          "type": "float",
+          "required": false,
+          "default": 1e-05
+        }
+      ]
+    },
+    {
+      "name": "rms_norm",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "x",
+        "scale"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": [
+        {
+          "name": "eps",
+          "type": "float",
+          "required": false,
+          "default": 1e-06
+        }
+      ]
+    },
+    {
+      "name": "conv2d",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "x",
+        "weight"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "scaled_dot_product_attention",
+      "domain": "odl",
+      "version": 1,
+      "inputs": [
+        "query",
+        "key",
+        "value"
+      ],
+      "outputs": [
+        "result"
+      ],
+      "attributes": []
+    }
+  ]
+}

@@ -157,7 +157,11 @@ def test_parameter_kind_enum_roundtrip() -> None:
     """Test ParameterKind enumeration functional roundtrip and validation."""
 
     class DummyModel(pydantic.BaseModel):
-        """Dummy docstring."""
+        """Dummy model wrapping ParameterKind.
+
+        Attributes:
+            kind (ParameterKind): Parameter kind under test.
+        """
 
         kind: ParameterKind
 
@@ -175,7 +179,11 @@ def test_semantic_tier_enum_roundtrip() -> None:
     """Test SemanticTier enumeration functional roundtrip and validation."""
 
     class DummyModel(pydantic.BaseModel):
-        """Dummy docstring."""
+        """Dummy model wrapping SemanticTier.
+
+        Attributes:
+            tier (SemanticTier): Semantic tier under test.
+        """
 
         tier: SemanticTier
 
@@ -193,7 +201,11 @@ def test_logic_op_enum_roundtrip() -> None:
     """Test LogicOp enumeration functional roundtrip and validation."""
 
     class DummyModel(pydantic.BaseModel):
-        """Dummy docstring."""
+        """Dummy model wrapping LogicOp.
+
+        Attributes:
+            op (LogicOp): Logic operator under test.
+        """
 
         op: LogicOp
 
@@ -205,3 +217,130 @@ def test_logic_op_enum_roundtrip() -> None:
 
     with pytest.raises(pydantic.ValidationError):
         DummyModel.model_validate_json('{"op": "not_an_operator"}')
+
+
+def test_logic_constraints_isa_aliases_and_standard_map_integration() -> None:
+    """Verify LogicConstraint, ExtendedGhostParam.check_value_constraints, GhostIsaRef aliases, and StandardMap."""
+    from ml_switcheroo_ir.schema.ghost import (
+        LogicConstraint,
+    )
+
+    assert LogicConstraint(op=LogicOp.EQ, target=4).evaluate(4)
+    assert not LogicConstraint(op=LogicOp.EQ, target=1).evaluate(True)
+    assert LogicConstraint(op=LogicOp.NEQ, target=1).evaluate(True)
+    assert LogicConstraint(op=LogicOp.GT, target=2).evaluate(5)
+    assert LogicConstraint(op=LogicOp.LT, target=5).evaluate(2)
+    assert LogicConstraint(op=LogicOp.GTE, target=2).evaluate(2)
+    assert LogicConstraint(op=LogicOp.LTE, target=2).evaluate(2)
+    assert not LogicConstraint(op=LogicOp.GT, target="bad").evaluate(5)
+    assert LogicConstraint(op=LogicOp.IN, target=["a", "b"]).evaluate("a")
+    assert not LogicConstraint(op=LogicOp.IN, target="not_list").evaluate("a")
+    assert LogicConstraint(op=LogicOp.NOT_IN, target=["a", "b"]).evaluate("c")
+    assert LogicConstraint(op=LogicOp.IS_TYPE, target="int").evaluate(3)
+    assert not LogicConstraint(op=LogicOp.IS_TYPE, target="int").evaluate(True)
+    assert LogicConstraint(op=LogicOp.IS_TYPE, target="bool").evaluate(False)
+    assert LogicConstraint(op=LogicOp.IS_TYPE, target="float").evaluate(1.5)
+    assert LogicConstraint(op=LogicOp.IS_TYPE, target="str").evaluate("ok")
+    assert LogicConstraint(op=LogicOp.IS_TYPE, target="list").evaluate([1])
+    assert LogicConstraint(op=LogicOp.IS_TYPE, target="dict").evaluate({"k": 1})
+    assert LogicConstraint(op=LogicOp.IS_TYPE, target="none").evaluate(None)
+    assert not LogicConstraint(op=LogicOp.IS_TYPE, target="unknown_kind").evaluate(1)
+
+    param = ExtendedGhostParam(
+        name="mode",
+        kind=ParameterKind.KEYWORD_ONLY,
+        is_mandatory=True,
+        allowed_values=["fast", "exact"],
+        constraints=[LogicConstraint(op=LogicOp.IS_TYPE, target="str")],
+    )
+    assert not param.check_value_constraints(None)
+    assert not param.check_value_constraints("invalid_mode")
+    assert param.check_value_constraints("fast")
+
+    opt_param = ExtendedGhostParam(name="opt", kind=ParameterKind.KEYWORD_ONLY, is_mandatory=False)
+    assert opt_param.check_value_constraints(None)
+
+
+def test_ghost_isa_aliases_and_standard_map_integration() -> None:
+    """Verify GhostIsaRef alias folding and ParameterTranslationEngine StandardMap integration."""
+    from ml_switcheroo_ir.schema.ghost import (
+        GhostIsaRef,
+        IsaControlCodesSpec,
+        StandardMap,
+        VopdProfileSpec,
+    )
+    from ml_switcheroo_ir.translation import ParameterTranslationEngine
+
+    # GhostIsaRef alias folding branches
+    r_str_prof = GhostIsaRef(
+        name="V_ADD_F32",
+        api_path="rdna.V_ADD_F32",
+        kind="function",
+        vopd_profile="Y",
+        allowed_modifiers=["clamp"],
+    )
+    assert r_str_prof.vopd_slot == "Y"
+    assert r_str_prof.allowed_modifiers == ["clamp"]
+
+    r_preset_slot = GhostIsaRef(
+        name="V_PRESET",
+        api_path="rdna.V_PRESET",
+        kind="function",
+        vopd_profile={"slot": "X"},
+        vopd_slot="Y",
+        execution_latency="not_int",
+        scoreboard_barrier_mask=2,
+    )
+    base_ref = GhostRef(name="V_BASE", api_path="rdna.V_BASE", kind="function")
+    assert GhostIsaRef.model_validate(base_ref, from_attributes=True).name == "V_BASE"
+    assert r_preset_slot.vopd_slot == "X"
+    r_lat_only = GhostIsaRef(name="V_LAT", api_path="rdna.V_LAT", kind="function", execution_latency=4)
+    assert r_lat_only.execution_latency == 4
+
+    r_model_prof = GhostIsaRef(
+        name="V_MUL_F32",
+        api_path="rdna.V_MUL_F32",
+        kind="function",
+        vopd_profile=VopdProfileSpec(slot=None),
+        vopd_slot="X",
+        control_codes={"stall_count": 2},
+        execution_latency=(4, 8),
+        scoreboard_barrier_mask="0x1",
+    )
+    assert r_model_prof.vopd_slot == "X"
+    assert r_model_prof.execution_latency == (4, 8)
+    assert r_model_prof.scoreboard_barrier_mask == "0x1"
+
+    r_dict_prof = GhostIsaRef(
+        name="V_SUB_F32",
+        api_path="rdna.V_SUB_F32",
+        kind="function",
+        vopd_profile={"can_pair": True},
+        vopd_slot="BOTH",
+    )
+    assert r_dict_prof.vopd_slot == "BOTH"
+    assert GhostIsaRef.model_validate(r_dict_prof).vopd_slot == "BOTH"
+    assert IsaControlCodesSpec(execution_latency=6, scoreboard_barrier_mask=3).latency == 6
+
+    # StandardMap integration with ParameterTranslationEngine
+    engine = ParameterTranslationEngine()
+    smap = StandardMap(
+        api="torch.optim.AdamW",
+        args={"b1": "beta1", "b2": "beta2", "drop_me": None, "const_eps": 1e-8},
+        pack_to_tuple="betas",
+        inject_args={"foreach": True},
+    )
+    engine.register_standard_map("custom_adam", "torch", smap)
+    engine.register_standard_map("custom_adam", "torch", smap)
+    engine.register_standard_map("custom_adam", "torch", StandardMap(api="torch.optim.AdamW", args=None))
+    assert engine.translations["custom_adam"].roles["b1"]["torch"] == ["betas"]
+    mapped = engine.apply_standard_map(
+        smap, {"b1": 0.9, "b2": 0.999, "drop_me": 0, "const_eps": 0.0, "extra": 5}, allow_passthrough=True
+    )
+    assert mapped == {"betas": (0.9, 0.999), "const_eps": 1e-8, "extra": 5, "foreach": True}
+
+    smap_rename = StandardMap(api="jax.nn.gelu", args={"approx": "approximate"})
+    engine.register_standard_map("custom_gelu", "jax", smap_rename)
+    assert engine.apply_standard_map(smap_rename, {"approx": True}) == {"approximate": True}
+    with pytest.raises(ValueError, match="Ungrounded attribute"):
+        engine.apply_standard_map(smap_rename, {"unmapped_arg": 1})

@@ -1,0 +1,87 @@
+{
+  "ops": [
+    {
+      "name": "assert_shape",
+      "domain": "chex",
+      "version": 1,
+      "inputs": [
+        "inputs",
+        "expected_shapes"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "assert_rank",
+      "domain": "chex",
+      "version": 1,
+      "inputs": [
+        "inputs",
+        "expected_ranks"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "assert_type",
+      "domain": "chex",
+      "version": 1,
+      "inputs": [
+        "inputs",
+        "expected_types"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "assert_equal_shape",
+      "domain": "chex",
+      "version": 1,
+      "inputs": [
+        "inputs"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": [
+        {
+          "name": "dims",
+          "type": "List[int]",
+          "required": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "assert_trees_all_close",
+      "domain": "chex",
+      "version": 1,
+      "inputs": [
+        "trees"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": [
+        {
+          "name": "rtol",
+          "type": "float",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "atol",
+          "type": "float",
+          "required": false,
+          "default": null
+        }
+      ]
+    }
+  ]
+}

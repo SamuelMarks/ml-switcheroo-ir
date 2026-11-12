@@ -1,0 +1,88 @@
+{
+  "ops": [
+    {
+      "name": "FFMA",
+      "domain": "nvidia_sass",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1",
+        "src2"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "execution_latency": 4
+    },
+    {
+      "name": "FADD",
+      "domain": "nvidia_sass",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "execution_latency": 4
+    },
+    {
+      "name": "FMUL",
+      "domain": "nvidia_sass",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "execution_latency": 4
+    },
+    {
+      "name": "HMMA",
+      "domain": "nvidia_sass",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1",
+        "src2"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "execution_latency": 8
+    },
+    {
+      "name": "LDG",
+      "domain": "nvidia_sass",
+      "version": 1,
+      "inputs": [
+        "src0"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "execution_latency": 200
+    },
+    {
+      "name": "STS",
+      "domain": "nvidia_sass",
+      "version": 1,
+      "inputs": [
+        "src0"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "execution_latency": 16
+    }
+  ]
+}

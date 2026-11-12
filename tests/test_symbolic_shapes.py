@@ -14,9 +14,9 @@ from ml_switcheroo_ir.shapes import (
     SymPiecewise,
     SymUnaryOp,
     SymVar,
-    _parse_sym_str,
-    _poly_to_symnode,
-    _tokenize_expr,
+    parse_symbolic_expr,
+    poly_to_symnode,
+    tokenize_symbolic_expr,
 )
 from ml_switcheroo_ir.types import DType, TensorShape, TensorSpec
 
@@ -94,26 +94,26 @@ def test_polynomial_arithmetic_and_canonicalization() -> None:
 def test_poly_to_symnode() -> None:
     """Test converting Polynomial back into SymNode expression trees."""
     p_zero = Polynomial()
-    n_zero = _poly_to_symnode(p_zero)
+    n_zero = poly_to_symnode(p_zero)
     assert isinstance(n_zero, SymConst) and n_zero.value == 0
 
     p_c7 = Polynomial.from_const(7)
-    n_c7 = _poly_to_symnode(p_c7)
+    n_c7 = poly_to_symnode(p_c7)
     assert isinstance(n_c7, SymConst) and n_c7.value == 7
 
     p_neg_x = Polynomial({((("x", 1),)): -2})
-    n_neg_x = _poly_to_symnode(p_neg_x)
+    n_neg_x = poly_to_symnode(p_neg_x)
     assert n_neg_x.eval({"x": 3}) == -6
 
     p_poly = Polynomial({((("x", 1),)): 2, ((("y", 1),)): -1, (): 3})
-    n_poly = _poly_to_symnode(p_poly)
+    n_poly = poly_to_symnode(p_poly)
     assert n_poly.eval({"x": 4, "y": 5}) == (8 - 5 + 3)
 
 
 def test_tokenize_and_parse_sym_str() -> None:
     """Test string tokenizer and recursive descent expression parser."""
-    assert _tokenize_expr("") == []
-    tokens = _tokenize_expr("2 * (batch + 4) // 2 - seq_len % 3 ** 2")
+    assert tokenize_symbolic_expr("") == []
+    tokens = tokenize_symbolic_expr("2 * (batch + 4) // 2 - seq_len % 3 ** 2")
     assert tokens == [
         "2",
         "*",
@@ -132,23 +132,33 @@ def test_tokenize_and_parse_sym_str() -> None:
         "2",
     ]
 
-    single_slash = _tokenize_expr("batch / 2")
+    single_slash = tokenize_symbolic_expr("batch / 2")
     assert single_slash == ["batch", "//", "2"]
 
     # Parsing expressions
-    n1 = _parse_sym_str("batch + 4")
+    n1 = parse_symbolic_expr("batch + 4")
     assert isinstance(n1, SymBinaryOp)
     assert n1.eval({"batch": 10}) == 14
 
-    n2 = _parse_sym_str("2 * -x")
+    n2 = parse_symbolic_expr("2 * -x")
     assert n2.eval({"x": 3}) == -6
 
-    n3 = _parse_sym_str("x ** 2")
+    n3 = parse_symbolic_expr("x ** 2")
     assert n3.eval({"x": 4}) == 16
 
-    # Empty string or fallback
-    assert isinstance(_parse_sym_str(""), SymVar)
-    assert isinstance(_parse_sym_str("???"), SymVar)
+    with pytest.raises(ValueError, match="Empty symbolic expression"):
+        parse_symbolic_expr("")
+    with pytest.raises(ValueError, match="position 0"):
+        tokenize_symbolic_expr("???")
+    for bad_char_expr, pos in [
+        ("x + $y", 4),
+        ("a@b", 1),
+        ("a.b", 1),
+        ("a[0]", 1),
+        ("a]0", 1),
+    ]:
+        with pytest.raises(ValueError, match=f"position {pos}"):
+            tokenize_symbolic_expr(bad_char_expr)
 
 
 def test_sym_node_base_methods() -> None:
@@ -524,7 +534,7 @@ def test_polynomial_and_parser_edge_cases() -> None:
     p_quad = Polynomial({((("x", 4),)): 1})
     assert p_cube.div_exact(p_quad) is None
 
-    n_cube = _poly_to_symnode(p_cube)
+    n_cube = poly_to_symnode(p_cube)
     assert n_cube.eval({"x": 2}) == 8
 
     p_zero_coeff = Polynomial({(): 0})
@@ -541,19 +551,29 @@ def test_polynomial_and_parser_edge_cases() -> None:
     assert p_x.mul(p_y).div_exact(p_x) == p_y
     assert p_x.div_exact(p_x.add(p_y)) is None
 
-    tokens = _tokenize_expr("   x  +  1   ")
+    tokens = tokenize_symbolic_expr("   x  +  1   ")
     assert tokens == ["x", "+", "1"]
-    assert _tokenize_expr("x < 5") == ["x", "<", "5"]
-    assert _tokenize_expr("x > 5") == ["x", ">", "5"]
-    assert _tokenize_expr("x = 5") == ["x", "=", "5"]
-    assert _tokenize_expr("x ! 5") == ["x", "!", "5"]
-    assert _tokenize_expr("") == []
-    assert isinstance(_parse_sym_str("   "), SymVar)
-    assert isinstance(_parse_sym_str("x *"), SymVar)
-    assert isinstance(_parse_sym_str("x + 1 extra_token"), SymVar)
-    n_unclosed = _parse_sym_str("(x + 1")
-    assert isinstance(n_unclosed, SymVar)
-    n_paren_pow = _parse_sym_str("(x + 1) ** 2")
+    assert tokenize_symbolic_expr("x < 5") == ["x", "<", "5"]
+    assert tokenize_symbolic_expr("x <= 5") == ["x", "<=", "5"]
+    assert tokenize_symbolic_expr("x > 5") == ["x", ">", "5"]
+    assert tokenize_symbolic_expr("x >= 5") == ["x", ">=", "5"]
+    assert tokenize_symbolic_expr("x == 5") == ["x", "==", "5"]
+    assert tokenize_symbolic_expr("x != 5") == ["x", "!=", "5"]
+    with pytest.raises(ValueError, match="position 2"):
+        tokenize_symbolic_expr("x = 5")
+    with pytest.raises(ValueError, match="position 2"):
+        tokenize_symbolic_expr("x ! 5")
+    assert tokenize_symbolic_expr("") == []
+    for bad_expr in [
+        "   ",
+        "x *",
+        "a + * b",
+        "x + 1 extra_token",
+        "(x + 1",
+    ]:
+        with pytest.raises(ValueError):
+            parse_symbolic_expr(bad_expr)
+    n_paren_pow = parse_symbolic_expr("(x + 1) ** 2")
     assert n_paren_pow.eval({"x": 3}) == 16
 
 
@@ -649,7 +669,10 @@ def test_sym_binary_op_identities_and_minmax() -> None:
     assert max3 == SymBinaryOp("max", vx, vy)
 
     assert SymBinaryOp("//", SymBinaryOp("*", SymConst(6), vx), SymConst(2)).simplify() == (SymConst(3) * vx).simplify()
-    assert SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(6)), SymConst(2)).simplify() == ((vx % 2) * SymConst(3)).simplify()
+    assert (
+        SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(6)), SymConst(2)).simplify()
+        == ((vx % 2) * SymConst(3)).simplify()
+    )
 
     assert (vx + vy).to_polynomial() is not None
     assert (vx - vy).to_polynomial() is not None
@@ -702,8 +725,12 @@ def test_sym_irreducible_and_piecewise_branches() -> None:
     assert SymBinaryOp("//", vx % 2, SymConst(3)).simplify() == SymBinaryOp("//", vx % 2, SymConst(3))
     assert SymBinaryOp("//", SymConst(3), vx % 2).simplify() == SymBinaryOp("//", SymConst(3), vx % 2)
     assert SymBinaryOp("//", (vx % 2) * vy, SymVar("z")).simplify() == SymBinaryOp("//", (vx % 2) * vy, SymVar("z"))
-    assert SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(5)), SymConst(2)).simplify() == SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(5)), SymConst(2))
-    assert SymBinaryOp("//", SymBinaryOp("*", SymConst(5), vx % 2), SymConst(2)).simplify() == SymBinaryOp("//", SymBinaryOp("*", SymConst(5), vx % 2), SymConst(2))
+    assert SymBinaryOp("//", SymBinaryOp("*", vx % 2, SymConst(5)), SymConst(2)).simplify() == SymBinaryOp(
+        "//", SymBinaryOp("*", vx % 2, SymConst(5)), SymConst(2)
+    )
+    assert SymBinaryOp("//", SymBinaryOp("*", SymConst(5), vx % 2), SymConst(2)).simplify() == SymBinaryOp(
+        "//", SymBinaryOp("*", SymConst(5), vx % 2), SymConst(2)
+    )
     assert SymBinaryOp("%", vx, SymConst(3)).simplify() == SymBinaryOp("%", vx, SymConst(3))
     assert SymBinaryOp("%", SymConst(3), vx).simplify() == SymBinaryOp("%", SymConst(3), vx)
 
@@ -714,14 +741,30 @@ def test_sym_minmax_unary_and_parser_edge_branches() -> None:
     vy = SymVar("y")
     c0 = SymConst(0)
 
-    assert SymBinaryOp("min", SymBinaryOp("min", vx, vy), SymVar("z")).simplify() == SymBinaryOp("min", SymBinaryOp("min", vx, vy), SymVar("z"))
-    assert SymBinaryOp("min", SymBinaryOp("+", vx % 2, vy), SymVar("z")).simplify() == SymBinaryOp("min", SymBinaryOp("+", vx % 2, vy), SymVar("z"))
-    assert SymBinaryOp("min", SymVar("z"), SymBinaryOp("min", vx, vy)).simplify() == SymBinaryOp("min", SymVar("z"), SymBinaryOp("min", vx, vy))
-    assert SymBinaryOp("min", SymVar("z"), SymBinaryOp("+", vx % 2, vy)).simplify() == SymBinaryOp("min", SymVar("z"), SymBinaryOp("+", vx % 2, vy))
-    assert SymBinaryOp("max", SymBinaryOp("max", vx, vy), SymVar("z")).simplify() == SymBinaryOp("max", SymBinaryOp("max", vx, vy), SymVar("z"))
-    assert SymBinaryOp("max", SymBinaryOp("+", vx % 2, vy), SymVar("z")).simplify() == SymBinaryOp("max", SymBinaryOp("+", vx % 2, vy), SymVar("z"))
-    assert SymBinaryOp("max", SymVar("z"), SymBinaryOp("max", vx, vy)).simplify() == SymBinaryOp("max", SymVar("z"), SymBinaryOp("max", vx, vy))
-    assert SymBinaryOp("max", SymVar("z"), SymBinaryOp("+", vx % 2, vy)).simplify() == SymBinaryOp("max", SymVar("z"), SymBinaryOp("+", vx % 2, vy))
+    assert SymBinaryOp("min", SymBinaryOp("min", vx, vy), SymVar("z")).simplify() == SymBinaryOp(
+        "min", SymBinaryOp("min", vx, vy), SymVar("z")
+    )
+    assert SymBinaryOp("min", SymBinaryOp("+", vx % 2, vy), SymVar("z")).simplify() == SymBinaryOp(
+        "min", SymBinaryOp("+", vx % 2, vy), SymVar("z")
+    )
+    assert SymBinaryOp("min", SymVar("z"), SymBinaryOp("min", vx, vy)).simplify() == SymBinaryOp(
+        "min", SymVar("z"), SymBinaryOp("min", vx, vy)
+    )
+    assert SymBinaryOp("min", SymVar("z"), SymBinaryOp("+", vx % 2, vy)).simplify() == SymBinaryOp(
+        "min", SymVar("z"), SymBinaryOp("+", vx % 2, vy)
+    )
+    assert SymBinaryOp("max", SymBinaryOp("max", vx, vy), SymVar("z")).simplify() == SymBinaryOp(
+        "max", SymBinaryOp("max", vx, vy), SymVar("z")
+    )
+    assert SymBinaryOp("max", SymBinaryOp("+", vx % 2, vy), SymVar("z")).simplify() == SymBinaryOp(
+        "max", SymBinaryOp("+", vx % 2, vy), SymVar("z")
+    )
+    assert SymBinaryOp("max", SymVar("z"), SymBinaryOp("max", vx, vy)).simplify() == SymBinaryOp(
+        "max", SymVar("z"), SymBinaryOp("max", vx, vy)
+    )
+    assert SymBinaryOp("max", SymVar("z"), SymBinaryOp("+", vx % 2, vy)).simplify() == SymBinaryOp(
+        "max", SymVar("z"), SymBinaryOp("+", vx % 2, vy)
+    )
 
     assert SymBinaryOp("&", SymConst(1), SymConst(2)).simplify() == SymBinaryOp("&", SymConst(1), SymConst(2))
     assert SymBinaryOp("**", vx % 2, SymConst(3)).simplify() == SymBinaryOp("**", vx % 2, SymConst(3))
@@ -741,18 +784,84 @@ def test_sym_minmax_unary_and_parser_edge_branches() -> None:
     pw_non_sym = SymPiecewise([(True, vx), (lambda env: True, vy)], default=c0)
     assert pw_non_sym.free_vars() == {"x", "y"}
 
-    from ml_switcheroo_ir.shapes.parser import _parse_sym_str
-
     poly_str = Polynomial.from_var("x").mul(Polynomial.from_var("x")).canonical_str()
     assert poly_str == "x^2"
-    parsed_poly = _parse_sym_str(poly_str)
+    parsed_poly = parse_symbolic_expr(poly_str)
     assert parsed_poly.eval({"x": 3}) == 9
 
-    assert _parse_sym_str("+x").eval({"x": 7}) == 7
-    assert _parse_sym_str("abs(x)").eval({"x": -5}) == 5
-    assert _parse_sym_str("min(x, 4)").eval({"x": 10}) == 4
-    assert _parse_sym_str("max(x, 4)").eval({"x": 10}) == 10
-    assert isinstance(_parse_sym_str("abs(x"), SymVar)
-    assert isinstance(_parse_sym_str("min(x, 4"), SymVar)
-    assert isinstance(_parse_sym_str("min(x)"), SymVar)
+    assert parse_symbolic_expr("+x").eval({"x": 7}) == 7
+    abs_node = parse_symbolic_expr("abs(x)")
+    assert isinstance(abs_node, SymUnaryOp) and abs_node.op == "abs"
+    assert abs_node.eval({"x": -5}) == 5
+    min_node = parse_symbolic_expr("min(x, 4)")
+    assert isinstance(min_node, SymPiecewise)
+    assert min_node.eval({"x": 10}) == 4
+    assert parse_symbolic_expr("min(x, 12, 4)").eval({"x": 10}) == 4
+    max_node = parse_symbolic_expr("max(x, 4)")
+    assert isinstance(max_node, SymPiecewise)
+    assert max_node.eval({"x": 10}) == 10
+    assert parse_symbolic_expr("max(x, 4, 25)").eval({"x": 10}) == 25
+    assert parse_symbolic_expr("min(x, x)").simplify() == vx
+    assert parse_symbolic_expr("min(10, 4)").simplify() == SymConst(4)
+    assert parse_symbolic_expr("min(4, 10)").simplify() == SymConst(4)
+    assert parse_symbolic_expr("max(10, 4)").simplify() == SymConst(10)
+
+    for bad_call in [
+        "abs(x",
+        "min(x, 4",
+        "min(x)",
+        "max(x)",
+        "abs()",
+        "abs(x, y)",
+        "unknown_fn(x)",
+    ]:
+        with pytest.raises(ValueError):
+            parse_symbolic_expr(bad_call)
     assert (SymInt(1) == True) is False  # noqa: E712
+
+
+def test_sym_polynomial_pow_symmetry_and_bool_guards() -> None:
+    """Test ** polynomial conversion, x^2 consistency, symmetric __eq__/__hash__, and bool/zero guards."""
+    vx = SymVar("x")
+    vy = SymVar("y")
+
+    with pytest.raises(TypeError, match="Boolean"):
+        SymNode.to_node(True)
+    with pytest.raises(TypeError, match="Boolean"):
+        SymConst(False)
+    with pytest.raises(TypeError, match="Boolean"):
+        SymInt(True)
+
+    with pytest.raises(ZeroDivisionError):
+        (vx // SymConst(0)).simplify()
+    with pytest.raises(ZeroDivisionError):
+        (vx % SymConst(0)).simplify()
+
+    assert SymbolicSolver.is_consistent(vx * vx, "x^2") is True
+    assert SymbolicSolver.is_consistent("(x + 1)^2", "x*x + 2*x + 1") is True
+    cubed = (vx * vx * vx).simplify()
+    assert cubed == SymBinaryOp("**", vx, SymConst(3))
+    assert SymBinaryOp("**", vx, SymConst(0)).to_polynomial() == Polynomial.from_const(1)
+    assert SymBinaryOp("**", vx, SymConst(-2)).to_polynomial() is None
+    assert SymBinaryOp("&", vx, vy).to_polynomial() is None
+
+    # Symmetric equality and hash consistency between SymNode and SymInt
+    si_const = SymInt(7)
+    sc = SymConst(7)
+    assert sc == si_const and si_const == sc and hash(sc) == hash(si_const)
+
+    si_var = SymInt("x")
+    assert vx == si_var and si_var == vx and hash(vx) == hash(si_var)
+
+    bin_sum = SymBinaryOp("+", vx, vy)
+    si_sum = SymInt("y + x")
+    assert bin_sum == si_sum and si_sum == bin_sum and hash(bin_sum) == hash(si_sum)
+    assert SymBinaryOp("+", vx, SymConst(-vx.eval({"x": 0}))) == vx or hash(SymBinaryOp("-", vx, vx)) == hash(0)
+
+    un_abs = SymUnaryOp("abs", vx)
+    si_abs = SymInt(un_abs)
+    assert un_abs == si_abs and si_abs == un_abs and hash(un_abs) == hash(si_abs)
+
+    pw = SymPiecewise([(vx, vy)], default=SymConst(1))
+    si_pw = SymInt(pw)
+    assert pw == si_pw and si_pw == pw and hash(pw) == hash(si_pw)

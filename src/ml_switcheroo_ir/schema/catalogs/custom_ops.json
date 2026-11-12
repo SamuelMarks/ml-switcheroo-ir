@@ -1,0 +1,651 @@
+{
+  "ops": [
+    {
+      "name": "RMSNorm",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "X",
+        "weight"
+      ],
+      "outputs": [
+        "Y"
+      ],
+      "attributes": [
+        {
+          "name": "eps",
+          "type": "float",
+          "required": false,
+          "default": 1e-06
+        }
+      ]
+    },
+    {
+      "name": "SwiGLU",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "X"
+      ],
+      "outputs": [
+        "Y"
+      ],
+      "attributes": [
+        {
+          "name": "dim",
+          "type": "int",
+          "required": false,
+          "default": -1
+        }
+      ]
+    },
+    {
+      "name": "RoPE",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "X",
+        "cos",
+        "sin"
+      ],
+      "outputs": [
+        "Y"
+      ],
+      "attributes": [
+        {
+          "name": "dim",
+          "type": "int",
+          "required": false,
+          "default": -1
+        }
+      ]
+    },
+    {
+      "name": "FlashAttention",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "Q",
+        "K",
+        "V"
+      ],
+      "outputs": [
+        "Y"
+      ],
+      "attributes": [
+        {
+          "name": "causal",
+          "type": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "scale",
+          "type": "float",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "flash_attention"
+      ]
+    },
+    {
+      "name": "PagedAttention",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "query",
+        "key_cache",
+        "value_cache",
+        "block_tables",
+        "context_lens"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": [
+        {
+          "name": "num_kv_heads",
+          "type": "int",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "scale",
+          "type": "float",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "block_size",
+          "type": "int",
+          "required": false,
+          "default": 16
+        },
+        {
+          "name": "max_context_len",
+          "type": "int",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "alibi_slopes",
+          "type": "Any",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "kv_cache_dtype",
+          "type": "str",
+          "required": false,
+          "default": "auto"
+        }
+      ],
+      "aliases": [
+        "paged_attention"
+      ]
+    },
+    {
+      "name": "RaggedPagedAttention",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "query",
+        "key_cache",
+        "value_cache",
+        "block_tables",
+        "context_lens"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": [
+        {
+          "name": "block_size",
+          "type": "int",
+          "required": false,
+          "default": 16
+        }
+      ],
+      "aliases": [
+        "ragged_paged_attention"
+      ]
+    },
+    {
+      "name": "VisionPatchEmbedding",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "X",
+        "weight"
+      ],
+      "outputs": [
+        "Y"
+      ],
+      "attributes": [
+        {
+          "name": "patch_size",
+          "type": "List[int]",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "embed_dim",
+          "type": "int",
+          "required": true,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "ScaledDotProductAttention",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "query",
+        "key",
+        "value",
+        "attn_mask"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "scale",
+          "type": "float",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "dropout_p",
+          "type": "float",
+          "required": false,
+          "default": 0.0
+        },
+        {
+          "name": "is_causal",
+          "type": "bool",
+          "required": false,
+          "default": false
+        }
+      ],
+      "aliases": [
+        "scaled_dot_product_attention"
+      ]
+    },
+    {
+      "name": "LayerNorm",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "X",
+        "scale",
+        "bias"
+      ],
+      "outputs": [
+        "Y"
+      ],
+      "attributes": [
+        {
+          "name": "axis",
+          "type": "int",
+          "required": false,
+          "default": -1
+        },
+        {
+          "name": "epsilon",
+          "type": "float",
+          "required": false,
+          "default": 1e-05
+        },
+        {
+          "name": "elementwise_affine",
+          "type": "bool",
+          "required": false,
+          "default": true
+        }
+      ]
+    },
+    {
+      "name": "GroupNorm",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "X",
+        "scale",
+        "bias"
+      ],
+      "outputs": [
+        "Y"
+      ],
+      "attributes": [
+        {
+          "name": "num_groups",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "epsilon",
+          "type": "float",
+          "required": false,
+          "default": 1e-05
+        }
+      ]
+    },
+    {
+      "name": "GELU",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "X"
+      ],
+      "outputs": [
+        "Y"
+      ],
+      "attributes": [
+        {
+          "name": "approximate",
+          "type": "str",
+          "required": false,
+          "default": "none"
+        }
+      ]
+    },
+    {
+      "name": "EmbeddingLookup",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "indices",
+        "weight"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "padding_idx",
+          "type": "int",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "scale_grad_by_freq",
+          "type": "bool",
+          "required": false,
+          "default": false
+        }
+      ]
+    },
+    {
+      "name": "RMSNormBackward",
+      "domain": "ml.switcheroo.custom",
+      "version": 1,
+      "inputs": [
+        "grad_output",
+        "X",
+        "weight"
+      ],
+      "outputs": [
+        "grad_X",
+        "grad_weight"
+      ],
+      "attributes": [
+        {
+          "name": "eps",
+          "type": "float",
+          "required": false,
+          "default": 1e-06
+        }
+      ]
+    },
+    {
+      "name": "collective.all_reduce",
+      "domain": "collective",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "reduction_op",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mesh_axis",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "channel_id",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "comm",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "stream",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "datatype",
+          "type": "str",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "all_reduce"
+      ]
+    },
+    {
+      "name": "collective.all_gather",
+      "domain": "collective",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "gather_dimension",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mesh_axis",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "comm",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "stream",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "datatype",
+          "type": "str",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "all_gather"
+      ]
+    },
+    {
+      "name": "collective.reduce_scatter",
+      "domain": "collective",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "scatter_dimension",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "reduction_op",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mesh_axis",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "comm",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "stream",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "datatype",
+          "type": "str",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "reduce_scatter"
+      ]
+    },
+    {
+      "name": "collective.all_to_all",
+      "domain": "collective",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "split_dimension",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "concat_dimension",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "mesh_axis",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "comm",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "stream",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "datatype",
+          "type": "str",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "all_to_all"
+      ]
+    },
+    {
+      "name": "quantization.block_quantize",
+      "domain": "quantization",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output",
+        "scale"
+      ],
+      "attributes": [
+        {
+          "name": "block_size",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "quant_dtype",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "axis",
+          "type": "int",
+          "required": false,
+          "default": -1
+        }
+      ],
+      "aliases": [
+        "block_quantize"
+      ]
+    },
+    {
+      "name": "quantization.dequantize_grouped_int4",
+      "domain": "quantization",
+      "version": 1,
+      "inputs": [
+        "weight",
+        "scales",
+        "qzeros"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "group_size",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "packing_format",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "symmetric",
+          "type": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "axis",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "scales_shape",
+          "type": "List[int]",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "dequantize_grouped_int4"
+      ]
+    }
+  ]
+}

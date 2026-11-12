@@ -1,0 +1,73 @@
+{
+  "ops": [
+    {
+      "name": "ReadVariable",
+      "domain": "ml.switcheroo.state",
+      "version": 1,
+      "inputs": [],
+      "outputs": [
+        "w_val"
+      ],
+      "attributes": [
+        {
+          "name": "variable_name",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "dtype",
+          "type": "str",
+          "required": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "AssignVariable",
+      "domain": "ml.switcheroo.state",
+      "version": 1,
+      "inputs": [
+        "w_val"
+      ],
+      "outputs": [
+        "w_updated"
+      ],
+      "attributes": [
+        {
+          "name": "variable_name",
+          "type": "str",
+          "required": true,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "ScatterUpdate",
+      "domain": "ml.switcheroo.state",
+      "version": 1,
+      "inputs": [
+        "w_val",
+        "indices",
+        "updates"
+      ],
+      "outputs": [
+        "w_scattered"
+      ],
+      "attributes": [
+        {
+          "name": "variable_name",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "axis",
+          "type": "int",
+          "required": false,
+          "default": 0
+        }
+      ]
+    }
+  ]
+}

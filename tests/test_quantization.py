@@ -225,3 +225,40 @@ def test_quantization_edge_cases() -> None:
         },
     )
     assert v.validate_quantization(deq_bad_scales_axis) == []
+
+    # Boolean axis / scales_shape and missing MX scale_dtype checks
+    bq_bool_axis = LogicalNode(
+        id="bq_bool_ax",
+        op_type="block_quantize",
+        domain="quantization",
+        shape_metadata=(32,),
+        attributes={"block_size": 32, "axis": True},
+    )
+    assert any(e.attribute == "axis" for e in v.validate_quantization(bq_bool_axis))
+
+    bq_mx_missing_scale = LogicalNode(
+        id="bq_mx_no_sc",
+        op_type="block_quantize",
+        domain="quantization",
+        shape_metadata=(32,),
+        attributes={"block_size": 32, "microscaling_format": "mxfp4"},
+    )
+    assert any(e.attribute == "scale_dtype" for e in v.validate_quantization(bq_mx_missing_scale))
+
+    bq_mx_valid_scale = LogicalNode(
+        id="bq_mx_ok",
+        op_type="block_quantize",
+        domain="quantization",
+        shape_metadata=(32,),
+        attributes={"block_size": 32, "microscaling_format": "mxfp8", "scale_dtype": "e8m0"},
+    )
+    assert v.validate_quantization(bq_mx_valid_scale) == []
+
+    deq_bool_scales = LogicalNode(
+        id="deq_bool_sc",
+        op_type="dequantize_grouped_int4",
+        domain="quantization",
+        shape_metadata=(32, 32),
+        attributes={"group_size": 32, "packing_format": "marlin", "axis": 0, "scales_shape": [True, 32]},
+    )
+    assert any(e.attribute == "scales_shape" for e in v.validate_quantization(deq_bool_scales))

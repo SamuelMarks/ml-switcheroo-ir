@@ -7,133 +7,50 @@ from pathlib import Path
 
 from ml_switcheroo_ir.schema.base import (
     REGISTRY_LOCK,
-    CustomAttributeSchema,
-    CustomOpSchema,
+    AttributeType,
+    LazyMetadataMap,
+    OpAttribute,
     OpSchema,
+    SchemaRegistry,
     load_op_schema_catalog,
 )
 from ml_switcheroo_ir.snapshots import find_schema_file
 from ml_switcheroo_ir.types import JsonValue
 
-ATEN_REGISTRY: dict[str, OpSchema] = {}
-ARRAY_API_REGISTRY: dict[str, OpSchema] = {}
-CHEX_REGISTRY: dict[str, OpSchema] = {}
-GRAIN_REGISTRY: dict[str, OpSchema] = {}
-ORBAX_REGISTRY: dict[str, OpSchema] = {}
-OPTAX_REGISTRY: dict[str, OpSchema] = {}
-ODL_CATALOG: dict[str, OpSchema] = {}
-ODL_DIALECT_MAPPINGS: dict[str, dict[str, str]] = {}
-
-_CANONICAL_ODL_OPS: list[CustomOpSchema] = [
-    CustomOpSchema(
-        name="add",
-        domain="odl",
-        attributes=[],
-        inputs=["a", "b"],
-        outputs=["result"],
-    ),
-    CustomOpSchema(
-        name="subtract",
-        domain="odl",
-        attributes=[],
-        inputs=["a", "b"],
-        outputs=["result"],
-    ),
-    CustomOpSchema(
-        name="multiply",
-        domain="odl",
-        attributes=[],
-        inputs=["a", "b"],
-        outputs=["result"],
-    ),
-    CustomOpSchema(
-        name="divide",
-        domain="odl",
-        attributes=[],
-        inputs=["a", "b"],
-        outputs=["result"],
-    ),
-    CustomOpSchema(
-        name="matmul",
-        domain="odl",
-        attributes=[],
-        inputs=["a", "b"],
-        outputs=["result"],
-    ),
-    CustomOpSchema(
-        name="relu",
-        domain="odl",
-        attributes=[],
-        inputs=["x"],
-        outputs=["result"],
-    ),
-    CustomOpSchema(
-        name="gelu",
-        domain="odl",
-        attributes=[],
-        inputs=["x"],
-        outputs=["result"],
-    ),
-    CustomOpSchema(
-        name="silu",
-        domain="odl",
-        attributes=[],
-        inputs=["x"],
-        outputs=["result"],
-    ),
-    CustomOpSchema(
+_CANONICAL_ODL_OPS: list[OpSchema] = [
+    OpSchema(name="add", domain="odl", inputs=["a", "b"], outputs=["result"]),
+    OpSchema(name="subtract", domain="odl", inputs=["a", "b"], outputs=["result"]),
+    OpSchema(name="multiply", domain="odl", inputs=["a", "b"], outputs=["result"]),
+    OpSchema(name="divide", domain="odl", inputs=["a", "b"], outputs=["result"]),
+    OpSchema(name="matmul", domain="odl", inputs=["a", "b"], outputs=["result"]),
+    OpSchema(name="relu", domain="odl", inputs=["x"], outputs=["result"]),
+    OpSchema(name="gelu", domain="odl", inputs=["x"], outputs=["result"]),
+    OpSchema(name="silu", domain="odl", inputs=["x"], outputs=["result"]),
+    OpSchema(
         name="softmax",
         domain="odl",
-        attributes=[
-            CustomAttributeSchema(
-                name="dim",
-                type="int",
-                required=False,
-                default=-1,
-            )
-        ],
+        attributes=[OpAttribute(name="dim", type=AttributeType.INT, required=False, default=-1)],
         inputs=["x"],
         outputs=["result"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="layer_norm",
         domain="odl",
-        attributes=[
-            CustomAttributeSchema(
-                name="eps",
-                type="float",
-                required=False,
-                default=1e-5,
-            )
-        ],
+        attributes=[OpAttribute(name="eps", type=AttributeType.FLOAT, required=False, default=1e-5)],
         inputs=["x", "scale", "bias"],
         outputs=["result"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="rms_norm",
         domain="odl",
-        attributes=[
-            CustomAttributeSchema(
-                name="eps",
-                type="float",
-                required=False,
-                default=1e-6,
-            )
-        ],
+        attributes=[OpAttribute(name="eps", type=AttributeType.FLOAT, required=False, default=1e-6)],
         inputs=["x", "scale"],
         outputs=["result"],
     ),
-    CustomOpSchema(
-        name="conv2d",
-        domain="odl",
-        attributes=[],
-        inputs=["x", "weight"],
-        outputs=["result"],
-    ),
-    CustomOpSchema(
+    OpSchema(name="conv2d", domain="odl", inputs=["x", "weight"], outputs=["result"]),
+    OpSchema(
         name="scaled_dot_product_attention",
         domain="odl",
-        attributes=[],
         inputs=["query", "key", "value"],
         outputs=["result"],
     ),
@@ -160,292 +77,205 @@ _CANONICAL_ODL_DIALECT_MAPPINGS: dict[str, dict[str, str]] = {
     },
 }
 
-_CANONICAL_ATEN_OPS: list[CustomOpSchema] = [
-    CustomOpSchema(
+_CANONICAL_ATEN_OPS: list[OpSchema] = [
+    OpSchema(
         name="add",
         domain="aten",
-        attributes=[
-            CustomAttributeSchema(name="alpha", type="float", required=False),
-        ],
+        attributes=[OpAttribute(name="alpha", type=AttributeType.FLOAT, required=False)],
         inputs=["self", "other"],
         outputs=["out"],
     ),
-    CustomOpSchema(
-        name="matmul",
-        domain="aten",
-        attributes=[],
-        inputs=["self", "other"],
-        outputs=["out"],
-    ),
-    CustomOpSchema(
-        name="relu",
-        domain="aten",
-        attributes=[],
-        inputs=["self"],
-        outputs=["out"],
-    ),
-    CustomOpSchema(
+    OpSchema(name="matmul", domain="aten", inputs=["self", "other"], outputs=["out"]),
+    OpSchema(name="relu", domain="aten", inputs=["self"], outputs=["out"]),
+    OpSchema(
         name="layer_norm",
         domain="aten",
-        attributes=[],
         inputs=["input", "normalized_shape", "weight", "bias"],
         outputs=["out"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="scaled_dot_product_attention",
         domain="aten",
-        attributes=[],
         inputs=["query", "key", "value"],
         outputs=["out"],
     ),
 ]
 
-_CANONICAL_ARRAY_API_OPS: list[CustomOpSchema] = [
-    CustomOpSchema(
-        name="abs",
-        domain="array_api",
-        attributes=[],
-        inputs=["x"],
-        outputs=["out"],
-    ),
-    CustomOpSchema(
-        name="add",
-        domain="array_api",
-        attributes=[],
-        inputs=["x1", "x2"],
-        outputs=["out"],
-    ),
-    CustomOpSchema(
-        name="matmul",
-        domain="array_api",
-        attributes=[],
-        inputs=["x1", "x2"],
-        outputs=["out"],
-    ),
-    CustomOpSchema(
-        name="mean",
-        domain="array_api",
-        attributes=[],
-        inputs=["x"],
-        outputs=["out"],
-    ),
-    CustomOpSchema(
+_CANONICAL_ARRAY_API_OPS: list[OpSchema] = [
+    OpSchema(name="abs", domain="array_api", inputs=["x"], outputs=["out"]),
+    OpSchema(name="add", domain="array_api", inputs=["x1", "x2"], outputs=["out"]),
+    OpSchema(name="matmul", domain="array_api", inputs=["x1", "x2"], outputs=["out"]),
+    OpSchema(name="mean", domain="array_api", inputs=["x"], outputs=["out"]),
+    OpSchema(
         name="sum",
         domain="array_api",
         attributes=[
-            CustomAttributeSchema(name="axis", type="int", required=False),
-            CustomAttributeSchema(name="keepdims", type="bool", required=False),
+            OpAttribute(name="axis", type=AttributeType.INT, required=False),
+            OpAttribute(name="keepdims", type=AttributeType.BOOL, required=False),
         ],
         inputs=["x"],
         outputs=["out"],
     ),
 ]
 
-_CANONICAL_CHEX_OPS: list[CustomOpSchema] = [
-    CustomOpSchema(
-        name="assert_shape",
-        domain="chex",
-        attributes=[],
-        inputs=["inputs", "expected_shapes"],
-        outputs=["out"],
-    ),
-    CustomOpSchema(
-        name="assert_rank",
-        domain="chex",
-        attributes=[],
-        inputs=["inputs", "expected_ranks"],
-        outputs=["out"],
-    ),
-    CustomOpSchema(
-        name="assert_type",
-        domain="chex",
-        attributes=[],
-        inputs=["inputs", "expected_types"],
-        outputs=["out"],
-    ),
-    CustomOpSchema(
+_CANONICAL_CHEX_OPS: list[OpSchema] = [
+    OpSchema(name="assert_shape", domain="chex", inputs=["inputs", "expected_shapes"], outputs=["out"]),
+    OpSchema(name="assert_rank", domain="chex", inputs=["inputs", "expected_ranks"], outputs=["out"]),
+    OpSchema(name="assert_type", domain="chex", inputs=["inputs", "expected_types"], outputs=["out"]),
+    OpSchema(
         name="assert_equal_shape",
         domain="chex",
-        attributes=[
-            CustomAttributeSchema(name="dims", type="ints", required=False),
-        ],
+        attributes=[OpAttribute(name="dims", type=AttributeType.LIST_INT, required=False)],
         inputs=["inputs"],
         outputs=["out"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="assert_trees_all_close",
         domain="chex",
         attributes=[
-            CustomAttributeSchema(name="rtol", type="float", required=False),
-            CustomAttributeSchema(name="atol", type="float", required=False),
+            OpAttribute(name="rtol", type=AttributeType.FLOAT, required=False),
+            OpAttribute(name="atol", type=AttributeType.FLOAT, required=False),
         ],
         inputs=["trees"],
         outputs=["out"],
     ),
 ]
 
-_CANONICAL_GRAIN_OPS: list[CustomOpSchema] = [
-    CustomOpSchema(
-        name="MapDataset",
-        domain="grain",
-        attributes=[],
-        inputs=["parents"],
-        outputs=["dataset"],
-    ),
-    CustomOpSchema(
-        name="IterDataset",
-        domain="grain",
-        attributes=[],
-        inputs=["parents"],
-        outputs=["dataset"],
-    ),
-    CustomOpSchema(
+_CANONICAL_GRAIN_OPS: list[OpSchema] = [
+    OpSchema(name="MapDataset", domain="grain", inputs=["parents"], outputs=["dataset"]),
+    OpSchema(name="IterDataset", domain="grain", inputs=["parents"], outputs=["dataset"]),
+    OpSchema(
         name="DataLoader",
         domain="grain",
         attributes=[
-            CustomAttributeSchema(name="worker_count", type="int", required=False),
-            CustomAttributeSchema(name="worker_buffer_size", type="int", required=False),
+            OpAttribute(name="worker_count", type=AttributeType.INT, required=False),
+            OpAttribute(name="worker_buffer_size", type=AttributeType.INT, required=False),
         ],
         inputs=["data_source", "sampler", "operations"],
         outputs=["loader"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="batch",
         domain="grain",
         attributes=[
-            CustomAttributeSchema(name="batch_size", type="int", required=True),
-            CustomAttributeSchema(name="drop_remainder", type="bool", required=False),
+            OpAttribute(name="batch_size", type=AttributeType.INT, required=True),
+            OpAttribute(name="drop_remainder", type=AttributeType.BOOL, required=False),
         ],
         inputs=["dataset"],
         outputs=["batched"],
     ),
-    CustomOpSchema(
-        name="map",
-        domain="grain",
-        attributes=[],
-        inputs=["dataset", "transform"],
-        outputs=["mapped"],
-    ),
+    OpSchema(name="map", domain="grain", inputs=["dataset", "transform"], outputs=["mapped"]),
 ]
 
-_CANONICAL_ORBAX_OPS: list[CustomOpSchema] = [
-    CustomOpSchema(
+_CANONICAL_ORBAX_OPS: list[OpSchema] = [
+    OpSchema(
         name="PyTreeCheckpointer",
         domain="orbax",
         attributes=[
-            CustomAttributeSchema(name="primary_host", type="int", required=False),
-            CustomAttributeSchema(name="use_ocdbt", type="bool", required=False),
-            CustomAttributeSchema(name="use_zarr3", type="bool", required=False),
+            OpAttribute(name="primary_host", type=AttributeType.INT, required=False),
+            OpAttribute(name="use_ocdbt", type=AttributeType.BOOL, required=False),
+            OpAttribute(name="use_zarr3", type=AttributeType.BOOL, required=False),
         ],
         inputs=[],
         outputs=["checkpointer"],
     ),
-    CustomOpSchema(
-        name="StandardCheckpointer",
-        domain="orbax",
-        attributes=[],
-        inputs=[],
-        outputs=["checkpointer"],
-    ),
-    CustomOpSchema(
+    OpSchema(name="StandardCheckpointer", domain="orbax", inputs=[], outputs=["checkpointer"]),
+    OpSchema(
         name="CheckpointManager",
         domain="orbax",
-        attributes=[],
         inputs=["directory", "checkpointers"],
         outputs=["manager"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="AsyncCheckpointer",
         domain="orbax",
-        attributes=[
-            CustomAttributeSchema(name="timeout_secs", type="int", required=False),
-        ],
+        attributes=[OpAttribute(name="timeout_secs", type=AttributeType.INT, required=False)],
         inputs=["handler"],
         outputs=["checkpointer"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="SaveArgs",
         domain="orbax",
         attributes=[
-            CustomAttributeSchema(name="aggregate", type="bool", required=False),
-            CustomAttributeSchema(name="dtype", type="string", required=False),
-            CustomAttributeSchema(name="chunk_byte_size", type="int", required=False),
+            OpAttribute(name="aggregate", type=AttributeType.BOOL, required=False),
+            OpAttribute(name="dtype", type=AttributeType.STR, required=False),
+            OpAttribute(name="chunk_byte_size", type=AttributeType.INT, required=False),
         ],
         inputs=[],
         outputs=["save_args"],
     ),
 ]
 
-_CANONICAL_OPTAX_OPS: list[CustomOpSchema] = [
-    CustomOpSchema(
+_CANONICAL_OPTAX_OPS: list[OpSchema] = [
+    OpSchema(
         name="adam",
         domain="optax",
         attributes=[
-            CustomAttributeSchema(name="learning_rate", type="float", required=True),
-            CustomAttributeSchema(name="b1", type="float", required=False, default=0.9),
-            CustomAttributeSchema(name="b2", type="float", required=False, default=0.999),
-            CustomAttributeSchema(name="eps", type="float", required=False, default=1e-8),
-            CustomAttributeSchema(name="nesterov", type="bool", required=False, default=False),
+            OpAttribute(name="learning_rate", type=AttributeType.FLOAT, required=True),
+            OpAttribute(name="b1", type=AttributeType.FLOAT, required=False, default=0.9),
+            OpAttribute(name="b2", type=AttributeType.FLOAT, required=False, default=0.999),
+            OpAttribute(name="eps", type=AttributeType.FLOAT, required=False, default=1e-8),
+            OpAttribute(name="nesterov", type=AttributeType.BOOL, required=False, default=False),
         ],
         inputs=[],
         outputs=["tx"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="adamw",
         domain="optax",
         attributes=[
-            CustomAttributeSchema(name="learning_rate", type="float", required=True),
-            CustomAttributeSchema(name="b1", type="float", required=False, default=0.9),
-            CustomAttributeSchema(name="b2", type="float", required=False, default=0.999),
-            CustomAttributeSchema(name="eps", type="float", required=False, default=1e-8),
-            CustomAttributeSchema(name="weight_decay", type="float", required=False, default=0.0001),
-            CustomAttributeSchema(name="nesterov", type="bool", required=False, default=False),
+            OpAttribute(name="learning_rate", type=AttributeType.FLOAT, required=True),
+            OpAttribute(name="b1", type=AttributeType.FLOAT, required=False, default=0.9),
+            OpAttribute(name="b2", type=AttributeType.FLOAT, required=False, default=0.999),
+            OpAttribute(name="eps", type=AttributeType.FLOAT, required=False, default=1e-8),
+            OpAttribute(name="weight_decay", type=AttributeType.FLOAT, required=False, default=0.0001),
+            OpAttribute(name="nesterov", type=AttributeType.BOOL, required=False, default=False),
         ],
         inputs=[],
         outputs=["tx"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="sgd",
         domain="optax",
         attributes=[
-            CustomAttributeSchema(name="learning_rate", type="float", required=True),
-            CustomAttributeSchema(name="momentum", type="float", required=False),
-            CustomAttributeSchema(name="nesterov", type="bool", required=False, default=False),
+            OpAttribute(name="learning_rate", type=AttributeType.FLOAT, required=True),
+            OpAttribute(name="momentum", type=AttributeType.FLOAT, required=False),
+            OpAttribute(name="nesterov", type=AttributeType.BOOL, required=False, default=False),
         ],
         inputs=[],
         outputs=["tx"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="cosine_decay_schedule",
         domain="optax",
         attributes=[
-            CustomAttributeSchema(name="init_value", type="float", required=True),
-            CustomAttributeSchema(name="decay_steps", type="int", required=True),
-            CustomAttributeSchema(name="alpha", type="float", required=False, default=0.0),
-            CustomAttributeSchema(name="exponent", type="float", required=False, default=1.0),
+            OpAttribute(name="init_value", type=AttributeType.FLOAT, required=True),
+            OpAttribute(name="decay_steps", type=AttributeType.INT, required=True),
+            OpAttribute(name="alpha", type=AttributeType.FLOAT, required=False, default=0.0),
+            OpAttribute(name="exponent", type=AttributeType.FLOAT, required=False, default=1.0),
         ],
         inputs=[],
         outputs=["schedule"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="softmax_cross_entropy",
         domain="optax",
-        attributes=[
-            CustomAttributeSchema(name="axis", type="int", required=False, default=-1),
-        ],
+        attributes=[OpAttribute(name="axis", type=AttributeType.INT, required=False, default=-1)],
         inputs=["logits", "labels"],
         outputs=["loss"],
     ),
 ]
 
 
-def _load_framework_schema_file(filename: str, domain_default: str, json_path: Path | str | None = None) -> dict[str, OpSchema]:
+def _load_framework_schema_file(
+    filename: str, domain_default: str, json_path: Path | str | None = None
+) -> dict[str, OpSchema]:
     """Load operator schemas from a JSON file into OpSchema mappings.
 
     Args:
         filename (str): JSON filename in schema directory.
         domain_default (str): Default domain identifier.
-        json_path (Optional[Union[Path, str]]): Explicit path override for schema JSON.
+        json_path (Path | str | None): Explicit path override for schema JSON.
 
     Returns:
         dict[str, OpSchema]: Mapping from operator names to OpSchema instances.
@@ -457,10 +287,11 @@ def _load_framework_schema_file(filename: str, domain_default: str, json_path: P
         Args:
             op_data (Mapping[str, JsonValue]): Raw operator definition dictionary.
         """
-        raw_dialects = op_data.get("dialects")
-        if isinstance(raw_dialects, Mapping):
-            ODL_DIALECT_MAPPINGS[str(op_data["name"])] = {str(k): str(v) for k, v in raw_dialects.items()}
+        dialects = op_data.get("dialects")
+        if isinstance(dialects, dict):
+            ODL_DIALECT_MAPPINGS[str(op_data["name"])] = {str(k): str(v) for k, v in dialects.items()}
 
+    ODL_DIALECT_MAPPINGS.mark_loaded()
     return load_op_schema_catalog(
         filename,
         domain_default=domain_default,
@@ -471,36 +302,45 @@ def _load_framework_schema_file(filename: str, domain_default: str, json_path: P
 
 
 def _initialize_framework_registries() -> None:
-    """Initialize ATen, Array API, Chex, Grain, Orbax, Optax, and ODL catalog registries."""
-    specs: tuple[tuple[dict[str, OpSchema], str, str, list[CustomOpSchema]], ...] = (
+    """Initialize all framework registries and the ODL catalog lazily under REGISTRY_LOCK."""
+    specs: tuple[tuple[SchemaRegistry, str, str, list[OpSchema]], ...] = (
         (ATEN_REGISTRY, "aten_ops.json", "aten", _CANONICAL_ATEN_OPS),
         (ARRAY_API_REGISTRY, "array_api_ops.json", "array_api", _CANONICAL_ARRAY_API_OPS),
         (CHEX_REGISTRY, "chex_ops.json", "chex", _CANONICAL_CHEX_OPS),
         (GRAIN_REGISTRY, "grain_ops.json", "grain", _CANONICAL_GRAIN_OPS),
         (ORBAX_REGISTRY, "orbax_ops.json", "orbax", _CANONICAL_ORBAX_OPS),
         (OPTAX_REGISTRY, "optax_ops.json", "optax", _CANONICAL_OPTAX_OPS),
+        (ODL_CATALOG, "odl_ops.json", "odl", _CANONICAL_ODL_OPS),
     )
     with REGISTRY_LOCK:
+        ODL_DIALECT_MAPPINGS.mark_loaded()
+        for reg, _filename, _domain, _canonical_ops in specs:
+            reg._loaded = True
         for reg, filename, domain, canonical_ops in specs:
             loaded = _load_framework_schema_file(filename, domain)
             if not loaded:
-                for s in canonical_ops:
-                    loaded[s.name] = s.to_op_schema()
+                for schema in canonical_ops:
+                    loaded[schema.name] = schema
             reg.update(loaded)
-
-        loaded_odl = _load_framework_schema_file("odl_catalog.json", "odl")
-        if not loaded_odl:
-            for s in _CANONICAL_ODL_OPS:
-                loaded_odl[s.name] = s.to_op_schema()
-            ODL_DIALECT_MAPPINGS.update(_CANONICAL_ODL_DIALECT_MAPPINGS)
-        ODL_CATALOG.update(loaded_odl)
+        for op_name, mapping in _CANONICAL_ODL_DIALECT_MAPPINGS.items():
+            if op_name not in ODL_DIALECT_MAPPINGS:
+                ODL_DIALECT_MAPPINGS[op_name] = dict(mapping)
 
 
-_initialize_framework_registries()
+ATEN_REGISTRY: SchemaRegistry = SchemaRegistry("ATEN_REGISTRY", loader=_initialize_framework_registries)
+ARRAY_API_REGISTRY: SchemaRegistry = SchemaRegistry("ARRAY_API_REGISTRY", loader=_initialize_framework_registries)
+CHEX_REGISTRY: SchemaRegistry = SchemaRegistry("CHEX_REGISTRY", loader=_initialize_framework_registries)
+GRAIN_REGISTRY: SchemaRegistry = SchemaRegistry("GRAIN_REGISTRY", loader=_initialize_framework_registries)
+ORBAX_REGISTRY: SchemaRegistry = SchemaRegistry("ORBAX_REGISTRY", loader=_initialize_framework_registries)
+OPTAX_REGISTRY: SchemaRegistry = SchemaRegistry("OPTAX_REGISTRY", loader=_initialize_framework_registries)
+ODL_CATALOG: SchemaRegistry = SchemaRegistry("ODL_CATALOG", loader=_initialize_framework_registries)
+ODL_DIALECT_MAPPINGS: LazyMetadataMap[dict[str, str]] = LazyMetadataMap(
+    "ODL_DIALECT_MAPPINGS", loader=_initialize_framework_registries
+)
 
 
 def get_abstract_op(name: str) -> OpSchema | None:
-    """Retrieve canonical OpSchema definition for an abstract mathematical operation.
+    """Look up a universal abstract operation in the ODL catalog.
 
     Args:
         name (str): Abstract operation name (e.g. 'add', 'matmul', 'relu', 'layer_norm').
@@ -509,3 +349,16 @@ def get_abstract_op(name: str) -> OpSchema | None:
         OpSchema | None: Canonical OpSchema if defined in ODL catalog, else None.
     """
     return ODL_CATALOG.get(name)
+
+
+__all__ = [
+    "ARRAY_API_REGISTRY",
+    "ATEN_REGISTRY",
+    "CHEX_REGISTRY",
+    "GRAIN_REGISTRY",
+    "ODL_CATALOG",
+    "ODL_DIALECT_MAPPINGS",
+    "OPTAX_REGISTRY",
+    "ORBAX_REGISTRY",
+    "get_abstract_op",
+]

@@ -102,4 +102,9 @@ def test_get_producing_output_index() -> None:
     assert res_rep[1] == 0
     assert DType.float32.itemsize == 4.0
     assert DType.int4.itemsize == 0.5
-    assert DType.string.itemsize == 4.0
+    assert DType.float32.is_fixed_width is True
+    assert DType.string.is_fixed_width is False
+    import pytest
+
+    with pytest.raises(ValueError, match="Variable-width DType"):
+        _ = DType.string.itemsize

@@ -1,0 +1,30 @@
+{
+  "ops": [
+    {
+      "name": "f32x4.add",
+      "domain": "wasm_simd",
+      "version": 1,
+      "inputs": [
+        "lhs",
+        "rhs"
+      ],
+      "outputs": [
+        "val"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "f32x4.mul",
+      "domain": "wasm_simd",
+      "version": 1,
+      "inputs": [
+        "lhs",
+        "rhs"
+      ],
+      "outputs": [
+        "val"
+      ],
+      "attributes": []
+    }
+  ]
+}

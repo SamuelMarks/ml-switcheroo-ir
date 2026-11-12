@@ -1,0 +1,79 @@
+{
+  "ops": [
+    {
+      "name": "abs",
+      "domain": "array_api",
+      "version": 1,
+      "inputs": [
+        "x"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "add",
+      "domain": "array_api",
+      "version": 1,
+      "inputs": [
+        "x1",
+        "x2"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "matmul",
+      "domain": "array_api",
+      "version": 1,
+      "inputs": [
+        "x1",
+        "x2"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "mean",
+      "domain": "array_api",
+      "version": 1,
+      "inputs": [
+        "x"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "sum",
+      "domain": "array_api",
+      "version": 1,
+      "inputs": [
+        "x"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": [
+        {
+          "name": "axis",
+          "type": "int",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "keepdims",
+          "type": "bool",
+          "required": false,
+          "default": null
+        }
+      ]
+    }
+  ]
+}

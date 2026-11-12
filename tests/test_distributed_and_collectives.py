@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ml_switcheroo_ir import (
     LogicalGraph,
     LogicalMesh,
@@ -48,7 +50,9 @@ def test_sharding_rank_and_divisibility_validation() -> None:
         sharding=PartitionSpec(axes=("data", "model")),
     )
     errs = v.validate_sharding(indivisible_node, mesh)
-    assert any("Tensor dimension 0 size 15 is not evenly divisible by mesh axis 'data' size 4" in e.message for e in errs)
+    assert any(
+        "Tensor dimension 0 size 15 is not evenly divisible by mesh axis 'data' size 4" in e.message for e in errs
+    )
 
 
 def test_sharding_propagation_elementwise_invariants() -> None:
@@ -290,7 +294,7 @@ def test_analytical_communication_cost_estimation() -> None:
     assert v.estimate_communication_volume(ar_node, mesh) == expected_ar
     assert v.estimate_graph_communication_volume(graph).total_volume_bytes == expected_ar + expected_ag
 
-    # Test symbolic shape metadata (e.g. ("B", 10)) where "B" is ignored in multiplication
+    # Unbound symbolic shape metadata raises ValueError unless symbol_bindings are provided
     node_sym = LogicalNode(
         id="col_sym",
         op_type="all_reduce",
@@ -298,8 +302,132 @@ def test_analytical_communication_cost_estimation() -> None:
         shape_metadata=("B", 10),
         attributes={"mesh_axis": "data", "dtype": "float32", "reduction_op": "sum"},
     )
-    vol_sym = v.estimate_communication_volume(node_sym, mesh)
-    assert vol_sym == int(2 * (3 / 4) * (10 * 4))
+    with pytest.raises(ValueError, match="Unbound symbolic dimension"):
+        v.estimate_communication_volume(node_sym, mesh)
+
+    with pytest.raises(ValueError, match="Non-positive evaluated symbolic dimension"):
+        v.estimate_communication_volume(node_sym, mesh, symbol_bindings={"B": 0})
+
+    vol_sym = v.estimate_communication_volume(node_sym, mesh, symbol_bindings={"B": 8})
+    assert vol_sym == int(2 * (3 / 4) * (8 * 10 * 4))
+
+    g_sym = LogicalGraph(name="SymCol", nodes={"col_sym": node_sym}, mesh=mesh)
+    assert v.estimate_graph_communication_volume(g_sym, symbol_bindings={"B": 8}).total_volume_bytes == vol_sym
+
+    node_dyn_neg = LogicalNode(
+        id="col_dyn",
+        op_type="all_reduce",
+        domain="collective",
+        shape_metadata=(-1, 16),
+        attributes={"mesh_axis": "data", "dtype": "float32", "reduction_op": "sum"},
+    )
+    with pytest.raises(ValueError, match="Unbound dynamic dimension"):
+        v.estimate_communication_volume(node_dyn_neg, mesh)
+
+    # Scalar shape_metadata=() yields 1 element (not 1024!)
+    node_scalar = LogicalNode(
+        id="col_scalar",
+        op_type="all_reduce",
+        domain="collective",
+        shape_metadata=(),
+        dtype=DType.float32,
+        attributes={"mesh_axis": "data", "reduction_op": "sum"},
+    )
+    assert v.estimate_communication_volume(node_scalar, mesh) == int(2 * (3 / 4) * (1 * 4))
+
+
+def test_analytical_communication_cost_dtypes_and_duplicate_sharding() -> None:
+    """Verify sub-byte/complex/variable-width itemsize estimation and duplicate PartitionSpec axis checks."""
+    from ml_switcheroo_ir import DType
+
+    mesh = LogicalMesh(shape={"data": 4, "model": 2})
+    v = Validator(level=ValidationLevel.STRICT)
+
+    # Sub-byte int4 (0.5B), int2 (0.25B), complex64 (8B), and complex128 (16B) byte sizes
+    node_int4 = LogicalNode(
+        id="col_int4",
+        op_type="all_reduce",
+        domain="collective",
+        shape_metadata=(16, 16),
+        dtype=DType.int4,
+        attributes={"mesh_axis": "data", "reduction_op": "sum"},
+    )
+    assert v.estimate_communication_volume(node_int4, mesh) == int(2 * (3 / 4) * (256 * 0.5))
+
+    node_c128 = LogicalNode(
+        id="col_c128",
+        op_type="all_reduce",
+        domain="collective",
+        shape_metadata=("10", 10),
+        attributes={"mesh_axis": "data", "dtype": "complex128", "reduction_op": "sum"},
+    )
+    assert v.estimate_communication_volume(node_c128, mesh) == int(2 * (3 / 4) * (100 * 16))
+
+    node_zero_str = LogicalNode(
+        id="col_zero_str",
+        op_type="all_reduce",
+        domain="collective",
+        shape_metadata=("0", 10),
+        attributes={"mesh_axis": "data"},
+    )
+    with pytest.raises(ValueError, match="Non-positive dimension"):
+        v.estimate_communication_volume(node_zero_str, mesh)
+
+    node_str_dt = LogicalNode(
+        id="col_str_dt",
+        op_type="all_reduce",
+        domain="collective",
+        shape_metadata=(4,),
+        dtype=DType.string,
+        attributes={"mesh_axis": "data"},
+    )
+    assert v.estimate_communication_volume(node_str_dt, mesh) == int(2 * (3 / 4) * (4 * 4))
+
+    node_custom_fp16 = LogicalNode(
+        id="col_fp16_sub",
+        op_type="all_reduce",
+        domain="collective",
+        shape_metadata=(4,),
+        attributes={"mesh_axis": "data", "dtype": "custom_16bit"},
+    )
+    assert v.estimate_communication_volume(node_custom_fp16, mesh) == int(2 * (3 / 4) * (4 * 2))
+
+    node_custom_unk = LogicalNode(
+        id="col_unk_dt",
+        op_type="all_reduce",
+        domain="collective",
+        shape_metadata=(4,),
+        attributes={"mesh_axis": "data", "dtype": "mystery_dtype"},
+    )
+    assert v.estimate_communication_volume(node_custom_unk, mesh) == int(2 * (3 / 4) * (4 * 4))
+
+    node_bf16_alias = LogicalNode(
+        id="col_bf16_alias",
+        op_type="all_reduce",
+        domain="collective",
+        shape_metadata=(4,),
+        attributes={"mesh_axis": "data", "dtype": "bf16"},
+    )
+    assert v.estimate_communication_volume(node_bf16_alias, mesh) == int(2 * (3 / 4) * (4 * 2))
+
+    # Duplicate mesh axis and scalar rank-overflow checks in validate_sharding_node
+    dup_axis_node = LogicalNode(
+        id="dup_sh",
+        op_type="Relu",
+        shape_metadata=(8, 8),
+        sharding=PartitionSpec(axes=("data", "data")),
+    )
+    dup_errs = v.validate_sharding(dup_axis_node, mesh)
+    assert any("Duplicate mesh axis 'data'" in e.message for e in dup_errs)
+
+    scalar_sh_node = LogicalNode(
+        id="scalar_sh",
+        op_type="Relu",
+        shape_metadata=(),
+        sharding=PartitionSpec(axes=("data",)),
+    )
+    scalar_sh_errs = v.validate_sharding(scalar_sh_node, mesh)
+    assert any("PartitionSpec rank (1) exceeds tensor rank (0)" in e.message for e in scalar_sh_errs)
 
     # Test int64 dtype (8 bytes) and int8 dtype (1 byte)
     node_64 = LogicalNode(
@@ -389,7 +517,9 @@ def test_sharding_and_pipeline_edge_branches() -> None:
         shape_metadata=(1,),
         attributes={"activation_checkpoint": 12345},
     )
-    errs_chk_type = v_warn.validate_pipeline_and_checkpointing(LogicalGraph(nodes={node_bad_chk_type.id: node_bad_chk_type}))
+    errs_chk_type = v_warn.validate_pipeline_and_checkpointing(
+        LogicalGraph(nodes={node_bad_chk_type.id: node_bad_chk_type})
+    )
     assert any("Invalid activation checkpoint tag type" in e.message for e in errs_chk_type)
 
     # 4. Pipeline stage skip with boundary marker
@@ -659,3 +789,31 @@ def test_pipeline_and_checkpointing_validation() -> None:
         mesh=LogicalMesh(shape={"data": 2, "model": 4}),
     )
     assert v.validate_sharding_propagation(g_gemm_tr) == []
+
+    from ml_switcheroo_ir.types import DType
+    from ml_switcheroo_ir.validation.distributed import _resolve_itemsize_bytes
+
+    assert _resolve_itemsize_bytes(LogicalNode(id="d_str", op_type="AllReduce", dtype=DType.string)) == 4.0
+    assert (
+        _resolve_itemsize_bytes(LogicalNode(id="d_attr_str", op_type="AllReduce", attributes={"dtype": "string"}))
+        == 4.0
+    )
+    assert _resolve_itemsize_bytes(LogicalNode(id="d_int4", op_type="AllReduce", dtype=DType.int4)) == 0.5
+    assert _resolve_itemsize_bytes(LogicalNode(id="d_c128", op_type="AllReduce", dtype=DType.complex128)) == 16.0
+    assert (
+        _resolve_itemsize_bytes(LogicalNode(id="d_f128", op_type="AllReduce", attributes={"dtype": "custom128"}))
+        == 16.0
+    )
+    assert (
+        _resolve_itemsize_bytes(LogicalNode(id="d_f64", op_type="AllReduce", attributes={"dtype": "custom64"})) == 8.0
+    )
+    assert (
+        _resolve_itemsize_bytes(LogicalNode(id="d_f16", op_type="AllReduce", attributes={"dtype": "custom16"})) == 2.0
+    )
+    assert _resolve_itemsize_bytes(LogicalNode(id="d_f8", op_type="AllReduce", attributes={"dtype": "custom8"})) == 1.0
+    assert _resolve_itemsize_bytes(LogicalNode(id="d_f4", op_type="AllReduce", attributes={"dtype": "custom4"})) == 0.5
+    assert _resolve_itemsize_bytes(LogicalNode(id="d_f2", op_type="AllReduce", attributes={"dtype": "custom2"})) == 0.25
+    assert (
+        _resolve_itemsize_bytes(LogicalNode(id="d_unk", op_type="AllReduce", attributes={"dtype": "unknown_type"}))
+        == 4.0
+    )

@@ -22,7 +22,22 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-dynamic = ["version", "dependencies", "optional-dependencies"]
+dynamic = ["version", "dependencies"]
+
+[project.optional-dependencies]
+format = ["black"]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff",
+    "mypy",
+    "interrogate",
+    "build",
+    "hypothesis",
+    "jsonschema",
+    "onnx",
+    "griffe @ git+https://github.com/SamuelMarks/griffe.git@rest",
+]
 
 [project.scripts]
 ml-switcheroo-ir = "ml_switcheroo_ir.cli:main"
@@ -40,18 +55,16 @@ allow-direct-references = true
 [tool.hatch.metadata.hooks.requirements_txt]
 files = ["requirements.txt"]
 
-[tool.hatch.metadata.hooks.requirements_txt.optional-dependencies]
-test = ["requirements-test.txt"]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/ml_switcheroo_ir"]
+artifacts = ["src/ml_switcheroo_ir/schema/catalogs/*.json"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py39"
 exclude = ["third_party"]
-line-length = 300
-lint.select = ["E", "F", "UP", "B", "I", "C901", "PLR09", "D"]
-lint.ignore = ["B905", "D418", "UP007", "UP045"]
+line-length = 120
+lint.select = ["E", "F", "FA", "UP", "B", "I", "C901", "PLR09", "D"]
+lint.ignore = ["B905", "D418"]
 
 [tool.ruff.lint.pylint]
 max-args = 8
@@ -65,9 +78,10 @@ max-complexity = 10
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-[tool.ruff.lint.per-file-ignores]
-"src/ml_switcheroo_ir/graph.py" = ["PLR0913", "PLR0917"]
-"src/ml_switcheroo_ir/sentinels.py" = ["PLR0913", "PLR0917"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".*", "build", "dist", "CVS", "_darcs", "{arch}", "*.egg", "venv", "third_party"]
+pythonpath = ["src"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -84,7 +98,6 @@ disallow_untyped_calls = true
 check_untyped_defs = true
 disallow_untyped_decorators = true
 no_implicit_optional = true
-ignore_missing_imports = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
@@ -93,7 +106,6 @@ warn_unused_configs = true
 warn_unreachable = true
 strict_equality = true
 extra_checks = true
-disable_error_code = ["override"]
 enable_error_code = [
     "ignore-without-code",
     "redundant-expr",
@@ -110,16 +122,14 @@ init_typed = true
 warn_required_dynamic_aliases = true
 
 [[tool.mypy.overrides]]
-module = ["tests", "tests.*"]
-disallow_untyped_decorators = false
-disallow_any_unimported = false
-
-[[tool.mypy.overrides]]
 module = [
     "tabulate",
+    "ml_ecosystem_snapshots",
     "ml_ecosystem_snapshots.*",
     "onnx",
     "onnx.*",
+    "jsonschema",
+    "jsonschema.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

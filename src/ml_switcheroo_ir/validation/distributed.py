@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
+
 import pydantic
 
 from ml_switcheroo_ir.distributed import PartitionAxisElement
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalMesh, LogicalNode
+from ml_switcheroo_ir.shapes.ast import SymNode
 from ml_switcheroo_ir.types import DType, describe_value_type
 from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel
 
@@ -35,8 +39,18 @@ class CommunicationVolumeReport(pydantic.BaseModel):
     by_op: dict[str, int]
 
 
+_SUBSTRING_WIDTH_TABLE: tuple[tuple[str, float], ...] = (
+    ("128", 16.0),
+    ("64", 8.0),
+    ("16", 2.0),
+    ("8", 1.0),
+    ("4", 0.5),
+    ("2", 0.25),
+)
+
+
 def _resolve_itemsize_bytes(node: LogicalNode) -> float:
-    """Resolve bytes per element for a node's dtype or dtype attribute.
+    """Resolve bytes per element for a node's dtype using ``DType.itemsize``.
 
     Args:
         node (LogicalNode): Target node.
@@ -46,47 +60,90 @@ def _resolve_itemsize_bytes(node: LogicalNode) -> float:
     """
     dtype_val = node.dtype or node.attributes.get("dtype", "float32")
     if isinstance(dtype_val, DType):
-        return dtype_val.itemsize
-    dtype_str = str(dtype_val).lower()
-    if "64" in dtype_str:
-        return 8.0
-    if "16" in dtype_str:
-        return 2.0
-    if "8" in dtype_str:
-        return 1.0
+        return dtype_val.itemsize if dtype_val.is_fixed_width else 4.0
+    dtype_str = str(dtype_val).strip().lower()
+    try:
+        parsed_dt = DType.from_str(dtype_str)
+        return parsed_dt.itemsize if parsed_dt.is_fixed_width else 4.0
+    except ValueError:
+        pass
+    for token, byte_size in _SUBSTRING_WIDTH_TABLE:
+        if token in dtype_str:
+            return byte_size
     return 4.0
 
 
-def _resolve_node_element_count(node: LogicalNode) -> int:
+def _resolve_node_element_count(
+    node: LogicalNode,
+    symbol_bindings: Mapping[str, int] | None = None,
+) -> int:
     """Resolve total element count from ``shape_metadata`` or ``tensor_numel`` attribute.
+
+    Scalar ``shape_metadata=()`` yields ``1`` element. Unbound dynamic or symbolic
+    dimensions (``-1``, ``'B'``, ``SymVar('B')``) raise ``ValueError`` unless concrete
+    positive bindings are supplied in ``symbol_bindings``.
 
     Args:
         node (LogicalNode): Target node.
+        symbol_bindings (Mapping[str, int] | None): Optional mapping of symbolic variable names to sizes.
 
     Returns:
-        int: Element count.
+        int: Total element count (>= 1).
+
+    Raises:
+        ValueError: If ``shape_metadata`` contains unbound symbolic or non-positive dynamic dimensions.
     """
-    if isinstance(node.shape_metadata, (list, tuple)) and len(node.shape_metadata) > 0:
+    if isinstance(node.shape_metadata, (list, tuple)):
+        if len(node.shape_metadata) == 0:
+            return 1
+        bindings = dict(symbol_bindings) if symbol_bindings is not None else {}
         element_count = 1
         for dim in node.shape_metadata:
-            if isinstance(dim, int) and not isinstance(dim, bool) and dim > 0:
+            if isinstance(dim, int) and not isinstance(dim, bool):
+                if dim <= 0:
+                    raise ValueError(
+                        f"Unbound dynamic dimension {dim} in node '{node.id}' shape_metadata {node.shape_metadata}."
+                    )
                 element_count *= dim
+            elif isinstance(dim, str) and dim.isdigit():
+                val = int(dim)
+                if val <= 0:
+                    raise ValueError(f"Non-positive dimension '{dim}' in node '{node.id}'.")
+                element_count *= val
+            else:
+                try:
+                    evaluated = SymNode.to_node(dim).evaluate(bindings)
+                except (KeyError, ValueError) as exc:
+                    raise ValueError(
+                        f"Unbound symbolic dimension '{dim}' in node '{node.id}'; "
+                        "provide concrete positive symbol_bindings."
+                    ) from exc
+                if evaluated <= 0:
+                    raise ValueError(
+                        f"Non-positive evaluated symbolic dimension '{dim}'={evaluated} in node '{node.id}'."
+                    )
+                element_count *= evaluated
         return element_count
     numel = node.attributes.get("tensor_numel", 1024)
     return int(numel) if isinstance(numel, int) and not isinstance(numel, bool) else 1024
 
 
-def estimate_communication_volume(node: LogicalNode, mesh: LogicalMesh | None = None) -> int:
+def estimate_communication_volume(
+    node: LogicalNode,
+    mesh: LogicalMesh | None = None,
+    symbol_bindings: Mapping[str, int] | None = None,
+) -> int:
     """Calculate analytical communication volume in bytes for a collective communication node.
 
     Args:
         node (LogicalNode): The collective operation node.
-        mesh (Optional[LogicalMesh]): The logical device mesh defined on the graph.
+        mesh (LogicalMesh | None): The logical device mesh defined on the graph.
+        symbol_bindings (Mapping[str, int] | None): Optional bindings for symbolic dimensions.
 
     Returns:
         int: Analytical volume in bytes transferred per device during the collective.
     """
-    tensor_bytes = int(_resolve_node_element_count(node) * _resolve_itemsize_bytes(node))
+    tensor_bytes = math.ceil(_resolve_node_element_count(node, symbol_bindings) * _resolve_itemsize_bytes(node))
     axis_name = str(node.attributes.get("mesh_axis", "data"))
     if mesh is not None and axis_name in mesh.shape:
         n_devices = mesh.shape[axis_name]
@@ -107,14 +164,16 @@ def estimate_communication_volume(node: LogicalNode, mesh: LogicalMesh | None = 
 
 def estimate_graph_communication_volume(
     graph: LogicalGraph,
+    symbol_bindings: Mapping[str, int] | None = None,
 ) -> CommunicationVolumeReport:
     """Aggregate analytical communication volume across all collective operators in a graph.
 
     Args:
         graph (LogicalGraph): The computational graph to analyze.
+        symbol_bindings (Mapping[str, int] | None): Optional bindings for symbolic dimensions.
 
     Returns:
-        CommunicationVolumeReport: Dictionary with total communication volume in bytes,
+        CommunicationVolumeReport: Report with total communication volume in bytes,
             and breakdowns by mesh axis and operator type.
     """
     total_bytes = 0
@@ -122,8 +181,12 @@ def estimate_graph_communication_volume(
     by_op: dict[str, int] = {}
 
     for node in graph.nodes.values():
-        if node.domain in ("collective", "ml.switcheroo.collective") or node.op_type.startswith("collective.") or node.op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
-            vol = estimate_communication_volume(node, graph.mesh)
+        if (
+            node.domain in ("collective", "ml.switcheroo.collective")
+            or node.op_type.startswith("collective.")
+            or node.op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all")
+        ):
+            vol = estimate_communication_volume(node, graph.mesh, symbol_bindings=symbol_bindings)
             total_bytes += vol
             axis = str(node.attributes.get("mesh_axis", "unknown"))
             by_axis[axis] = by_axis.get(axis, 0) + vol
@@ -134,6 +197,24 @@ def estimate_graph_communication_volume(
         by_axis=by_axis,
         by_op=by_op,
     )
+
+
+def _flatten_partition_axes(axes: tuple[PartitionAxisElement, ...]) -> list[str | int]:
+    """Extract all non-None mesh axis names/indices referenced across a PartitionSpec.
+
+    Args:
+        axes (tuple[PartitionAxisElement, ...]): PartitionSpec axis tuple.
+
+    Returns:
+        list[str | int]: Flattened list of referenced mesh axes in traversal order.
+    """
+    flat: list[str | int] = []
+    for axis in axes:
+        if isinstance(axis, (list, tuple)):
+            flat.extend(_flatten_partition_axes(tuple(axis)))
+        elif isinstance(axis, (str, int)) and not isinstance(axis, bool):
+            flat.append(axis)
+    return flat
 
 
 def _check_single_sharding_axis(
@@ -147,7 +228,7 @@ def _check_single_sharding_axis(
     Args:
         node (LogicalNode): Node being validated.
         mesh (LogicalMesh): Active logical device mesh.
-        axis (PartitionAxisElement): Axis element (None, str, or nested tuple/list).
+        axis (PartitionAxisElement): Axis element (None, str, int, or nested tuple/list).
         dim_idx (int): Tensor dimension index.
 
     Returns:
@@ -177,7 +258,10 @@ def _check_single_sharding_axis(
                 ValidationError(
                     node_id=node.id,
                     attribute="sharding",
-                    message=(f"Tensor dimension {dim_idx} size {dim_size} is not evenly divisible by mesh axis '{axis}' size {axis_size}."),
+                    message=(
+                        f"Tensor dimension {dim_idx} size {dim_size} is not evenly "
+                        f"divisible by mesh axis '{axis}' size {axis_size}."
+                    ),
                     level=ValidationLevel.ERROR,
                 )
             ]
@@ -185,11 +269,11 @@ def _check_single_sharding_axis(
 
 
 def validate_sharding_node(node: LogicalNode, mesh: LogicalMesh | None) -> list[ValidationError]:
-    """Validate that node sharding specification is compatible with the logical mesh.
+    """Validate that node sharding specification has unique mesh axes and fits mesh & tensor rank.
 
     Args:
         node (LogicalNode): The node whose sharding to validate.
-        mesh (Optional[LogicalMesh]): The logical mesh defined on the graph.
+        mesh (LogicalMesh | None): The logical mesh defined on the graph.
 
     Returns:
         list[ValidationError]: A list of sharding validation errors.
@@ -208,15 +292,32 @@ def validate_sharding_node(node: LogicalNode, mesh: LogicalMesh | None) -> list[
         ]
 
     errors: list[ValidationError] = []
-    if isinstance(node.shape_metadata, (list, tuple)) and len(node.shape_metadata) > 0 and len(node.sharding.axes) > len(node.shape_metadata):
+    if isinstance(node.shape_metadata, (list, tuple)) and len(node.sharding.axes) > len(node.shape_metadata):
         errors.append(
             ValidationError(
                 node_id=node.id,
                 attribute="sharding",
-                message=(f"PartitionSpec rank ({len(node.sharding.axes)}) exceeds tensor rank ({len(node.shape_metadata)})."),
+                message=(
+                    f"PartitionSpec rank ({len(node.sharding.axes)}) exceeds tensor rank ({len(node.shape_metadata)})."
+                ),
                 level=ValidationLevel.ERROR,
             )
         )
+
+    seen_axes: set[str | int] = set()
+    reported_dups: set[str | int] = set()
+    for ax_id in _flatten_partition_axes(node.sharding.axes):
+        if ax_id in seen_axes and ax_id not in reported_dups:
+            reported_dups.add(ax_id)
+            errors.append(
+                ValidationError(
+                    node_id=node.id,
+                    attribute="sharding",
+                    message=f"Duplicate mesh axis '{ax_id}' in PartitionSpec {node.sharding.axes}.",
+                    level=ValidationLevel.ERROR,
+                )
+            )
+        seen_axes.add(ax_id)
 
     for idx, axis in enumerate(node.sharding.axes):
         errors.extend(_check_single_sharding_axis(node, mesh, axis, idx))
@@ -244,7 +345,9 @@ _ELEMENTWISE_SHARDING_OPS: frozenset[str] = frozenset(
 _REDUCTION_SHARDING_OPS: frozenset[str] = frozenset({"ReduceSum", "ReduceMean", "ReduceMax", "ReduceMin"})
 
 
-def _validate_elementwise_sharding(node: LogicalNode, graph: LogicalGraph, level: ValidationLevel) -> list[ValidationError]:
+def _validate_elementwise_sharding(
+    node: LogicalNode, graph: LogicalGraph, level: ValidationLevel
+) -> list[ValidationError]:
     """Validate matching input/output PartitionSpecs on an elementwise node.
 
     Args:
@@ -266,7 +369,11 @@ def _validate_elementwise_sharding(node: LogicalNode, graph: LogicalGraph, level
                 ValidationError(
                     node_id=node.id,
                     attribute="sharding_propagation",
-                    message=(f"Elementwise op '{node.id}' ({node.op_type}) has mismatched sharding between input '{inp_node.id}' ({inp_node.sharding.axes}) and output ({node.sharding.axes})."),
+                    message=(
+                        f"Elementwise op '{node.id}' ({node.op_type}) has mismatched sharding "
+                        f"between input '{inp_node.id}' ({inp_node.sharding.axes}) "
+                        f"and output ({node.sharding.axes})."
+                    ),
                     level=lvl,
                 )
             )
@@ -313,7 +420,11 @@ def _validate_contraction_sharding(node: LogicalNode, graph: LogicalGraph) -> li
             ValidationError(
                 node_id=node.id,
                 attribute="sharding_propagation",
-                message=(f"Contraction op '{node.id}' ({node.op_type}) has mismatched contracted dimension sharding: '{node0.id}' axis is '{contract_axis_0}', '{node1.id}' axis is '{contract_axis_1}'."),
+                message=(
+                    f"Contraction op '{node.id}' ({node.op_type}) has mismatched contracted "
+                    f"dimension sharding: '{node0.id}' axis is '{contract_axis_0}', "
+                    f"'{node1.id}' axis is '{contract_axis_1}'."
+                ),
                 level=ValidationLevel.ERROR,
             )
         ]
@@ -332,9 +443,13 @@ def _validate_reduction_sharding(node: LogicalNode, graph: LogicalGraph) -> list
     """
     reduced_axes = node.attributes.get("axes")
     inp_node = graph.nodes.get(node.inputs[0]) or graph.get_output_producer(node.inputs[0])
-    if not isinstance(reduced_axes, (list, tuple)) or inp_node is None or inp_node.sharding is None:
+    if (
+        not isinstance(reduced_axes, (list, tuple))
+        or inp_node is None
+        or inp_node.sharding is None
+        or node.sharding is None
+    ):
         return []
-    assert node.sharding is not None
     errors: list[ValidationError] = []
     for r_axis in reduced_axes:
         if isinstance(r_axis, int) and not isinstance(r_axis, bool) and 0 <= r_axis < len(inp_node.sharding.axes):
@@ -344,14 +459,19 @@ def _validate_reduction_sharding(node: LogicalNode, graph: LogicalGraph) -> list
                     ValidationError(
                         node_id=node.id,
                         attribute="sharding_propagation",
-                        message=(f"Reduction op '{node.id}' reduces sharded axis '{sharded_mesh_axis}', but output retains sharding on it."),
+                        message=(
+                            f"Reduction op '{node.id}' reduces sharded axis "
+                            f"'{sharded_mesh_axis}', but output retains sharding on it."
+                        ),
                         level=ValidationLevel.ERROR,
                     )
                 )
     return errors
 
 
-def _validate_gather_or_scatter_sharding(node: LogicalNode, graph: LogicalGraph, is_gather: bool) -> list[ValidationError]:
+def _validate_gather_or_scatter_sharding(
+    node: LogicalNode, graph: LogicalGraph, is_gather: bool
+) -> list[ValidationError]:
     """Validate dimension scaling for AllGather or ReduceScatter operations.
 
     Args:
@@ -367,10 +487,22 @@ def _validate_gather_or_scatter_sharding(node: LogicalNode, graph: LogicalGraph,
     if dim_attr is None:
         dim_attr = node.attributes.get(alt_key)
     mesh_axis = node.attributes.get("mesh_axis")
-    if not isinstance(dim_attr, int) or graph.mesh is None or mesh_axis is None or str(mesh_axis) not in graph.mesh.shape or not node.inputs:
+    if (
+        not isinstance(dim_attr, int)
+        or graph.mesh is None
+        or mesh_axis is None
+        or str(mesh_axis) not in graph.mesh.shape
+        or not node.inputs
+    ):
         return []
     inp_node = graph.nodes.get(node.inputs[0]) or graph.get_output_producer(node.inputs[0])
-    if inp_node is None or not isinstance(inp_node.shape_metadata, (list, tuple)) or not isinstance(node.shape_metadata, (list, tuple)) or not (0 <= dim_attr < len(inp_node.shape_metadata)) or dim_attr >= len(node.shape_metadata):
+    if (
+        inp_node is None
+        or not isinstance(inp_node.shape_metadata, (list, tuple))
+        or not isinstance(node.shape_metadata, (list, tuple))
+        or not (0 <= dim_attr < len(inp_node.shape_metadata))
+        or dim_attr >= len(node.shape_metadata)
+    ):
         return []
     in_d = inp_node.shape_metadata[dim_attr]
     out_d = node.shape_metadata[dim_attr]
@@ -380,7 +512,10 @@ def _validate_gather_or_scatter_sharding(node: LogicalNode, graph: LogicalGraph,
             ValidationError(
                 node_id=node.id,
                 attribute="gather_dim",
-                message=(f"AllGather operation '{node.id}' gathered dimension size {out_d} does not match input size {in_d} * partition factor {partition_factor}."),
+                message=(
+                    f"AllGather operation '{node.id}' gathered dimension size {out_d} "
+                    f"does not match input size {in_d} * partition factor {partition_factor}."
+                ),
                 level=ValidationLevel.ERROR,
             )
         ]
@@ -389,7 +524,10 @@ def _validate_gather_or_scatter_sharding(node: LogicalNode, graph: LogicalGraph,
             ValidationError(
                 node_id=node.id,
                 attribute="scatter_dim",
-                message=(f"ReduceScatter operation '{node.id}' scattered dimension size {out_d} does not match input size {in_d} // partition factor {partition_factor}."),
+                message=(
+                    f"ReduceScatter operation '{node.id}' scattered dimension size {out_d} "
+                    f"does not match input size {in_d} // partition factor {partition_factor}."
+                ),
                 level=ValidationLevel.ERROR,
             )
         ]
@@ -435,14 +573,21 @@ def _validate_collective_node_sharding(node: LogicalNode, graph: LogicalGraph) -
     elif node.op_type in ("AllToAll", "all_to_all"):
         split_axis = node.attributes.get("split_axis") or node.attributes.get("split_dim", 0)
         concat_axis = node.attributes.get("concat_axis") or node.attributes.get("concat_dim", 1)
-        if isinstance(split_axis, int) and isinstance(concat_axis, int) and isinstance(node.shape_metadata, (list, tuple)):
+        if (
+            isinstance(split_axis, int)
+            and isinstance(concat_axis, int)
+            and isinstance(node.shape_metadata, (list, tuple))
+        ):
             rank = len(node.shape_metadata)
             if not (0 <= split_axis < rank and 0 <= concat_axis < rank):
                 errors.append(
                     ValidationError(
                         node_id=node.id,
                         attribute="all_to_all_axes",
-                        message=(f"AllToAll operation '{node.id}' axes ({split_axis}, {concat_axis}) are out of bounds for tensor of rank {rank}."),
+                        message=(
+                            f"AllToAll operation '{node.id}' axes ({split_axis}, {concat_axis}) "
+                            f"are out of bounds for tensor of rank {rank}."
+                        ),
                         level=ValidationLevel.ERROR,
                     )
                 )
@@ -488,7 +633,11 @@ def _validate_node_checkpoint_tag(node: LogicalNode) -> list[ValidationError]:
     Returns:
         list[ValidationError]: Detected checkpoint tag errors.
     """
-    tag = node.attributes.get("activation_checkpoint") if "activation_checkpoint" in node.attributes else node.attributes.get("checkpoint_policy")
+    tag = (
+        node.attributes.get("activation_checkpoint")
+        if "activation_checkpoint" in node.attributes
+        else node.attributes.get("checkpoint_policy")
+    )
     if tag is None:
         return []
     if isinstance(tag, str):
@@ -497,7 +646,10 @@ def _validate_node_checkpoint_tag(node: LogicalNode) -> list[ValidationError]:
                 ValidationError(
                     node_id=node.id,
                     attribute="activation_checkpoint",
-                    message=(f"Invalid activation checkpoint tag '{tag}', expected one of {{'recompute', 'offload', 'save', 'full'}}."),
+                    message=(
+                        f"Invalid activation checkpoint tag '{tag}', "
+                        "expected one of {'recompute', 'offload', 'save', 'full'}."
+                    ),
                     level=ValidationLevel.ERROR,
                 )
             ]
@@ -524,7 +676,11 @@ def _validate_node_pipeline_stage(node: LogicalNode, graph: LogicalGraph) -> lis
     Returns:
         list[ValidationError]: Detected pipeline stage errors.
     """
-    stage = node.attributes.get("pipeline_stage") if "pipeline_stage" in node.attributes else node.attributes.get("stage_id")
+    stage = (
+        node.attributes.get("pipeline_stage")
+        if "pipeline_stage" in node.attributes
+        else node.attributes.get("stage_id")
+    )
     if stage is None:
         return []
     if not isinstance(stage, int) or isinstance(stage, bool) or stage < 0:
@@ -542,7 +698,11 @@ def _validate_node_pipeline_stage(node: LogicalNode, graph: LogicalGraph) -> lis
         src_node = graph.nodes.get(inp_id) or graph.get_output_producer(inp_id)
         if src_node is None:
             continue
-        src_stage = src_node.attributes.get("pipeline_stage") if "pipeline_stage" in src_node.attributes else src_node.attributes.get("stage_id")
+        src_stage = (
+            src_node.attributes.get("pipeline_stage")
+            if "pipeline_stage" in src_node.attributes
+            else src_node.attributes.get("stage_id")
+        )
         if not isinstance(src_stage, int) or isinstance(src_stage, bool):
             continue
         if src_stage > stage:
@@ -550,16 +710,24 @@ def _validate_node_pipeline_stage(node: LogicalNode, graph: LogicalGraph) -> lis
                 ValidationError(
                     node_id=node.id,
                     attribute="pipeline_stage",
-                    message=(f"Pipeline stage dependency hazard: backward edge from stage {src_stage} (node '{src_node.id}') to stage {stage} (node '{node.id}')."),
+                    message=(
+                        f"Pipeline stage dependency hazard: backward edge from stage {src_stage} "
+                        f"(node '{src_node.id}') to stage {stage} (node '{node.id}')."
+                    ),
                     level=ValidationLevel.ERROR,
                 )
             )
-        elif stage - src_stage > 1 and not (bool(node.attributes.get("pipeline_boundary", False)) or node.op_type in ("P2P", "collective.all_to_all")):
+        elif stage - src_stage > 1 and not (
+            bool(node.attributes.get("pipeline_boundary", False)) or node.op_type in ("P2P", "collective.all_to_all")
+        ):
             errors.append(
                 ValidationError(
                     node_id=node.id,
                     attribute="pipeline_boundary",
-                    message=(f"Cross-stage dataflow skipping stages ({src_stage} -> {stage}) requires an explicit boundary marker."),
+                    message=(
+                        f"Cross-stage dataflow skipping stages ({src_stage} -> {stage}) "
+                        "requires an explicit boundary marker."
+                    ),
                     level=ValidationLevel.WARNING,
                 )
             )

@@ -230,10 +230,20 @@ def test_shape_tracker_inference_and_feedback() -> None:
     g = LogicalGraph(nodes={"n1": n1})
 
     tracker = SymbolicConstraintTracker()
+    bounds_pure = ShapeTracker.resolve_dynamic_bounds(
+        g,
+        {"n1": [8, 128, 512, 64]},
+        tracker=tracker,
+    )
+    assert bounds_pure == {"batch": 8, "seq_len": 128, "embed_dim": 512}
+    # Default mutate=False leaves node untouched
+    assert n1.shape_metadata == (si_b, sv_s, "embed_dim", 64)
+
     bounds = ShapeTracker.resolve_dynamic_bounds(
         g,
         {"n1": [8, 128, 512, 64]},
         tracker=tracker,
+        mutate=True,
     )
     assert bounds["batch"] == 8
     assert bounds["seq_len"] == 128
@@ -311,16 +321,17 @@ def test_shape_tracker_mock_containers_and_unification_edges() -> None:
 
     g_so = _SimpleNodeContainer({"n_so": n_so})
 
-    # Resolve bounds with tracker=None and shorter telemetry (dim 3 pads with 1)
+    # Resolve bounds with tracker=None and shorter telemetry (trailing dims preserved, not padded with 1)
     bounds_so = ShapeTracker.resolve_dynamic_bounds(
         g_so,
         {"n_so": [16, 32, 64]},
         tracker=None,
+        mutate=True,
     )
     assert bounds_so["si_track_none"] == 16
     assert bounds_so["sv_track_none"] == 32
     assert bounds_so["var_dim"] == 64
-    assert n_so.shape == (16, 32, 64, 1, 1)
+    assert n_so.shape == (16, 32, 64, 64, 128)
 
     # Unify unbound symbols
     assert t2.unify("dim_u", "dim_v") == "dim_u"
@@ -466,3 +477,113 @@ def test_shape_tracker_list_containers_and_exact_rank_bounds() -> None:
             {"n_rank": (4,)},
             strict_rank=True,
         )
+
+    class _BareNode:
+        """Minimal node implementing only id without shape or shape_metadata."""
+
+        @property
+        def id(self) -> str:
+            """Return node ID.
+
+            Returns:
+                str: Node ID.
+            """
+            return "bare"
+
+    assert ShapeTracker._get_node_shape_meta(_BareNode()) is None
+    ShapeTracker._set_node_shape_meta(_BareNode(), (2,))
+    assert ShapeTracker.resolve_dynamic_bounds(_SimpleNodeContainer({"bare": _BareNode()}), {"bare": (2,)}) == {}
+
+
+def test_bool_rejection_and_affine_constraint_solving() -> None:
+    """Test bool rejection across inference APIs and univariate affine substitution."""
+    from ml_switcheroo_ir.shapes import (
+        SymBinaryOp,
+        SymNode,
+        SymPiecewise,
+        SymUnaryOp,
+        broadcast_shapes,
+        matmul_shape,
+        normalize_axis,
+    )
+
+    with pytest.raises(TypeError, match="Boolean"):
+        broadcast_dimension(True, 4)
+    with pytest.raises(TypeError, match="Boolean"):
+        broadcast_dimension(4, False)
+    with pytest.raises(TypeError, match="Boolean"):
+        broadcast_shapes((True, 4), (4,))
+    with pytest.raises(TypeError, match="Boolean"):
+        matmul_shape((True, 4), (4, 8))
+    with pytest.raises(TypeError, match="Boolean"):
+        matmul_shape((2, 4), (4, False))
+    with pytest.raises(TypeError):
+        normalize_axis(True, 3)
+    with pytest.raises(TypeError):
+        normalize_axis([True, 0], 3)
+    with pytest.raises(TypeError):
+        normalize_axis(0, True)
+
+    tr_affine = SymbolicConstraintTracker()
+    tr_affine.record_equality("2 * B + 4", 20)
+    assert tr_affine.solve() == {"B": 8}
+    assert tr_affine.substitute(SymInt("B * 2")) == SymInt(16)
+    assert tr_affine.substitute(SymInt("B * C")) == SymInt("8 * C")
+    assert tr_affine.substitute(SymVar("B") * 3) == SymConst(24)
+    assert tr_affine.substitute(SymVar("B") * SymVar("C")) == (SymConst(8) * SymVar("C")).simplify()
+    assert tr_affine.substitute("B * 2") == 16
+    assert tr_affine.substitute("B + C") == "(C + 8)"
+    assert tr_affine.substitute("unsolved_var") == "unsolved_var"
+    assert tr_affine.substitute("invalid$expr") == "invalid$expr"
+    assert tr_affine.substitute(SymUnaryOp("abs", SymVar("B") - 20)) == SymConst(12)
+    pw_expr = SymPiecewise(
+        cases=[(SymBinaryOp(">", SymVar("B"), SymConst(4)), SymVar("B") * 2), ("C > 0", SymVar("C"))],
+        default=SymConst(0),
+    )
+    assert tr_affine.substitute(pw_expr) == SymConst(16)
+    pw_str = SymPiecewise(
+        cases=[("B < 4", SymConst(1)), ("invalid$cond", SymVar("C")), (False, SymConst(2))],
+        default=SymVar("B") + 1,
+    )
+    assert isinstance(tr_affine.substitute(pw_str), SymPiecewise)
+    assert tr_affine.substitute(SymNode()) is not None
+
+
+def test_affine_propagation_and_contradictions() -> None:
+    """Test multi-variable affine constraint propagation and integer contradiction detection."""
+    tr_empty = SymbolicConstraintTracker()
+    assert tr_empty.substitute(SymInt("B * 2")) == SymInt("B * 2")
+    with pytest.raises(TypeError, match="Boolean"):
+        tr_empty.substitute(True)
+
+    tr_prop = SymbolicConstraintTracker()
+    tr_prop.record_equality("A + 2 * B", 20)
+    tr_prop.record_equality("C + D", 10)
+    tr_prop.record_equality("A", 4)
+    assert tr_prop.solve() == {"A": 4, "B": 8}
+    tr_prop.record_equality("2 * B", 16)
+    assert tr_prop.is_consistent()
+
+    tr_nonpoly = SymbolicConstraintTracker()
+    tr_nonpoly.record_equality("bad$expr", "other$expr")
+    tr_nonpoly.record_equality(SymVar("X") % 2, 1)
+
+    tr_bad_div = SymbolicConstraintTracker()
+    with pytest.raises(ShapeMismatchError, match="Unsolvable integer affine"):
+        tr_bad_div.record_equality("2 * B + 1", 16)
+    assert not tr_bad_div.is_consistent()
+
+    tr_conflict = SymbolicConstraintTracker()
+    tr_conflict.record_equality("B", 5)
+    with pytest.raises(ShapeMismatchError, match="Contradictory"):
+        tr_conflict.record_equality("2 * B", 16)
+
+    tr_const_poly_conflict = SymbolicConstraintTracker()
+    tr_const_poly_conflict.record_equality("B", 8)
+    with pytest.raises(ShapeMismatchError, match="Contradictory"):
+        tr_const_poly_conflict.record_equality("B + 1", 10)
+
+    from ml_switcheroo_ir import LogicalGraph, LogicalNode
+
+    g_aff = LogicalGraph(nodes={"n_aff": LogicalNode("n_aff", "Relu", shape_metadata=(SymInt("2 * K"),))})
+    assert ShapeTracker.resolve_dynamic_bounds(g_aff, {"n_aff": [16]}) == {"K": 8}

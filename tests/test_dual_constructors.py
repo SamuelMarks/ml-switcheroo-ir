@@ -94,7 +94,7 @@ def test_logical_graph_explicit_edges() -> None:
     ]
     graph = LogicalGraph(name="EdgeGraph", nodes={"n1": n1, "n2": n2}, edges=edges)
     assert n2.inputs == ["n1"]
-    assert graph.edges == [LogicalEdge(source="n1", target="n2")]
+    assert graph.edges == (LogicalEdge(source="n1", target="n2"),)
     assert graph.outputs == ["n2"]
 
 
@@ -152,7 +152,7 @@ def test_logical_graph_roundtrip_instantiation() -> None:
     assert graph.name == "TransformerLayer"
     assert graph.nodes["norm1"].inputs == ["x"]
     assert graph.outputs == ["norm1"]
-    assert graph.edges == [LogicalEdge(source="x", target="norm1")]
+    assert graph.edges == (LogicalEdge(source="x", target="norm1"),)
 
 
 def test_logical_node_rejects_invalid_shape_metadata() -> None:
@@ -227,7 +227,12 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
     """Test chunked incremental streaming JSON parser with small chunk boundaries and error paths."""
     from ml_switcheroo_ir.graph import _decode_next_json_value, _stream_parse_graph
 
-    raw_dict_nodes = '{"name": "ChunkedModel", "nodes": {"n1": {"id": "n1", "op_type": "Relu"}, "n2": {"id": "n2", "op_type": "Add", "inputs": []}}, "edges": [{"source": "n1", "target": "n2"}], "outputs": ["n2"]}'
+    raw_dict_nodes = (
+        '{"name": "ChunkedModel", "nodes": {'
+        '"n1": {"id": "n1", "op_type": "Relu"}, '
+        '"n2": {"id": "n2", "op_type": "Add", "inputs": []}}, '
+        '"edges": [{"source": "n1", "target": "n2"}], "outputs": ["n2"]}'
+    )
     g1 = _stream_parse_graph(io.StringIO(raw_dict_nodes), LogicalGraph, chunk_size=8)
     assert g1.name == "ChunkedModel"
     assert list(g1.nodes.keys()) == ["n1", "n2"]
@@ -273,7 +278,12 @@ def test_stream_parse_graph_chunked_boundaries() -> None:
     from ml_switcheroo_ir.shapes import SymVar
 
     assert _encode_special_types(DType.float32) == "float32"
-    assert _encode_special_types(SymVar("N")) == "N"
+    assert _encode_special_types(SymVar("N")) == {
+        "__sw_type__": "SymNode",
+        "expr": "N",
+        "kind": "var",
+        "name": "N",
+    }
 
     with pytest.raises(json.JSONDecodeError):
         _decode_next_json_value(dec, '"unterminated', 0, io.StringIO("more_text"), 4, max_token_chars=8)

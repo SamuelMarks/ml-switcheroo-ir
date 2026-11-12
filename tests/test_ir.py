@@ -21,7 +21,6 @@ from ml_switcheroo_ir import (
     eliminate_dead_nodes,
     topological_sort,
 )
-from ml_switcheroo_ir.cli import _parse_graph_from_json
 from ml_switcheroo_ir.cli import main as cli_main
 
 
@@ -159,13 +158,13 @@ def test_cli_parse_json() -> None:
         }
     )
 
-    graph = _parse_graph_from_json(json_data)
+    graph = LogicalGraph.from_json(json_data)
     assert graph.name == "TestModel"
     assert len(graph.nodes) == 2
     assert len(graph.nodes["n2"].inputs) == 1
     assert graph.nodes["n1"].attributes["shape"] == "2"
 
-    graph_empty = _parse_graph_from_json("{}")
+    graph_empty = LogicalGraph.from_json("{}")
     assert graph_empty.name == "Model"
     assert len(graph_empty.nodes) == 0
 
@@ -199,7 +198,9 @@ def test_cli_main(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) ->
     assert "n2 (Output)" in captured.out
 
 
-def test_cli_main_sys_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
+def test_cli_main_sys_argv(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
     """Test CLI main using sys.argv.
 
     Args:
@@ -235,8 +236,9 @@ def test_runpy_main_module(capsys: pytest.CaptureFixture[str], tmp_path: pathlib
     f_path = tmp_path / "runpy_main.json"
     f_path.write_text("{}", encoding="utf-8")
     sys.modules.pop("ml_switcheroo_ir.__main__", None)
-    with patch("sys.argv", ["ml-switcheroo-ir", "toposort", str(f_path)]):
+    with patch("sys.argv", ["ml-switcheroo-ir", "toposort", str(f_path)]), pytest.raises(SystemExit) as exc_info:
         runpy.run_module("ml_switcheroo_ir.__main__", run_name="__main__")
+    assert exc_info.value.code == 0
     assert "Topological Order:" in capsys.readouterr().out
 
 
@@ -252,13 +254,14 @@ def test_runpy_cli_module(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.
     f_path = tmp_path / "runpy_cli.json"
     f_path.write_text("{}", encoding="utf-8")
     sys.modules.pop("ml_switcheroo_ir.cli", None)
-    with patch("sys.argv", ["ml-switcheroo-ir", "toposort", str(f_path)]):
+    with patch("sys.argv", ["ml-switcheroo-ir", "toposort", str(f_path)]), pytest.raises(SystemExit) as exc_info:
         runpy.run_module("ml_switcheroo_ir.cli", run_name="__main__")
+    assert exc_info.value.code == 0
     assert "Topological Order:" in capsys.readouterr().out
 
 
 def test_cli_main_other_command(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    """Test CLI main with another mock command.
+    """Test CLI main with another mock command returning exit code 1.
 
     Args:
         monkeypatch: Pytest fixture to mock attributes.
@@ -272,7 +275,7 @@ def test_cli_main_other_command(monkeypatch: pytest.MonkeyPatch, capsys: pytest.
         command = "other"
 
     monkeypatch.setattr("argparse.ArgumentParser.parse_args", lambda self, args: MockArgs())
-    cli_main(["other"])
+    assert cli_main(["other"]) == 1
     assert capsys.readouterr().out == ""
 
 
@@ -283,47 +286,48 @@ def test_verify_backend_missing_file(capsys: pytest.CaptureFixture[str]) -> None
         capsys: Pytest fixture to capture stdout and stderr.
 
     """
-    cli_main(["verify-backend", "nonexistent_file_12345.py", "MyClass"])
+    assert cli_main(["verify-backend", "nonexistent_file_12345.py", "MyClass"]) == 1
     captured = capsys.readouterr()
     assert "not found" in captured.out
     assert "Compliance: 0%" in captured.out
 
 
-def test_verify_backend_spec_none(
+def test_verify_backend_syntax_error_and_no_exec(
     capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ) -> None:
-    """Test verify-backend when importlib spec is None.
-
-    Args:
-        capsys: Pytest fixture to capture stdout and stderr.
-        monkeypatch: Pytest fixture to mock attributes.
-        tmp_path (pathlib.Path): Pytest temporary directory fixture.
-
-    """
-    monkeypatch.setattr("importlib.util.spec_from_file_location", lambda n, p: None)
-    fpath = tmp_path / "empty_mod.py"
-    fpath.write_text("", encoding="utf-8")
-    cli_main(["verify-backend", str(fpath), "MyClass"])
-    captured = capsys.readouterr()
-    assert "Error: Could not load module" in captured.out
-
-
-def test_verify_backend_execution_error(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
-    """Test verify-backend when module execution fails.
+    """Test verify-backend handles AST syntax errors and never executes top-level module code.
 
     Args:
         capsys: Pytest fixture to capture stdout and stderr.
         tmp_path (pathlib.Path): Pytest temporary directory fixture.
-
     """
-    fpath = tmp_path / "bad_exec.py"
-    fpath.write_text("import nonexistent_module_123", encoding="utf-8")
-    cli_main(["verify-backend", str(fpath), "MyClass"])
+    bad_syntax = tmp_path / "bad_syntax.py"
+    bad_syntax.write_text("def broken(:\n", encoding="utf-8")
+    assert cli_main(["verify-backend", str(bad_syntax), "MyClass"]) == 1
     captured = capsys.readouterr()
-    assert "Error executing module" in captured.out
+    assert "Error parsing module AST" in captured.out
     assert "Compliance: 0%" in captured.out
+
+
+def test_verify_backend_untrusted_code_not_executed(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
+    """Verify verify-backend inspects AST statically without executing untrusted top-level statements.
+
+    Args:
+        capsys: Pytest fixture to capture stdout and stderr.
+        tmp_path (pathlib.Path): Pytest temporary directory fixture.
+    """
+    fpath = tmp_path / "untrusted_backend.py"
+    fpath.write_text(
+        "raise RuntimeError('MUST NOT EXECUTE')\n"
+        "class MyClass(sw_ir.CompilerBackend[str]):\n"
+        "    def compile(self, graph):\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    assert cli_main(["verify-backend", str(fpath), "MyClass"]) == 0
+    captured = capsys.readouterr()
+    assert "Compliance: 100%" in captured.out
 
 
 def test_verify_backend_missing_class(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
@@ -367,7 +371,10 @@ def test_verify_backend_no_graph_arg(capsys: pytest.CaptureFixture[str], tmp_pat
     """
     fpath = tmp_path / "no_graph_arg.py"
     fpath.write_text(
-        "from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, wrong_arg):\n        pass",
+        """from ml_switcheroo_ir import CompilerBackend
+class MyClass(CompilerBackend):
+    def compile(self, wrong_arg):
+        pass""",
         encoding="utf-8",
     )
     cli_main(["verify-backend", str(fpath), "MyClass"])
@@ -385,7 +392,10 @@ def test_verify_backend_perfect(capsys: pytest.CaptureFixture[str], tmp_path: pa
     """
     fpath = tmp_path / "perfect_backend.py"
     fpath.write_text(
-        "from ml_switcheroo_ir import CompilerBackend\nclass MyClass(CompilerBackend):\n    def compile(self, graph):\n        pass",
+        """from ml_switcheroo_ir import CompilerBackend
+class MyClass(CompilerBackend):
+    def compile(self, graph):
+        pass""",
         encoding="utf-8",
     )
     cli_main(["verify-backend", str(fpath), "MyClass"])
@@ -418,18 +428,22 @@ def test_cli_tabulate_fallback(monkeypatch: pytest.MonkeyPatch, capsys: pytest.C
         monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
         capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
     """
-    import sys
-
-    monkeypatch.setitem(sys.modules, "tabulate", None)
     import importlib
+    import sys
 
     import ml_switcheroo_ir.cli
 
-    importlib.reload(ml_switcheroo_ir.cli)
-    from ml_switcheroo_ir.cli import tabulate
+    del capsys
+    try:
+        monkeypatch.setitem(sys.modules, "tabulate", None)
+        importlib.reload(ml_switcheroo_ir.cli)
+        from ml_switcheroo_ir.cli import tabulate
 
-    res = tabulate([["a", "b"]], ["A", "B"])
-    assert "A | B" in res
+        res = tabulate([["a", "b"]], ["A", "B"])
+        assert "A | B" in res
+    finally:
+        monkeypatch.undo()
+        importlib.reload(ml_switcheroo_ir.cli)
 
 
 def test_cli_main_invalid_command() -> None:
@@ -453,14 +467,12 @@ def test_cli_main_validate_valid(capsys: pytest.CaptureFixture[str], tmp_path: p
 
     f = tmp_path / "graph.json"
     f.write_text('{"nodes": {}}')
-    with pytest.raises(SystemExit) as e:
-        cli_main(["validate", str(f)])
-    assert e.value.code == 0
+    assert cli_main(["validate", str(f)]) == 0
     assert "Graph is valid." in capsys.readouterr().out
 
 
 def test_cli_main_validate_invalid(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
-    """Verify CLI validate subcommand exits with code 1 on an invalid operator node.
+    """Verify CLI validate subcommand returns exit code 1 on an invalid operator node.
 
     Args:
         capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
@@ -470,28 +482,26 @@ def test_cli_main_validate_invalid(capsys: pytest.CaptureFixture[str], tmp_path:
 
     f = tmp_path / "graph.json"
     f.write_text('{"nodes": {"1": {"id": "1", "op_type": "InvalidOp"}}}')
-    with pytest.raises(SystemExit) as e:
-        cli_main(["validate", str(f)])
-    assert e.value.code == 1
+    assert cli_main(["validate", str(f)]) == 1
     assert "ERROR" in capsys.readouterr().out
 
 
 def test_cli_main_validate_custom_ops(capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path) -> None:
-    """Verify CLI validate subcommand accepts user-provided --custom-ops schema JSON.
+    """Verify CLI validate subcommand accepts user-provided --custom-ops schema JSON and .gz files.
 
     Args:
         capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
         tmp_path (pathlib.Path): Pytest temporary directory fixture.
     """
+    from ml_switcheroo_ir import LogicalGraph, LogicalNode
     from ml_switcheroo_ir.cli import main as cli_main
 
-    f = tmp_path / "graph.json"
-    f.write_text('{"nodes": {"1": {"id": "1", "op_type": "MyOp", "domain": "custom"}}}')
+    f = tmp_path / "graph.json.gz"
+    LogicalGraph(nodes={"1": LogicalNode(id="1", op_type="MyOp", domain="custom")}).to_file(f)
     c = tmp_path / "custom.json"
     c.write_text('{"MyOp": {"name": "MyOp", "domain": "custom", "attributes": {}}}')
-    with pytest.raises(SystemExit) as e:
-        cli_main(["validate", str(f), "--custom-ops", str(c)])
-    assert e.value.code == 0
+    assert cli_main(["validate", str(f), "--custom-ops", str(c)]) == 0
+    assert "Graph is valid." in capsys.readouterr().out
 
 
 def test_cli_main_list_ops(capsys: pytest.CaptureFixture[str]) -> None:
@@ -502,7 +512,7 @@ def test_cli_main_list_ops(capsys: pytest.CaptureFixture[str]) -> None:
     """
     from ml_switcheroo_ir.cli import main as cli_main
 
-    cli_main(["list-ops", "--domain", "ai.onnx", "--search", "Abs"])
+    assert cli_main(["list-ops", "--domain", "ai.onnx", "--search", "Abs"]) == 0
     out = capsys.readouterr().out
     assert "Abs" in out
 
@@ -515,25 +525,22 @@ def test_cli_main_list_ops_no_filters(capsys: pytest.CaptureFixture[str]) -> Non
     """
     from ml_switcheroo_ir.cli import main as cli_main
 
-    cli_main(["list-ops"])
+    assert cli_main(["list-ops"]) == 0
     out = capsys.readouterr().out
     assert "Abs" in out
     assert "Add" in out
 
 
 def test_cli_compliance_not_found(capsys: pytest.CaptureFixture[str]) -> None:
-    """Verify CLI compliance subcommand exits with code 1 when target path does not exist.
+    """Verify CLI compliance subcommand returns exit code 1 when target path does not exist.
 
     Args:
         capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
     """
-    import pytest
-
     from ml_switcheroo_ir.cli import main as cli_main
 
-    with pytest.raises(SystemExit) as e:
-        cli_main(["compliance", "nonexistent_path"])
-    assert e.value.code == 1
+    assert cli_main(["compliance", "nonexistent_path"]) == 1
+    assert "Error:" in capsys.readouterr().out
 
 
 def test_cli_compliance_file(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -562,7 +569,13 @@ def test_cli_compliance_register_framework(tmp_path: pathlib.Path, capsys: pytes
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_fw.py"
-    f.write_text("@register_framework('my_fw')\nclass MyAdapter:\n    def definitions(self):\n        return {'Add': StandardMap()}\n")
+    f.write_text(
+        """@register_framework('my_fw')
+class MyAdapter:
+    def definitions(self):
+        return {'Add': StandardMap()}
+"""
+    )
     cli_main(["compliance", str(f)])
     captured = capsys.readouterr()
     assert "Compliance Report" in captured.out
@@ -578,7 +591,14 @@ def test_cli_compliance_backend_frontend(tmp_path: pathlib.Path, capsys: pytest.
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "test_be.py"
-    f.write_text("class MyBackend(CompilerBackend):\n    def compile(self, graph):\n        pass\nclass MyFrontend(GraphFrontend):\n    def parse_to_graph(self, code):\n        pass")
+    f.write_text(
+        """class MyBackend(CompilerBackend):
+    def compile(self, graph):
+        pass
+class MyFrontend(GraphFrontend):
+    def parse_to_graph(self, code):
+        pass"""
+    )
     cli_main(["compliance", str(f)])
     captured = capsys.readouterr()
     assert "Compliance Report" in captured.out
@@ -645,16 +665,8 @@ def test_cli_main_validate_warnings_only(capsys: pytest.CaptureFixture[str], tmp
     from ml_switcheroo_ir.cli import main as cli_main
 
     f = tmp_path / "graph.json"
-    # We need a node that generates a warning.
-    # In validator, if node.kind is in registry but some attribute is missing and not strict, is it an error or warning?
-    # Actually, missing required attribute is ERROR.
-    # Unknown attribute is WARNING.
     f.write_text('{"nodes": {"1": {"id": "1", "op_type": "Add", "attributes": {"unknown_attr": "val"}}}}')
-    import pytest
-
-    with pytest.raises(SystemExit) as e:
-        cli_main(["validate", str(f)])
-    assert e.value.code == 0
+    assert cli_main(["validate", str(f)]) == 0
     assert "WARNING" in capsys.readouterr().out
 
 

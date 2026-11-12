@@ -694,3 +694,407 @@ def test_cse_control_flow_subgraphs_and_multi_output_consumers() -> None:
     )
     with pytest.raises(ValueError, match="Invalid Transpose permutation"):
         propagate_shapes_and_constants(bad_trans_g)
+
+
+def test_constant_folding_and_downstream_shape_inference() -> None:
+    """Verify Shape, Add, Sub, Mul, Div, Neg, Cast, Concat, and Slice constant folding and downstream consumption."""
+    from ml_switcheroo_ir import DType, TensorSpec
+    from ml_switcheroo_ir.shapes import infer_op_output_shape
+
+    assert infer_op_output_shape("UnknownMysteryOp", [(2, 3)]) is None
+
+    graph = LogicalGraph(
+        name="ConstFoldGraph",
+        nodes={
+            "x": LogicalNode(id="x", op_type="Input", shape_metadata=(2, 6)),
+            "sh": LogicalNode(id="sh", op_type="Shape", inputs=["x"], outputs=["sh_out"]),
+            "c_one": LogicalNode(id="c_one", op_type="Constant", attributes={"value": [1, 0]}),
+            "add_sh": LogicalNode(id="add_sh", op_type="Add", inputs=["sh_out", "c_one"]),
+            "sub_c": LogicalNode(id="sub_c", op_type="Sub", inputs=["add_sh", "c_one"]),
+            "mul_c": LogicalNode(id="mul_c", op_type="Mul", inputs=["sub_c", "init_scale"]),
+            "div_c": LogicalNode(id="div_c", op_type="Div", inputs=["mul_c", "init_scale"]),
+            "div_zero": LogicalNode(id="div_zero", op_type="Div", inputs=["div_c", "init_zero"]),
+            "div_float": LogicalNode(id="div_float", op_type="arith.divf", inputs=["init_f", "init_f2"]),
+            "neg_c": LogicalNode(id="neg_c", op_type="Neg", inputs=["c_one"]),
+            "cast_i": LogicalNode(id="cast_i", op_type="Cast", inputs=["init_f"], attributes={"to": 7}),
+            "cast_b": LogicalNode(id="cast_b", op_type="Cast", inputs=["c_one"], attributes={"to": DType.bool}),
+            "cast_f": LogicalNode(id="cast_f", op_type="Cast", inputs=["c_one"], attributes={"dtype": "float32"}),
+            "cast_dt": LogicalNode(id="cast_dt", op_type="Cast", inputs=["c_one"], dtype=DType.float64),
+            "cast_unk": LogicalNode(id="cast_unk", op_type="Cast", inputs=["c_one"], attributes={"to": "not_a_dtype"}),
+            "cat_2d": LogicalNode(
+                id="cat_2d",
+                op_type="Concat",
+                inputs=["init_2d_a", "init_2d_b"],
+                attributes={"axis": 1},
+            ),
+            "slice_2d": LogicalNode(
+                id="slice_2d",
+                op_type="Slice",
+                inputs=["cat_2d", "init_starts", "init_ends", "init_axes", "init_steps"],
+            ),
+            "reshape_from_folded": LogicalNode(
+                id="reshape_from_folded",
+                op_type="Reshape",
+                inputs=["x", "init_target_shape"],
+            ),
+            "unsq": LogicalNode(id="unsq", op_type="Unsqueeze", inputs=["reshape_from_folded", "init_ax0"]),
+            "sq": LogicalNode(id="sq", op_type="Squeeze", inputs=["unsq", "init_ax0"]),
+            "split_c": LogicalNode(
+                id="split_c",
+                op_type="Split",
+                inputs=["sq", "init_splits"],
+                outputs=["sp0", "sp1"],
+                attributes={"axis": 0},
+            ),
+            "gemm_sp": LogicalNode(id="gemm_sp", op_type="Gemm", inputs=["sp0", "sp1"], attributes={"transB": 1}),
+        },
+        inputs=["x", "ext_spec"],
+        input_specs={"ext_spec": TensorSpec(shape=(3, 4), dtype=DType.float32)},
+        initializers={
+            "init_scale": 2,
+            "init_zero": 0,
+            "init_f": [[4.0], [8.0]],
+            "init_f2": [2.0, 4.0],
+            "init_2d_a": [[1, 2], [3, 4]],
+            "init_2d_b": [[5], [6]],
+            "init_starts": [0],
+            "init_ends": [2],
+            "init_axes": [1],
+            "init_steps": [1],
+            "init_target_shape": [3, 4],
+            "init_ax0": [0],
+            "init_splits": [1, 2],
+        },
+        outputs=["gemm_sp", "slice_2d", "cast_i", "cast_b", "cast_f", "cast_dt", "neg_c", "div_float", "div_zero"],
+        attributes={"custom_tag": "preserved"},
+        loop_options={"unroll": 2},
+    )
+
+    out = propagate_shapes_and_constants(graph)
+    assert out.attributes == {"custom_tag": "preserved"}
+    assert out.loop_options == {"unroll": 2}
+    assert out.nodes["sh"].op_type == "Constant"
+    assert out.nodes["sh"].attributes["value"] == [2, 6]
+    assert out.nodes["sh"].dtype == DType.int64
+    assert out.nodes["div_c"].attributes["value"] == [2, 6]
+    assert out.nodes["div_zero"].op_type == "Div"
+    assert out.nodes["div_float"].attributes["value"] == [[2.0, 1.0], [4.0, 2.0]]
+    assert out.nodes["neg_c"].attributes["value"] == [-1, 0]
+    assert out.nodes["cast_i"].attributes["value"] == [[4], [8]]
+    assert out.nodes["cast_b"].attributes["value"] == [True, False]
+    assert out.nodes["cast_f"].attributes["value"] == [1.0, 0.0]
+    assert out.nodes["cast_dt"].dtype == DType.float64
+    assert out.nodes["cast_unk"].op_type == "Cast"
+    assert out.nodes["cat_2d"].attributes["value"] == [[1, 2, 5], [3, 4, 6]]
+    assert out.nodes["slice_2d"].attributes["value"] == [[1, 2], [3, 4]]
+    assert out.nodes["reshape_from_folded"].shape_metadata == (3, 4)
+    assert out.nodes["unsq"].shape_metadata == (1, 3, 4)
+    assert out.nodes["sq"].shape_metadata == (3, 4)
+    assert out.nodes["gemm_sp"].shape_metadata == (1, 2)
+
+
+def test_constant_folding_edge_branches_and_subgraph_dce_cse() -> None:
+    """Cover constant folding edge cases, commutative/metadata CSE, and subgraph capture DCE/CSE."""
+    from ml_switcheroo_ir import DType, TensorSpec
+    from ml_switcheroo_ir.transforms import (
+        _concat_const_along_axis,
+        _infer_const_dtype,
+        _infer_const_value_shape,
+        _is_const_tensor_value,
+        _normalize_const_lists,
+        _slice_const_single_axis,
+    )
+
+    assert _is_const_tensor_value([[1, 2], [3, 4]])
+    assert not _is_const_tensor_value("not_numeric")
+    assert _normalize_const_lists(["bad"]) is None
+    assert _normalize_const_lists([[1, 2], [3]]) is None
+    assert _infer_const_value_shape(TensorSpec(shape=("B", 4), dtype=DType.float32)) is None
+    assert _infer_const_value_shape(TensorSpec(shape=(2, 4), dtype=DType.float32)) == (2, 4)
+    assert _infer_const_value_shape([]) == (0,)
+    assert _infer_const_dtype([]) == DType.float32
+    assert _concat_const_along_axis([1, 2], 0) is None
+    assert _concat_const_along_axis([[[1]], [[2], [3]]], 1) is None
+    assert _slice_const_single_axis([1, 2], 0, 0, 1, 0) is None
+    assert _slice_const_single_axis([[1, 2]], 1, 0, 1, 0) is None
+    assert _slice_const_single_axis([1, 2], 1, 0, 1, 1) is None
+    assert _infer_const_value_shape("not_a_tensor") is None
+    assert _infer_const_dtype(True) == DType.bool
+    assert _infer_const_dtype(1, hint=DType.int32) == DType.int32
+
+    from ml_switcheroo_ir.transforms import (
+        _broadcast_const_to_shape,
+        _collect_subgraph_bound_names,
+        _enrich_slice_attrs,
+        _fold_binary_arith_op,
+        _fold_concat_const_op,
+        _fold_slice_const_op,
+        _fold_unary_or_cast_op,
+        _resolve_cast_target_dtype,
+        _resolve_constant_value,
+        _zip_binary_const,
+    )
+    from ml_switcheroo_ir.types import AttributeValue
+
+    assert _resolve_cast_target_dtype(LogicalNode(id="c_bool_to", op_type="Cast", attributes={"to": True})) is None
+    sl_attrs: dict[str, AttributeValue] = {}
+    _enrich_slice_attrs(
+        LogicalNode(id="sl_sc", op_type="Slice", inputs=["x", "s_scalar"]),
+        sl_attrs,
+        {},
+        {"s_scalar": 0},
+    )
+    assert sl_attrs == {}
+
+    assert _broadcast_const_to_shape(5, ()) == 5
+    assert (
+        _resolve_constant_value(
+            "named_c",
+            {"c_node": LogicalNode(id="c_node", op_type="Constant", outputs=["named_c"], attributes={"value": 3})},
+        )
+        == 3
+    )
+    assert (
+        _resolve_constant_value(
+            "nv",
+            {"nv": LogicalNode(id="nv", op_type="Constant", attributes={})},
+        )
+        is None
+    )
+    bound_with_specs = _collect_subgraph_bound_names(
+        LogicalGraph(
+            name="SpecSub",
+            nodes={
+                "sp": LogicalNode(
+                    id="sp",
+                    op_type="Split",
+                    output_specs=[TensorSpec(shape=(2,), dtype=DType.float32)],
+                )
+            },
+        )
+    )
+    assert "sp:0" in bound_with_specs
+    assert _fold_binary_arith_op("Add", LogicalNode(id="b_unk", op_type="Add", inputs=["x", "y"]), (2,), {}, {}) is None
+
+    # Surviving multi-output port edge with source_idx > 0 in CSE
+    surv_port_g = LogicalGraph(
+        name="SurvPort",
+        nodes={
+            "x": LogicalNode(id="x", op_type="Input"),
+            "sp": LogicalNode(
+                id="sp",
+                op_type="Split",
+                inputs=["x"],
+                output_specs=[TensorSpec(shape=(2,), dtype=DType.float32), TensorSpec(shape=(2,), dtype=DType.float32)],
+            ),
+            "c": LogicalNode(id="c", op_type="Relu", inputs=["sp:1"]),
+        },
+        inputs=["x"],
+        outputs=["c"],
+    )
+    surv_cse = eliminate_common_subexpressions(surv_port_g)
+    assert any(e.source_idx == 1 for e in surv_cse.edges)
+
+    assert _zip_binary_const([1], 2, lambda a, b: a) == [1]
+    assert _fold_unary_or_cast_op(LogicalNode(id="empty_neg", op_type="Neg"), {}, {}) is None
+    assert _fold_unary_or_cast_op(LogicalNode(id="unk_neg", op_type="Neg", inputs=["missing"]), {}, {}) is None
+    assert _fold_binary_arith_op("Add", LogicalNode(id="b1", op_type="Add", inputs=["x"]), (2,), {}, {}) is None
+    assert _fold_concat_const_op(LogicalNode(id="cc1", op_type="Concat", inputs=["missing"]), {}, {}, {}) is None
+    assert _fold_concat_const_op(LogicalNode(id="cc2", op_type="Concat", inputs=["sc"]), {}, {}, {"sc": 5}) is None
+    assert (
+        _fold_concat_const_op(
+            LogicalNode(id="cc3", op_type="Concat", inputs=["a", "b"]),
+            {"axis": 2},
+            {},
+            {"a": [[[1]]], "b": [[[2], [3]]]},
+        )
+        is None
+    )
+    assert _fold_slice_const_op(LogicalNode(id="sl1", op_type="Slice", inputs=["missing"]), {}, {}, {}) is None
+    assert (
+        _fold_slice_const_op(
+            LogicalNode(id="sl2", op_type="Slice", inputs=["a"]),
+            {"starts": "bad", "ends": [1]},
+            {},
+            {"a": [1, 2]},
+        )
+        is None
+    )
+    assert (
+        _fold_slice_const_op(
+            LogicalNode(id="sl3", op_type="Slice", inputs=["a"]),
+            {"starts": [True], "ends": [1]},
+            {},
+            {"a": [1, 2]},
+        )
+        is None
+    )
+    assert (
+        _fold_slice_const_op(
+            LogicalNode(id="sl4", op_type="Slice", inputs=["a"]),
+            {"starts": [0], "ends": [1], "steps": [0]},
+            {},
+            {"a": [1, 2]},
+        )
+        is None
+    )
+
+
+def test_symbolic_propagation_and_subgraph_dce_cse() -> None:
+    """Verify Reshape new_shape, symbolic Shape skip, commutative CSE, and closure-capture DCE."""
+    from ml_switcheroo_ir import DType, LogicalEdge, PartitionSpec, TensorSpec
+    from ml_switcheroo_ir.transforms import (
+        _is_ssa_live,
+        _resolve_input_shape,
+        _rewrite_subgraph_captures,
+    )
+
+    # Reshape with new_shape attribute, Shape on symbolic input, Input resolved from input_specs, and nested propagate
+    sym_fold_g = LogicalGraph(
+        name="SymAndSpecsProp",
+        nodes={
+            "x_unshaped": LogicalNode(id="x_unshaped", op_type="Input"),
+            "sym_in": LogicalNode(id="sym_in", op_type="Input", shape_metadata=("B", 4)),
+            "sym_sh": LogicalNode(id="sym_sh", op_type="Shape", inputs=["sym_in"]),
+            "r_new": LogicalNode(
+                id="r_new",
+                op_type="Reshape",
+                inputs=["x_unshaped"],
+                attributes={"new_shape": [2, 3]},
+                subgraphs={
+                    "sub": LogicalGraph(
+                        name="SubProp",
+                        nodes={"s": LogicalNode(id="s", op_type="Constant", attributes={"value": [1, 2]})},
+                        outputs=["s"],
+                    ),
+                    "meta": "str",
+                },
+            ),
+            "s_attr": LogicalNode(
+                id="s_attr",
+                op_type="Slice",
+                inputs=["x_unshaped", "non_const_inp", "non_const_inp"],
+                attributes={"starts": [0], "ends": [1]},
+            ),
+            "non_const_inp": LogicalNode(id="non_const_inp", op_type="Input", shape_metadata=(1,)),
+            "r_unshaped_attr": LogicalNode(id="r_unshaped_attr", op_type="Reshape", inputs=["x_unshaped"]),
+            "c_preset_sh": LogicalNode(
+                id="c_preset_sh",
+                op_type="Constant",
+                attributes={"value": [1, 2]},
+                shape_metadata=(2,),
+            ),
+            "sq_nonconst": LogicalNode(id="sq_nonconst", op_type="Squeeze", inputs=["x_unshaped", "non_const_inp"]),
+        },
+        inputs=["x_unshaped", "sym_in", "non_const_inp"],
+        input_specs={"x_unshaped": TensorSpec(shape=(6,), dtype=DType.float32)},
+        outputs=["sym_sh", "r_new", "s_attr", "r_unshaped_attr", "c_preset_sh", "sq_nonconst"],
+    )
+    prop_sym = propagate_shapes_and_constants(sym_fold_g)
+    assert prop_sym.nodes["x_unshaped"].shape_metadata == (6,)
+    assert prop_sym.nodes["r_new"].shape_metadata == (2, 3)
+    assert prop_sym.nodes["sym_sh"].op_type == "Shape"
+
+    # Subgraph shadow bound alias in _rewrite_subgraph_captures and _is_ssa_live multi-output producer
+    shadow_sub = LogicalGraph(name="Shadow", nodes={}, inputs=["shadow_x"], outputs=["shadow_x"])
+    assert _rewrite_subgraph_captures(shadow_sub, {"shadow_x": "canon_x"}).outputs == ["shadow_x"]
+    prod_g = LogicalGraph(
+        name="ProdLive",
+        nodes={"p": LogicalNode(id="p", op_type="Split", outputs=["p0", "p1"])},
+        outputs=["p0"],
+    )
+    assert _is_ssa_live("p1", {"p"}, prod_g)
+
+    # Resolve input shape via TensorSpec input_specs, node:idx without output_specs, and single-output named port
+    n_unnamed_multi = LogicalNode(id="um", op_type="Split", shape_metadata=(4, 4))
+    n_single_named = LogicalNode(id="sn", op_type="Relu", outputs=["sn_out"], shape_metadata=(2, 8))
+    n_unshaped = LogicalNode(id="unsh", op_type="Relu")
+    node_map = {"um": n_unnamed_multi, "sn": n_single_named, "unsh": n_unshaped}
+    assert _resolve_input_shape("um:0", node_map) == (4, 4)
+    assert _resolve_input_shape("sn_out", node_map) == (2, 8)
+    assert _resolve_input_shape("unsh", node_map) is None
+    assert _resolve_input_shape("sp_in", {}, input_specs={"sp_in": TensorSpec(shape=(5,), dtype=DType.float32)}) == (5,)
+
+    # Commutative CSE, sharding/version separation, multi-output unnamed port CSE, and nested subgraph captures
+    inner_body = LogicalGraph(
+        name="SubBody",
+        nodes={
+            "sub_use": LogicalNode(id="sub_use", op_type="Relu", inputs=["dup_b_out"]),
+            "sub_dead": LogicalNode(id="sub_dead", op_type="Neg", inputs=["unused_outer"]),
+        },
+        outputs=["sub_use"],
+    )
+    outer = LogicalGraph(
+        name="OuterCseDce",
+        nodes={
+            "a": LogicalNode(id="a", op_type="Input"),
+            "b": LogicalNode(id="b", op_type="Input"),
+            "unused_outer": LogicalNode(id="unused_outer", op_type="Relu", inputs=["a"]),
+            "dup_a": LogicalNode(id="dup_a", op_type="Add", inputs=["a", "b"], outputs=["dup_a_out"]),
+            "dup_b": LogicalNode(id="dup_b", op_type="Add", inputs=["b", "a"], outputs=["dup_b_out"]),
+            "sharded_diff": LogicalNode(
+                id="sharded_diff",
+                op_type="Add",
+                inputs=["a", "b"],
+                sharding=PartitionSpec(axes=("tp",)),
+            ),
+            "mp1": LogicalNode(
+                id="mp1",
+                op_type="Split",
+                inputs=["a"],
+                output_specs=[TensorSpec(shape=(2,), dtype=DType.float32), TensorSpec(shape=(2,), dtype=DType.float32)],
+            ),
+            "mp2": LogicalNode(
+                id="mp2",
+                op_type="Split",
+                inputs=["a"],
+                output_specs=[TensorSpec(shape=(2,), dtype=DType.float32), TensorSpec(shape=(2,), dtype=DType.float32)],
+            ),
+            "mp_cons": LogicalNode(id="mp_cons", op_type="Relu", inputs=[]),
+            "loop_op": LogicalNode(
+                id="loop_op",
+                op_type="Loop",
+                inputs=["b"],
+                subgraphs={"body": inner_body, "tag": "keep"},
+            ),
+        },
+        edges=[
+            LogicalEdge(source="a", target="dup_a", target_idx=0),
+            LogicalEdge(source="b", target="dup_a", target_idx=1),
+            LogicalEdge(source="b", target="dup_b", target_idx=0),
+            LogicalEdge(source="a", target="dup_b", target_idx=1),
+            LogicalEdge(source="a", target="sharded_diff", target_idx=0),
+            LogicalEdge(source="b", target="sharded_diff", target_idx=1),
+            LogicalEdge(source="a", target="mp1", target_idx=0),
+            LogicalEdge(source="a", target="mp2", target_idx=0),
+            LogicalEdge(source="mp2", target="mp_cons", source_idx=1, target_idx=0, value_name="mp2:1"),
+            LogicalEdge(source="b", target="loop_op", target_idx=0),
+        ],
+        initializers={"used_init": [1.0], "dead_init": [9.0]},
+        inputs=["a", "b"],
+        outputs=["loop_op", "sharded_diff", "mp_cons", "used_init"],
+        attributes={"outer_attr": 42},
+        loop_options={"max_trip": 8},
+    )
+
+    cse_res = eliminate_common_subexpressions(outer)
+    assert "dup_b" not in cse_res.nodes
+    assert "sharded_diff" in cse_res.nodes
+    assert "mp2" not in cse_res.nodes
+    assert cse_res.nodes["mp_cons"].inputs == ["mp1:1"]
+    rewritten_sub = cse_res.nodes["loop_op"].subgraphs["body"]
+    assert isinstance(rewritten_sub, LogicalGraph)
+    assert rewritten_sub.nodes["sub_use"].inputs == ["dup_a_out"]
+
+    dce_res = eliminate_dead_nodes(cse_res)
+    # dup_a is ONLY referenced inside loop_op.subgraphs['body'] and MUST stay alive!
+    assert "dup_a" in dce_res.nodes
+    # unused_outer was only referenced by dead sub_dead inside inner_body, so BOTH are pruned!
+    assert "unused_outer" not in dce_res.nodes
+    cleaned_sub = dce_res.nodes["loop_op"].subgraphs["body"]
+    assert isinstance(cleaned_sub, LogicalGraph)
+    assert "sub_dead" not in cleaned_sub.nodes
+    assert "used_init" in dce_res.initializers
+    assert "dead_init" not in dce_res.initializers
+    assert dce_res.attributes == {"outer_attr": 42}
+    assert dce_res.loop_options == {"max_trip": 8}

@@ -1,12 +1,16 @@
-"""Custom operator schemas for ml_switcheroo_ir."""
+"""Custom, collective, quantization, and state operator schemas for ml_switcheroo_ir."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 from ml_switcheroo_ir.schema.base import (
     REGISTRY_LOCK,
+    AttributeType,
+    OpAttribute,
+    SchemaRegistry,
 )
 from ml_switcheroo_ir.schema.base import (
     CustomAttributeSchema as CustomAttributeSchema,
@@ -26,34 +30,37 @@ from ml_switcheroo_ir.schema.base import (
 
 
 class Registry:
-    """A dynamic registry of operator schemas."""
+    """Dynamic operator schema registry supporting custom JSON operator definitions.
 
-    def __init__(self, base_registry: dict[str, OpSchema] | None = None) -> None:
+    Attributes:
+        schemas (dict[str, OpSchema]): Registered canonical operator schemas.
+    """
+
+    schemas: dict[str, OpSchema]
+
+    def __init__(self, base_registry: Mapping[str, OpSchema] | None = None) -> None:
         """Initialize the registry.
 
         Args:
-            base_registry (Dict[str, OpSchema], optional): A base registry to copy from.
+            base_registry (Mapping[str, OpSchema] | None): Optional base registry to copy from.
         """
-        self.schemas: dict[str, OpSchema] = {}
+        self.schemas = {}
         if base_registry is not None:
             self.schemas.update(base_registry)
 
-    def register(self, schema: CustomOpSchema | OpSchema) -> None:
-        """Register a custom operator schema or OpSchema.
+    def register(self, schema: OpSchema) -> None:
+        """Register an operator schema under its canonical name.
 
         Args:
-            schema (Union[CustomOpSchema, OpSchema]): The operator schema to register.
+            schema (OpSchema): The operator schema to register.
         """
-        if isinstance(schema, CustomOpSchema):
-            self.register_custom_op(schema)
-        else:
-            self.schemas[schema.name] = schema
+        self.schemas[schema.name] = schema.to_op_schema()
 
-    def register_custom_op(self, schema: CustomOpSchema) -> None:
+    def register_custom_op(self, schema: OpSchema) -> None:
         """Register a custom operator schema.
 
         Args:
-            schema (CustomOpSchema): The custom schema to add.
+            schema (OpSchema): The custom operator schema to add.
         """
         self.schemas[schema.name] = schema.to_op_schema()
 
@@ -61,7 +68,7 @@ class Registry:
         """Load and register custom operators from a JSON file.
 
         Args:
-            file_path (str): The path to the JSON file.
+            file_path (str): Path to the JSON file containing an ``'ops'`` list.
         """
         with open(file_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -71,628 +78,401 @@ class Registry:
                 parse_op_schema_entry(
                     op_data,
                     domain_default="ai.custom",
-                    attr_type_default="Any",
+                    attr_type_default=AttributeType.ANY,
                 )
             )
 
 
-RMSNORM_SCHEMA = CustomOpSchema(
+RMSNORM_SCHEMA = OpSchema(
     name="RMSNorm",
     domain="ml.switcheroo.custom",
     inputs=["X", "weight"],
     outputs=["Y"],
     attributes=[
-        CustomAttributeSchema(
-            name="eps",
-            type="float",
-            required=False,
-            default=1e-6,
-        )
+        OpAttribute(name="eps", type=AttributeType.FLOAT, required=False, default=1e-6),
     ],
 )
 
-SWIGLU_SCHEMA = CustomOpSchema(
+SWIGLU_SCHEMA = OpSchema(
     name="SwiGLU",
     domain="ml.switcheroo.custom",
     inputs=["X"],
     outputs=["Y"],
     attributes=[
-        CustomAttributeSchema(
-            name="dim",
-            type="int",
-            required=False,
-            default=-1,
-        )
+        OpAttribute(name="dim", type=AttributeType.INT, required=False, default=-1),
     ],
 )
 
-ROPE_SCHEMA = CustomOpSchema(
+ROPE_SCHEMA = OpSchema(
     name="RoPE",
     domain="ml.switcheroo.custom",
     inputs=["X", "cos", "sin"],
     outputs=["Y"],
     attributes=[
-        CustomAttributeSchema(
-            name="dim",
-            type="int",
-            required=False,
-            default=-1,
-        )
+        OpAttribute(name="dim", type=AttributeType.INT, required=False, default=-1),
     ],
 )
 
-FLASH_ATTENTION_SCHEMA = CustomOpSchema(
+FLASH_ATTENTION_SCHEMA = OpSchema(
     name="FlashAttention",
     domain="ml.switcheroo.custom",
     inputs=["Q", "K", "V"],
     outputs=["Y"],
     attributes=[
-        CustomAttributeSchema(
-            name="causal",
-            type="bool",
-            required=False,
-            default=False,
-        ),
-        CustomAttributeSchema(
-            name="scale",
-            type="float",
-            required=False,
-            default=None,
-        ),
+        OpAttribute(name="causal", type=AttributeType.BOOL, required=False, default=False),
+        OpAttribute(name="scale", type=AttributeType.FLOAT, required=False, default=None),
     ],
+    aliases=("flash_attention",),
 )
 
-VISION_PATCH_EMBEDDING_SCHEMA = CustomOpSchema(
+VISION_PATCH_EMBEDDING_SCHEMA = OpSchema(
     name="VisionPatchEmbedding",
     domain="ml.switcheroo.custom",
     inputs=["X", "weight"],
     outputs=["Y"],
     attributes=[
-        CustomAttributeSchema(
-            name="patch_size",
-            type="List[int]",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="embed_dim",
-            type="int",
-            required=True,
-        ),
+        OpAttribute(name="patch_size", type=AttributeType.LIST_INT, required=True),
+        OpAttribute(name="embed_dim", type=AttributeType.INT, required=True),
     ],
 )
 
-SCALED_DOT_PRODUCT_ATTENTION_SCHEMA = CustomOpSchema(
+SCALED_DOT_PRODUCT_ATTENTION_SCHEMA = OpSchema(
     name="ScaledDotProductAttention",
     domain="ml.switcheroo.custom",
     inputs=["query", "key", "value", "attn_mask"],
     outputs=["output"],
     attributes=[
-        CustomAttributeSchema(
-            name="scale",
-            type="float",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="dropout_p",
-            type="float",
-            required=False,
-            default=0.0,
-        ),
-        CustomAttributeSchema(
-            name="is_causal",
-            type="bool",
-            required=False,
-            default=False,
-        ),
+        OpAttribute(name="scale", type=AttributeType.FLOAT, required=False, default=None),
+        OpAttribute(name="dropout_p", type=AttributeType.FLOAT, required=False, default=0.0),
+        OpAttribute(name="is_causal", type=AttributeType.BOOL, required=False, default=False),
     ],
+    aliases=("scaled_dot_product_attention",),
 )
 
-PAGED_ATTENTION_SCHEMA = CustomOpSchema(
+PAGED_ATTENTION_SCHEMA = OpSchema(
     name="PagedAttention",
     domain="ml.switcheroo.custom",
     inputs=["query", "key_cache", "value_cache", "block_tables", "context_lens"],
     outputs=["out"],
     attributes=[
-        CustomAttributeSchema(
-            name="num_kv_heads",
-            type="int",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="scale",
-            type="float",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="block_size",
-            type="int",
-            required=False,
-            default=16,
-        ),
-        CustomAttributeSchema(
-            name="max_context_len",
-            type="int",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="alibi_slopes",
-            type="any",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="kv_cache_dtype",
-            type="str",
-            required=False,
-            default="auto",
-        ),
+        OpAttribute(name="num_kv_heads", type=AttributeType.INT, required=False, default=None),
+        OpAttribute(name="scale", type=AttributeType.FLOAT, required=False, default=None),
+        OpAttribute(name="block_size", type=AttributeType.INT, required=False, default=16),
+        OpAttribute(name="max_context_len", type=AttributeType.INT, required=False, default=None),
+        OpAttribute(name="alibi_slopes", type=AttributeType.ANY, required=False, default=None),
+        OpAttribute(name="kv_cache_dtype", type=AttributeType.STR, required=False, default="auto"),
     ],
+    aliases=("paged_attention",),
 )
 
-RAGGED_PAGED_ATTENTION_SCHEMA = CustomOpSchema(
+RAGGED_PAGED_ATTENTION_SCHEMA = OpSchema(
     name="RaggedPagedAttention",
     domain="ml.switcheroo.custom",
     inputs=["query", "key_cache", "value_cache", "block_tables", "context_lens"],
     outputs=["out"],
     attributes=[
-        CustomAttributeSchema(
-            name="block_size",
-            type="int",
-            required=False,
-            default=16,
-        ),
+        OpAttribute(name="block_size", type=AttributeType.INT, required=False, default=16),
     ],
+    aliases=("ragged_paged_attention",),
 )
 
-CANONICAL_ATTENTION_SCHEMAS: tuple[CustomOpSchema, ...] = (
+CANONICAL_ATTENTION_SCHEMAS: tuple[OpSchema, ...] = (
     FLASH_ATTENTION_SCHEMA,
     PAGED_ATTENTION_SCHEMA,
     RAGGED_PAGED_ATTENTION_SCHEMA,
 )
 
-LAYER_NORM_SCHEMA = CustomOpSchema(
+LAYER_NORM_SCHEMA = OpSchema(
     name="LayerNorm",
     domain="ml.switcheroo.custom",
     inputs=["X", "scale", "bias"],
     outputs=["Y"],
     attributes=[
-        CustomAttributeSchema(
-            name="axis",
-            type="int",
-            required=False,
-            default=-1,
-        ),
-        CustomAttributeSchema(
-            name="epsilon",
-            type="float",
-            required=False,
-            default=1e-5,
-        ),
-        CustomAttributeSchema(
-            name="elementwise_affine",
-            type="bool",
-            required=False,
-            default=True,
-        ),
+        OpAttribute(name="axis", type=AttributeType.INT, required=False, default=-1),
+        OpAttribute(name="epsilon", type=AttributeType.FLOAT, required=False, default=1e-5),
+        OpAttribute(name="elementwise_affine", type=AttributeType.BOOL, required=False, default=True),
     ],
 )
 
-GROUP_NORM_SCHEMA = CustomOpSchema(
+GROUP_NORM_SCHEMA = OpSchema(
     name="GroupNorm",
     domain="ml.switcheroo.custom",
     inputs=["X", "scale", "bias"],
     outputs=["Y"],
     attributes=[
-        CustomAttributeSchema(
-            name="num_groups",
-            type="int",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="epsilon",
-            type="float",
-            required=False,
-            default=1e-5,
-        ),
+        OpAttribute(name="num_groups", type=AttributeType.INT, required=True),
+        OpAttribute(name="epsilon", type=AttributeType.FLOAT, required=False, default=1e-5),
     ],
 )
 
-GELU_SCHEMA = CustomOpSchema(
+GELU_SCHEMA = OpSchema(
     name="GELU",
     domain="ml.switcheroo.custom",
     inputs=["X"],
     outputs=["Y"],
     attributes=[
-        CustomAttributeSchema(
-            name="approximate",
-            type="str",
-            required=False,
-            default="none",
-        ),
+        OpAttribute(name="approximate", type=AttributeType.STR, required=False, default="none"),
     ],
 )
 
-EMBEDDING_LOOKUP_SCHEMA = CustomOpSchema(
+EMBEDDING_LOOKUP_SCHEMA = OpSchema(
     name="EmbeddingLookup",
     domain="ml.switcheroo.custom",
     inputs=["indices", "weight"],
     outputs=["output"],
     attributes=[
-        CustomAttributeSchema(
-            name="padding_idx",
-            type="int",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="scale_grad_by_freq",
-            type="bool",
-            required=False,
-            default=False,
-        ),
+        OpAttribute(name="padding_idx", type=AttributeType.INT, required=False, default=None),
+        OpAttribute(name="scale_grad_by_freq", type=AttributeType.BOOL, required=False, default=False),
     ],
 )
 
-RMSNORM_BACKWARD_SCHEMA = CustomOpSchema(
+RMSNORM_BACKWARD_SCHEMA = OpSchema(
     name="RMSNormBackward",
     domain="ml.switcheroo.custom",
     inputs=["grad_output", "X", "weight"],
     outputs=["grad_X", "grad_weight"],
     attributes=[
-        CustomAttributeSchema(
-            name="eps",
-            type="float",
-            required=False,
-            default=1e-6,
-        ),
+        OpAttribute(name="eps", type=AttributeType.FLOAT, required=False, default=1e-6),
     ],
 )
 
-COLLECTIVE_ALL_REDUCE_SCHEMA = CustomOpSchema(
+COLLECTIVE_ALL_REDUCE_SCHEMA = OpSchema(
     name="collective.all_reduce",
     domain="collective",
     inputs=["input"],
     outputs=["output"],
     attributes=[
-        CustomAttributeSchema(
-            name="reduction_op",
-            type="str",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="mesh_axis",
-            type="str",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="channel_id",
-            type="int",
-            required=False,
-            default=0,
-        ),
-        CustomAttributeSchema(
-            name="comm",
-            type="str",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="stream",
-            type="int",
-            required=False,
-            default=0,
-        ),
-        CustomAttributeSchema(
-            name="datatype",
-            type="str",
-            required=False,
-            default=None,
-        ),
+        OpAttribute(name="reduction_op", type=AttributeType.STR, required=True),
+        OpAttribute(name="mesh_axis", type=AttributeType.STR, required=True),
+        OpAttribute(name="channel_id", type=AttributeType.INT, required=False, default=0),
+        OpAttribute(name="comm", type=AttributeType.STR, required=False, default=None),
+        OpAttribute(name="stream", type=AttributeType.INT, required=False, default=0),
+        OpAttribute(name="datatype", type=AttributeType.STR, required=False, default=None),
     ],
+    aliases=("all_reduce",),
 )
 
-COLLECTIVE_ALL_GATHER_SCHEMA = CustomOpSchema(
+COLLECTIVE_ALL_GATHER_SCHEMA = OpSchema(
     name="collective.all_gather",
     domain="collective",
     inputs=["input"],
     outputs=["output"],
     attributes=[
-        CustomAttributeSchema(
-            name="gather_dimension",
-            type="int",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="mesh_axis",
-            type="str",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="comm",
-            type="str",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="stream",
-            type="int",
-            required=False,
-            default=0,
-        ),
-        CustomAttributeSchema(
-            name="datatype",
-            type="str",
-            required=False,
-            default=None,
-        ),
+        OpAttribute(name="gather_dimension", type=AttributeType.INT, required=True),
+        OpAttribute(name="mesh_axis", type=AttributeType.STR, required=True),
+        OpAttribute(name="comm", type=AttributeType.STR, required=False, default=None),
+        OpAttribute(name="stream", type=AttributeType.INT, required=False, default=0),
+        OpAttribute(name="datatype", type=AttributeType.STR, required=False, default=None),
     ],
+    aliases=("all_gather",),
 )
 
-COLLECTIVE_REDUCE_SCATTER_SCHEMA = CustomOpSchema(
+COLLECTIVE_REDUCE_SCATTER_SCHEMA = OpSchema(
     name="collective.reduce_scatter",
     domain="collective",
     inputs=["input"],
     outputs=["output"],
     attributes=[
-        CustomAttributeSchema(
-            name="scatter_dimension",
-            type="int",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="reduction_op",
-            type="str",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="mesh_axis",
-            type="str",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="comm",
-            type="str",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="stream",
-            type="int",
-            required=False,
-            default=0,
-        ),
-        CustomAttributeSchema(
-            name="datatype",
-            type="str",
-            required=False,
-            default=None,
-        ),
+        OpAttribute(name="scatter_dimension", type=AttributeType.INT, required=True),
+        OpAttribute(name="reduction_op", type=AttributeType.STR, required=True),
+        OpAttribute(name="mesh_axis", type=AttributeType.STR, required=True),
+        OpAttribute(name="comm", type=AttributeType.STR, required=False, default=None),
+        OpAttribute(name="stream", type=AttributeType.INT, required=False, default=0),
+        OpAttribute(name="datatype", type=AttributeType.STR, required=False, default=None),
     ],
+    aliases=("reduce_scatter",),
 )
 
-COLLECTIVE_ALL_TO_ALL_SCHEMA = CustomOpSchema(
+COLLECTIVE_ALL_TO_ALL_SCHEMA = OpSchema(
     name="collective.all_to_all",
     domain="collective",
     inputs=["input"],
     outputs=["output"],
     attributes=[
-        CustomAttributeSchema(
-            name="split_dimension",
-            type="int",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="concat_dimension",
-            type="int",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="mesh_axis",
-            type="str",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="comm",
-            type="str",
-            required=False,
-            default=None,
-        ),
-        CustomAttributeSchema(
-            name="stream",
-            type="int",
-            required=False,
-            default=0,
-        ),
-        CustomAttributeSchema(
-            name="datatype",
-            type="str",
-            required=False,
-            default=None,
-        ),
+        OpAttribute(name="split_dimension", type=AttributeType.INT, required=True),
+        OpAttribute(name="concat_dimension", type=AttributeType.INT, required=True),
+        OpAttribute(name="mesh_axis", type=AttributeType.STR, required=True),
+        OpAttribute(name="comm", type=AttributeType.STR, required=False, default=None),
+        OpAttribute(name="stream", type=AttributeType.INT, required=False, default=0),
+        OpAttribute(name="datatype", type=AttributeType.STR, required=False, default=None),
     ],
+    aliases=("all_to_all",),
 )
 
-COLLECTIVE_OPS_REGISTRY: dict[str, OpSchema] = {
-    COLLECTIVE_ALL_REDUCE_SCHEMA.name: COLLECTIVE_ALL_REDUCE_SCHEMA.to_op_schema(),
-    "all_reduce": COLLECTIVE_ALL_REDUCE_SCHEMA.to_op_schema(),
-    COLLECTIVE_ALL_GATHER_SCHEMA.name: COLLECTIVE_ALL_GATHER_SCHEMA.to_op_schema(),
-    "all_gather": COLLECTIVE_ALL_GATHER_SCHEMA.to_op_schema(),
-    COLLECTIVE_REDUCE_SCATTER_SCHEMA.name: COLLECTIVE_REDUCE_SCATTER_SCHEMA.to_op_schema(),
-    "reduce_scatter": COLLECTIVE_REDUCE_SCATTER_SCHEMA.to_op_schema(),
-    COLLECTIVE_ALL_TO_ALL_SCHEMA.name: COLLECTIVE_ALL_TO_ALL_SCHEMA.to_op_schema(),
-    "all_to_all": COLLECTIVE_ALL_TO_ALL_SCHEMA.to_op_schema(),
-}
+_CANONICAL_COLLECTIVE_OPS: tuple[OpSchema, ...] = (
+    COLLECTIVE_ALL_REDUCE_SCHEMA,
+    COLLECTIVE_ALL_GATHER_SCHEMA,
+    COLLECTIVE_REDUCE_SCATTER_SCHEMA,
+    COLLECTIVE_ALL_TO_ALL_SCHEMA,
+)
 
-QUANTIZATION_BLOCK_QUANTIZE_SCHEMA = CustomOpSchema(
+QUANTIZATION_BLOCK_QUANTIZE_SCHEMA = OpSchema(
     name="quantization.block_quantize",
     domain="quantization",
     inputs=["input"],
     outputs=["output", "scale"],
     attributes=[
-        CustomAttributeSchema(
-            name="block_size",
-            type="int",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="quant_dtype",
-            type="str",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="axis",
-            type="int",
-            required=False,
-            default=-1,
-        ),
+        OpAttribute(name="block_size", type=AttributeType.INT, required=True),
+        OpAttribute(name="quant_dtype", type=AttributeType.STR, required=True),
+        OpAttribute(name="axis", type=AttributeType.INT, required=False, default=-1),
     ],
+    aliases=("block_quantize",),
 )
 
-QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA = CustomOpSchema(
+QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA = OpSchema(
     name="quantization.dequantize_grouped_int4",
     domain="quantization",
     inputs=["weight", "scales", "qzeros"],
     outputs=["output"],
     attributes=[
-        CustomAttributeSchema(
-            name="group_size",
-            type="int",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="packing_format",
-            type="str",
-            required=True,
-        ),
-        CustomAttributeSchema(
-            name="symmetric",
-            type="bool",
-            required=False,
-            default=False,
-        ),
-        CustomAttributeSchema(
-            name="axis",
-            type="int",
-            required=False,
-            default=0,
-        ),
-        CustomAttributeSchema(
-            name="scales_shape",
-            type="list",
-            required=False,
-        ),
+        OpAttribute(name="group_size", type=AttributeType.INT, required=True),
+        OpAttribute(name="packing_format", type=AttributeType.STR, required=True),
+        OpAttribute(name="symmetric", type=AttributeType.BOOL, required=False, default=False),
+        OpAttribute(name="axis", type=AttributeType.INT, required=False, default=0),
+        OpAttribute(name="scales_shape", type=AttributeType.LIST_INT, required=False),
     ],
+    aliases=("dequantize_grouped_int4",),
 )
 
-QUANTIZATION_OPS_REGISTRY: dict[str, OpSchema] = {
-    QUANTIZATION_BLOCK_QUANTIZE_SCHEMA.name: QUANTIZATION_BLOCK_QUANTIZE_SCHEMA.to_op_schema(),
-    "block_quantize": QUANTIZATION_BLOCK_QUANTIZE_SCHEMA.to_op_schema(),
-    QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA.name: QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA.to_op_schema(),
-    "dequantize_grouped_int4": QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA.to_op_schema(),
-}
+_CANONICAL_QUANTIZATION_OPS: tuple[OpSchema, ...] = (
+    QUANTIZATION_BLOCK_QUANTIZE_SCHEMA,
+    QUANTIZATION_DEQUANTIZE_GROUPED_INT4_SCHEMA,
+)
 
-CUSTOM_OPS_REGISTRY: dict[str, OpSchema] = {
-    RMSNORM_SCHEMA.name: RMSNORM_SCHEMA.to_op_schema(),
-    SWIGLU_SCHEMA.name: SWIGLU_SCHEMA.to_op_schema(),
-    ROPE_SCHEMA.name: ROPE_SCHEMA.to_op_schema(),
-    FLASH_ATTENTION_SCHEMA.name: FLASH_ATTENTION_SCHEMA.to_op_schema(),
-    "flash_attention": FLASH_ATTENTION_SCHEMA.to_op_schema(),
-    PAGED_ATTENTION_SCHEMA.name: PAGED_ATTENTION_SCHEMA.to_op_schema(),
-    "paged_attention": PAGED_ATTENTION_SCHEMA.to_op_schema(),
-    "PagedAttention": PAGED_ATTENTION_SCHEMA.to_op_schema(),
-    RAGGED_PAGED_ATTENTION_SCHEMA.name: RAGGED_PAGED_ATTENTION_SCHEMA.to_op_schema(),
-    "ragged_paged_attention": RAGGED_PAGED_ATTENTION_SCHEMA.to_op_schema(),
-    "RaggedPagedAttention": RAGGED_PAGED_ATTENTION_SCHEMA.to_op_schema(),
-    VISION_PATCH_EMBEDDING_SCHEMA.name: VISION_PATCH_EMBEDDING_SCHEMA.to_op_schema(),
-    SCALED_DOT_PRODUCT_ATTENTION_SCHEMA.name: SCALED_DOT_PRODUCT_ATTENTION_SCHEMA.to_op_schema(),
-    "scaled_dot_product_attention": SCALED_DOT_PRODUCT_ATTENTION_SCHEMA.to_op_schema(),
-    LAYER_NORM_SCHEMA.name: LAYER_NORM_SCHEMA.to_op_schema(),
-    GROUP_NORM_SCHEMA.name: GROUP_NORM_SCHEMA.to_op_schema(),
-    GELU_SCHEMA.name: GELU_SCHEMA.to_op_schema(),
-    EMBEDDING_LOOKUP_SCHEMA.name: EMBEDDING_LOOKUP_SCHEMA.to_op_schema(),
-    RMSNORM_BACKWARD_SCHEMA.name: RMSNORM_BACKWARD_SCHEMA.to_op_schema(),
-    **COLLECTIVE_OPS_REGISTRY,
-    **QUANTIZATION_OPS_REGISTRY,
-}
+_CANONICAL_CUSTOM_OPS: tuple[OpSchema, ...] = (
+    RMSNORM_SCHEMA,
+    SWIGLU_SCHEMA,
+    ROPE_SCHEMA,
+    FLASH_ATTENTION_SCHEMA,
+    PAGED_ATTENTION_SCHEMA,
+    RAGGED_PAGED_ATTENTION_SCHEMA,
+    VISION_PATCH_EMBEDDING_SCHEMA,
+    SCALED_DOT_PRODUCT_ATTENTION_SCHEMA,
+    LAYER_NORM_SCHEMA,
+    GROUP_NORM_SCHEMA,
+    GELU_SCHEMA,
+    EMBEDDING_LOOKUP_SCHEMA,
+    RMSNORM_BACKWARD_SCHEMA,
+    *_CANONICAL_COLLECTIVE_OPS,
+    *_CANONICAL_QUANTIZATION_OPS,
+)
 
-STATE_OPS_REGISTRY: dict[str, OpSchema] = {}
-
-_CANONICAL_STATE_OPS: list[CustomOpSchema] = [
-    CustomOpSchema(
+_CANONICAL_STATE_OPS: tuple[OpSchema, ...] = (
+    OpSchema(
         name="ReadVariable",
         domain="ml.switcheroo.state",
         attributes=[
-            CustomAttributeSchema(
-                name="variable_name",
-                type="str",
-                required=True,
-            ),
-            CustomAttributeSchema(
-                name="dtype",
-                type="str",
-                required=False,
-            ),
+            OpAttribute(name="variable_name", type=AttributeType.STR, required=True),
+            OpAttribute(name="dtype", type=AttributeType.STR, required=False),
         ],
         inputs=[],
         outputs=["w_val"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="AssignVariable",
         domain="ml.switcheroo.state",
         attributes=[
-            CustomAttributeSchema(
-                name="variable_name",
-                type="str",
-                required=True,
-            ),
+            OpAttribute(name="variable_name", type=AttributeType.STR, required=True),
         ],
         inputs=["w_val"],
         outputs=["w_updated"],
     ),
-    CustomOpSchema(
+    OpSchema(
         name="ScatterUpdate",
         domain="ml.switcheroo.state",
         attributes=[
-            CustomAttributeSchema(
-                name="variable_name",
-                type="str",
-                required=False,
-            ),
-            CustomAttributeSchema(
-                name="axis",
-                type="int",
-                required=False,
-                default=0,
-            ),
+            OpAttribute(name="variable_name", type=AttributeType.STR, required=False),
+            OpAttribute(name="axis", type=AttributeType.INT, required=False, default=0),
         ],
         inputs=["w_val", "indices", "updates"],
         outputs=["w_scattered"],
     ),
-]
+)
+
+
+def _load_collective_schemas(json_path: Path | str | None = None) -> None:
+    """Populate ``COLLECTIVE_OPS_REGISTRY`` lazily under ``REGISTRY_LOCK``.
+
+    Args:
+        json_path (Path | str | None): Optional JSON catalog path override.
+    """
+    with REGISTRY_LOCK:
+        loaded = load_op_schema_catalog(
+            "collective_ops.json",
+            domain_default="collective",
+            json_path=json_path,
+            attr_type_default=AttributeType.ANY,
+        )
+        if loaded:
+            COLLECTIVE_OPS_REGISTRY.update(loaded)
+        elif json_path is None:
+            for schema in _CANONICAL_COLLECTIVE_OPS:
+                COLLECTIVE_OPS_REGISTRY[schema.name] = schema
+
+
+def _load_quantization_schemas(json_path: Path | str | None = None) -> None:
+    """Populate ``QUANTIZATION_OPS_REGISTRY`` lazily under ``REGISTRY_LOCK``.
+
+    Args:
+        json_path (Path | str | None): Optional JSON catalog path override.
+    """
+    with REGISTRY_LOCK:
+        loaded = load_op_schema_catalog(
+            "quantization_ops.json",
+            domain_default="quantization",
+            json_path=json_path,
+            attr_type_default=AttributeType.ANY,
+        )
+        if loaded:
+            QUANTIZATION_OPS_REGISTRY.update(loaded)
+        elif json_path is None:
+            for schema in _CANONICAL_QUANTIZATION_OPS:
+                QUANTIZATION_OPS_REGISTRY[schema.name] = schema
+
+
+def _load_custom_schemas(json_path: Path | str | None = None) -> None:
+    """Populate ``CUSTOM_OPS_REGISTRY`` lazily under ``REGISTRY_LOCK``.
+
+    Args:
+        json_path (Path | str | None): Optional JSON catalog path override.
+    """
+    with REGISTRY_LOCK:
+        loaded = load_op_schema_catalog(
+            "custom_ops.json",
+            domain_default="ml.switcheroo.custom",
+            json_path=json_path,
+            attr_type_default=AttributeType.ANY,
+        )
+        if loaded:
+            CUSTOM_OPS_REGISTRY.update(loaded)
+        elif json_path is None:
+            for schema in _CANONICAL_CUSTOM_OPS:
+                CUSTOM_OPS_REGISTRY[schema.name] = schema
 
 
 def _load_state_schemas(json_path: Path | str | None = None) -> None:
     """Load state mutation schemas from state_ops.json into STATE_OPS_REGISTRY.
 
     Args:
-        json_path (Optional[Union[Path, str]]): Explicit path to state_ops.json.
+        json_path (Path | str | None): Explicit path to state_ops.json.
     """
     with REGISTRY_LOCK:
         loaded = load_op_schema_catalog(
             "state_ops.json",
             domain_default="ml.switcheroo.state",
             json_path=json_path,
-            attr_type_default="Any",
+            attr_type_default=AttributeType.ANY,
         )
         if loaded:
             STATE_OPS_REGISTRY.update(loaded)
         elif json_path is None:
-            for s in _CANONICAL_STATE_OPS:
-                STATE_OPS_REGISTRY[s.name] = s.to_op_schema()
+            for schema in _CANONICAL_STATE_OPS:
+                STATE_OPS_REGISTRY[schema.name] = schema
 
 
-_load_state_schemas()
+COLLECTIVE_OPS_REGISTRY: SchemaRegistry = SchemaRegistry("COLLECTIVE_OPS_REGISTRY", loader=_load_collective_schemas)
+QUANTIZATION_OPS_REGISTRY: SchemaRegistry = SchemaRegistry(
+    "QUANTIZATION_OPS_REGISTRY", loader=_load_quantization_schemas
+)
+CUSTOM_OPS_REGISTRY: SchemaRegistry = SchemaRegistry("CUSTOM_OPS_REGISTRY", loader=_load_custom_schemas)
+STATE_OPS_REGISTRY: SchemaRegistry = SchemaRegistry("STATE_OPS_REGISTRY", loader=_load_state_schemas)

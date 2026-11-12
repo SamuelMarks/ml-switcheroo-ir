@@ -43,7 +43,7 @@ def test_readme_quickstart_building_graph() -> None:
         op_type="RMSNorm",
         domain="ml.switcheroo.custom",
         attributes={"eps": 1e-6},
-        inputs=["input_x"],
+        inputs=["input_x", "norm1_w"],
         outputs=["norm1_out"],
     )
 
@@ -52,7 +52,7 @@ def test_readme_quickstart_building_graph() -> None:
         op_type="Gemm",
         domain="ai.onnx",
         attributes={"alpha": 1.0, "beta": 1.0, "transB": 1},
-        inputs=["norm1_out"],
+        inputs=["norm1_out", "proj1_w"],
         outputs=["proj1_out"],
         sharding=PartitionSpec(axes=(None, "model")),
     )
@@ -61,6 +61,10 @@ def test_readme_quickstart_building_graph() -> None:
     graph = LogicalGraph(
         name="TransformerBlock",
         nodes={"input_x": input_node, "norm1": norm_node, "proj1": proj_node},
+        initializers={
+            "norm1_w": [1.0, 1.0],
+            "proj1_w": [[0.5, 0.5], [0.25, 0.25]],
+        },
         outputs=["proj1_out"],
         mesh=mesh,
     )
@@ -71,12 +75,18 @@ def test_readme_quickstart_building_graph() -> None:
 
     # 5. Access first-class edges derived from data flow
     edge_pairs = [(edge.source, edge.target) for edge in graph.edges]
-    assert edge_pairs == [("input_x", "norm1"), ("norm1_out", "proj1")]
+    assert edge_pairs == [
+        ("input_x", "norm1"),
+        ("norm1_w", "norm1"),
+        ("norm1_out", "proj1"),
+        ("proj1_w", "proj1"),
+    ]
 
-    # 6. Validate graph
+    # 6. Validate graph (side-effect-free by default: transA is not injected unless populate_defaults=True)
     validator = Validator()
     errors = validator.validate_graph(graph)
     assert not errors, f"Graph validation failed: {errors}"
+    assert "transA" not in proj_node.attributes
 
 
 def test_readme_quickstart_validating_schema() -> None:
@@ -518,11 +528,20 @@ def test_usage_sharding_propagation_and_pipeline() -> None:
         op_type="Relu",
         domain="ai.onnx",
         inputs=["stage0"],
-        attributes={"pipeline_stage": 1, "checkpoint_tag": "recompute"},
+        attributes={"pipeline_stage": 1, "activation_checkpoint": "recompute"},
     )
     pipe_graph = LogicalGraph(nodes={"stage0": s0, "stage1": s1})
     pipe_errors = validator.validate_pipeline_and_checkpointing(pipe_graph)
     assert not pipe_errors
+
+    bad_ckpt = LogicalNode(
+        id="stage_bad",
+        op_type="Relu",
+        domain="ai.onnx",
+        attributes={"pipeline_stage": 0, "activation_checkpoint": "invalid_scope"},
+    )
+    bad_errors = validator.validate_pipeline_and_checkpointing(LogicalGraph(nodes={"stage_bad": bad_ckpt}))
+    assert len(bad_errors) == 1
 
 
 def test_usage_collective_communication_estimation() -> None:
@@ -701,7 +720,9 @@ def test_usage_distributed_pipeline_and_webrtc_topologies() -> None:
         mesh_mapping=MeshMappingConfig(devices_per_stage=2),
         stage_communication=StageCommunicationConfig(protocol="p2p"),
         dependencies=[DependencyConfig(source_stage="stage0", target_stage="stage1", offset_mb=0)],
-        schedule=PipelineScheduleConfig(phases=[SchedulePhaseConfig(type="1F1B", operations=["fwd", "bwd"], count_expression="4")]),
+        schedule=PipelineScheduleConfig(
+            phases=[SchedulePhaseConfig(type="1F1B", operations=["fwd", "bwd"], count_expression="4")]
+        ),
     )
 
     sharded_node = LogicalNode(
@@ -842,3 +863,123 @@ def test_usage_parameter_and_weight_translation() -> None:
     assert isinstance(q, list) and isinstance(k, list) and isinstance(v, list)
     merged_qkv = engine.merge_qkv_weights(list(q), list(k), list(v))
     assert merged_qkv == [1, 2, 3, 4, 5, 6]
+
+    q_gqa, k_gqa, v_gqa = engine.split_qkv_weights(list(range(12)), num_heads=4, head_dim=2, num_kv_heads=1)
+    assert isinstance(q_gqa, list) and isinstance(k_gqa, list) and isinstance(v_gqa, list)
+    assert (len(q_gqa), len(k_gqa), len(v_gqa)) == (8, 2, 2)
+
+
+def test_usage_lossless_export_and_compressed_cli(tmp_path: Path) -> None:
+    """Test USAGE.md lossless export_to_python, side-effect-free Validator, and compressed CLI graph inputs.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory fixture.
+    """
+    import ast as _ast
+
+    from ml_switcheroo_ir import NoTangent, SymVar, TensorSpec, ZeroTangent, export_to_python
+    from ml_switcheroo_ir.cli import main as cli_main
+
+    inner = LogicalGraph(
+        name="InnerRegion",
+        nodes={"in0": LogicalNode(id="in0", op_type="Input")},
+        outputs=["in0"],
+    )
+    z_tan = ZeroTangent(
+        id="zt",
+        shape=(SymVar("B"), 8),
+        dtype=DType.float32,
+        inputs=["x_in"],
+    )
+    n_tan = NoTangent(id="nt", source_ast_ref="model.py:10")
+    gemm = LogicalNode(
+        id="g0",
+        op_type="Gemm",
+        domain="ai.onnx",
+        inputs=["x_in", "w_in"],
+        attributes={"transB": 1},
+        subgraphs={"bwd": inner},
+    )
+    graph = LogicalGraph(
+        name="DocLosslessGraph",
+        nodes={"x_in": LogicalNode(id="x_in", op_type="Input"), "zt": z_tan, "nt": n_tan, "g0": gemm},
+        initializers={"w_in": [[1.0, 2.0], [3.0, 4.0]]},
+        outputs=["g0", "zt"],
+        attributes={"stage": "fwd_bwd", "raw_tag": b"raw", "spec": TensorSpec(shape=(4, 8), dtype=DType.float32)},
+        loop_options={"parallel": True},
+    )
+
+    # Side-effect-free validation by default, explicit populate_defaults=True opt-in
+    v = Validator()
+    assert v.validate_graph(graph) == []
+    assert "transA" not in gemm.attributes
+    v.validate_graph(graph, populate_defaults=True)
+    assert gemm.attributes["transA"] == 0
+
+    # Lossless standalone Python export parses cleanly as valid Python AST
+    py_src = export_to_python(graph, function_name="build_model", standalone=True)
+    _ast.parse(py_src)
+    assert "ZeroTangent(" in py_src
+    assert "NoTangent(" in py_src
+    assert "loop_options=" in py_src
+
+    # Compressed .json.gz and .json.zst CLI inputs across validate and toposort
+    gz_path = tmp_path / "doc_model.json.gz"
+    zst_path = tmp_path / "doc_model.json.zst"
+    graph.to_file(gz_path)
+    graph.to_file(zst_path)
+    assert cli_main(["validate", str(gz_path)]) == 0
+    assert cli_main(["validate", str(zst_path)]) == 0
+    assert cli_main(["toposort", str(zst_path)]) == 0
+
+
+def _github_heading_slug(heading_text: str) -> str:
+    """Compute a GitHub-flavored Markdown anchor slug from raw heading text.
+
+    Args:
+        heading_text (str): Markdown heading text after leading ``#`` markers.
+
+    Returns:
+        str: Lowercased GitHub anchor slug without leading ``#``.
+    """
+    import re
+
+    lowered = heading_text.strip().lower()
+    cleaned = re.sub(r"[^\w\s-]", "", lowered)
+    return cleaned.replace(" ", "-")
+
+
+def test_root_markdown_integrity() -> None:
+    """Verify root markdown files stay synchronized with API signatures, anchors, CLI output, and registries."""
+    import re
+
+    from ml_switcheroo_ir.compliance import get_dialect_ops
+
+    repo_root = Path(__file__).resolve().parent.parent
+    readme_text = (repo_root / "README.md").read_text(encoding="utf-8")
+    usage_text = (repo_root / "USAGE.md").read_text(encoding="utf-8")
+    arch_text = (repo_root / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    # Removed format="canonical" argument and ignored checkpoint_tag must never reappear
+    assert "to_json(format=" not in readme_text
+    assert "to_json(format=" not in usage_text
+    assert '"checkpoint_tag"' not in usage_text
+    assert "[PASS] Module loaded" not in usage_text
+    assert "[PASS] AST parsed" in usage_text
+    assert "no_save" not in arch_text
+
+    # Dialect compliance count in docs must match get_dialect_ops()
+    total_onnx_ops = len(get_dialect_ops())
+    assert f"{total_onnx_ops} total ops" in usage_text
+    assert f"{total_onnx_ops} grounded entries" in readme_text
+    assert f"{total_onnx_ops} grounded entries" in arch_text
+
+    # Every internal Table of Contents anchor in USAGE.md must resolve to a real heading
+    heading_slugs = {
+        _github_heading_slug(match.group(1))
+        for match in re.finditer(r"^#{1,6}\s+(.+)$", usage_text, flags=re.MULTILINE)
+    }
+    toc_anchors = re.findall(r"\]\(#([a-z0-9-]+)\)", usage_text)
+    assert toc_anchors
+    for anchor in toc_anchors:
+        assert anchor in heading_slugs, f"Broken anchor '#{anchor}' in USAGE.md"

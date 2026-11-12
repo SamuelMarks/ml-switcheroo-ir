@@ -32,39 +32,147 @@ __all__ = [
     "_validate_dimension_tuple",
     "describe_value_type",
     "is_dynamic_dimension",
+    "is_symbolic_dimension",
 ]
 
 JsonScalar: typing_extensions.TypeAlias = typing.Union[str, int, float, bool, None]
 
 JsonValue: typing_extensions.TypeAlias = pydantic.JsonValue
 
-if typing.TYPE_CHECKING:
-    InitializerValue: typing_extensions.TypeAlias = int | float | bool | str | bytes | list["InitializerValue"] | dict[str, "InitializerValue"]
-else:
-    InitializerValue: typing_extensions.TypeAlias = typing.Union[
+
+def _validate_initializer_value(val: InitializerValue) -> InitializerValue:
+    """Recursively validate a runtime ``InitializerValue`` tree for Pydantic fields.
+
+    Args:
+        val (InitializerValue): Candidate initializer payload.
+
+    Returns:
+        InitializerValue: Validated initializer payload.
+
+    Raises:
+        ValueError: If ``val`` or any nested element is not a valid ``InitializerValue``.
+    """
+    if isinstance(val, (int, float, bool, str, bytes)):
+        return val
+    if isinstance(val, list):
+        for item in val:
+            _validate_initializer_value(item)
+        return val
+    if isinstance(val, dict):
+        for key, item in val.items():
+            if not isinstance(key, str):
+                raise ValueError(f"Initializer dictionary key must be str, got {describe_value_type(key)}.")
+            _validate_initializer_value(item)
+        return val
+    raise ValueError(f"Unsupported InitializerValue of type {describe_value_type(val)}: {val!r}")
+
+
+class _InitializerValuePydanticAnnotation:
+    """Recursive Pydantic v2 validator and JSON Schema provider for ``InitializerValue``."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: type[InitializerValue],
+        handler: pydantic.GetCoreSchemaHandler,
+    ) -> pydantic_core.CoreSchema:
+        """Build recursive runtime validation CoreSchema for ``InitializerValue``.
+
+        Args:
+            source_type (type[InitializerValue]): Annotated alias type.
+            handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
+
+        Returns:
+            pydantic_core.CoreSchema: Validating CoreSchema instance.
+        """
+        del source_type, handler
+        return pydantic_core.core_schema.no_info_plain_validator_function(_validate_initializer_value)
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema_obj: pydantic_core.CoreSchema,
+        handler: pydantic.GetJsonSchemaHandler,
+    ) -> dict[str, JsonValue]:
+        """Generate Draft 2020-12 JSON Schema for ``InitializerValue``.
+
+        Args:
+            core_schema_obj (pydantic_core.CoreSchema): Core schema object.
+            handler (pydantic.GetJsonSchemaHandler): JSON schema handler.
+
+        Returns:
+            dict[str, JsonValue]: Constrained union JSON Schema definition.
+        """
+        del core_schema_obj, handler
+        return {
+            "anyOf": [
+                {"type": "integer"},
+                {"type": "number"},
+                {"type": "boolean"},
+                {"type": "string"},
+                {"type": "array"},
+                {"type": "object"},
+            ]
+        }
+
+
+InitializerValue: typing_extensions.TypeAlias = typing.Annotated[
+    typing.Union[
         int,
         float,
         bool,
         str,
         bytes,
-        list[typing.Union[JsonValue, bytes]],
-        dict[str, typing.Union[JsonValue, bytes]],
-    ]
+        list["InitializerValue"],
+        dict[str, "InitializerValue"],
+    ],
+    _InitializerValuePydanticAnnotation,
+]
 
 
-def is_dynamic_dimension(
+def is_symbolic_dimension(
     dim: DimensionType | JsonValue,
 ) -> typing.TypeGuard[str | SymNode | SymInt]:
-    """Check whether a single dimension value is symbolic or dynamic.
+    """Narrow a dimension entry strictly to symbolic identifier/AST types (never negative ``int``).
 
     Args:
         dim (DimensionType | JsonValue): Dimension entry to inspect.
 
     Returns:
-        typing.TypeGuard[str | SymNode | SymInt]: True if the dimension is dynamic, symbolic, negative, or non-integer.
+        typing.TypeGuard[str | SymNode | SymInt]: True iff ``dim`` is a symbolic ``str``, ``SymNode``, or ``SymInt``.
+
+    Raises:
+        TypeError: If ``dim`` is a boolean value.
     """
-    if isinstance(dim, int) and not isinstance(dim, bool):
+    if isinstance(dim, bool):
+        raise TypeError(f"Boolean value {dim!r} is not a valid tensor dimension.")
+    if isinstance(dim, str):
+        return not dim.isdigit()
+    if isinstance(dim, (SymNode, SymInt)):
+        return True
+    return False
+
+
+def is_dynamic_dimension(
+    dim: DimensionType | JsonValue,
+) -> bool:
+    """Check whether a single dimension value is dynamic, negative, or ungrounded symbolic.
+
+    Args:
+        dim (DimensionType | JsonValue): Dimension entry to inspect.
+
+    Returns:
+        bool: True if the dimension is dynamic, symbolic, negative, or non-static.
+
+    Raises:
+        TypeError: If ``dim`` is a boolean value.
+    """
+    if isinstance(dim, bool):
+        raise TypeError(f"Boolean value {dim!r} is not a valid tensor dimension.")
+    if isinstance(dim, int):
         return dim < 0
+    if isinstance(dim, str):
+        return not dim.isdigit()
     if isinstance(dim, (SymNode, SymInt)):
         return not dim.is_constant or dim.eval({}) < 0
     return True
@@ -162,13 +270,44 @@ _DTYPE_ITEMSIZE_MAP: typing.Final[Mapping[str, float]] = {
     "uint4": 0.5,
     "qint4": 0.5,
     "int2": 0.25,
-    "string": 4.0,
-    "object": 4.0,
 }
 
 
 class DType(str, Enum):
-    """Data types for tensors."""
+    """Canonical tensor element data types across ML frameworks and hardware dialects.
+
+    Attributes:
+        float32 (DType): 32-bit IEEE 754 floating-point type.
+        float16 (DType): 16-bit IEEE 754 half-precision floating-point type.
+        bfloat16 (DType): 16-bit Brain Floating-Point type.
+        float64 (DType): 64-bit IEEE 754 double-precision floating-point type.
+        int64 (DType): 64-bit signed integer type.
+        int32 (DType): 32-bit signed integer type.
+        int16 (DType): 16-bit signed integer type.
+        int8 (DType): 8-bit signed integer type.
+        uint64 (DType): 64-bit unsigned integer type.
+        uint32 (DType): 32-bit unsigned integer type.
+        uint16 (DType): 16-bit unsigned integer type.
+        uint8 (DType): 8-bit unsigned integer type.
+        bool (DType): Boolean predicate/mask type.
+        string (DType): Variable-width UTF-8 string tensor type.
+        object (DType): Variable-width opaque reference descriptor type.
+        complex64 (DType): 64-bit complex number (two float32 components).
+        complex128 (DType): 128-bit complex number (two float64 components).
+        float8_e4m3fn (DType): 8-bit floating-point E4M3 finite-only format.
+        float8_e4m3b11fnuz (DType): 8-bit floating-point E4M3 bias-11 FNUZ format.
+        float8_e5m2 (DType): 8-bit floating-point E5M2 format.
+        fp8_e4m3fn (DType): Alias for 8-bit floating-point E4M3 finite-only format.
+        fp8_e4m3fnuz (DType): 8-bit floating-point E4M3 FNUZ format.
+        fp8_e5m2 (DType): Alias for 8-bit floating-point E5M2 format.
+        fp8_e5m2fnuz (DType): 8-bit floating-point E5M2 FNUZ format.
+        int4 (DType): 4-bit signed sub-byte quantized integer type.
+        uint4 (DType): 4-bit unsigned sub-byte quantized integer type.
+        int2 (DType): 2-bit signed sub-byte quantized integer type.
+        qint8 (DType): Quantized 8-bit signed integer type.
+        quint8 (DType): Quantized 8-bit unsigned integer type.
+        qint4 (DType): Quantized 4-bit signed integer type.
+    """
 
     float32 = "float32"
     float16 = "float16"
@@ -249,16 +388,29 @@ class DType(str, Enum):
         return self in (DType.string, DType.object)
 
     @property
+    def is_fixed_width(self) -> builtins.bool:
+        """Return True if this DType has a deterministic fixed storage width in bytes.
+
+        Returns:
+            bool: True for fixed-width numeric and quantized types, False for string/object.
+        """
+        return not self.is_variable_width
+
+    @property
     def itemsize(self) -> float:
-        """Return the storage size in bytes per element for this data type.
+        """Return the fixed storage size in bytes per element for this data type.
 
         Sub-byte quantized types (e.g. int4, uint4, qint4) return fractional byte sizes
-        (e.g. 0.5 bytes for 4-bit, 0.25 bytes for 2-bit). Variable-width descriptor types
-        (string, object) return their nominal 4.0-byte reference slot size.
+        (e.g. 0.5 bytes for 4-bit, 0.25 bytes for 2-bit).
 
         Returns:
             float: Number of bytes per element.
+
+        Raises:
+            ValueError: If called on a variable-width DType (``DType.string`` or ``DType.object``).
         """
+        if self.is_variable_width:
+            raise ValueError(f"Variable-width DType {self.value!r} does not have a fixed byte itemsize.")
         return _DTYPE_ITEMSIZE_MAP[self.value]
 
 
@@ -271,29 +423,63 @@ DescribeValueTarget: typing_extensions.TypeAlias = typing.Union[
     Mapping[str, typing.Union["AttributeValue", InitializerValue, pydantic.BaseModel, "DescribeValueTarget"]],
 ]
 
+_SIMPLE_TYPE_LABELS: tuple[tuple[type, str], ...] = (
+    (bool, "bool"),
+    (int, "int"),
+    (float, "float"),
+    (str, "str"),
+    (bytes, "bytes"),
+    (DType, "DType"),
+    (SymInt, "SymInt"),
+    (SymNode, "SymNode"),
+    (tuple, "tuple"),
+    (list, "list"),
+    (dict, "dict"),
+    (set, "set"),
+)
+
 
 def describe_value_type(
     val: DescribeValueTarget,
 ) -> str:
-    """Return the unqualified Python runtime type name of a value without dunder attribute access.
+    """Return the unqualified Python runtime type name of a value without reflection or fragile splits.
 
     Args:
         val (DescribeValueTarget): Value whose runtime type name to format.
 
     Returns:
-        str: Unqualified type name (e.g. 'int', 'float', 'list', 'dict').
+        str: Unqualified type name (e.g. 'int', 'float', 'list', 'dict', 'NoneType').
     """
-    return str(type(val)).split("'")[1].rsplit(".", 1)[-1]
+    if val is None:
+        return "NoneType"
+    if isinstance(val, TensorShape):
+        return "TensorShape"
+    if isinstance(val, TensorSpec):
+        return "TensorSpec"
+    for candidate_cls, label in _SIMPLE_TYPE_LABELS:
+        if isinstance(val, candidate_cls):
+            return label
+    raw_repr = str(type(val))
+    segments = raw_repr.split("'")
+    if len(segments) >= 2 and segments[1]:
+        return segments[1].rsplit(".", 1)[-1]
+    return raw_repr.strip("<>").rsplit(".", 1)[-1]
 
 
 def _validate_dimension_tuple(
-    dims: (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType | float),
+    dims: (
+        tuple[DimensionType, ...]
+        | Sequence[DimensionType]
+        | Iterable[DimensionType]
+        | TensorShape
+        | DimensionType
+        | float
+    ),
 ) -> tuple[DimensionType, ...]:
     """Validate and normalize dimensions for TensorShape.
 
     Args:
-        dims (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType | float):
-            Input dimensions.
+        dims: Input dimensions sequence, iterable, TensorShape, or single dimension.
 
     Returns:
         tuple[DimensionType, ...]: Validated dimension tuple.
@@ -331,12 +517,16 @@ class TensorShape(pydantic.BaseModel):
 
     def __init__(
         self,
-        dims: tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType = (),
+        dims: tuple[DimensionType, ...]
+        | Sequence[DimensionType]
+        | Iterable[DimensionType]
+        | TensorShape
+        | DimensionType = (),
     ) -> None:
         """Initialize TensorShape normalizing inputs into a tuple.
 
         Args:
-            dims (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType): Dimensions.
+            dims: Input dimensions sequence, iterable, TensorShape, or single dimension.
 
         Raises:
             TypeError: If any dimension is a boolean value or invalid DimensionType.
@@ -482,7 +672,9 @@ class TensorShape(pydantic.BaseModel):
             tuple[DimensionType, ...]: Sliced tuple of dimensions.
         """
 
-    def __getitem__(self, idx: int | builtins.slice[int | None, int | None, int | None]) -> DimensionType | tuple[DimensionType, ...]:
+    def __getitem__(
+        self, idx: int | builtins.slice[int | None, int | None, int | None]
+    ) -> DimensionType | tuple[DimensionType, ...]:
         """Retrieve dimension size by index or slice.
 
         Args:
@@ -493,14 +685,11 @@ class TensorShape(pydantic.BaseModel):
         """
         return self.dims[idx]
 
-    def __eq__(
-        self,
-        other: TensorShape | Sequence[DimensionType | JsonValue] | JsonValue,
-    ) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Check equality against TensorShape, tuple, or list.
 
         Args:
-            other (TensorShape | Sequence[DimensionType | JsonValue] | JsonValue): Other shape value.
+            other (object): Other value to compare against.
 
         Returns:
             bool: True if dimensions match.
@@ -612,19 +801,37 @@ class TensorSpec(pydantic.BaseModel):
 
 
 def _validate_attribute_value(val: AttributeValue) -> AttributeValue:
-    """Return an AttributeValue instance untouched during Pydantic validation.
+    """Recursively validate an ``AttributeValue`` at runtime during Pydantic validation.
 
     Args:
         val (AttributeValue): Input attribute value.
 
     Returns:
-        AttributeValue: Validated attribute value.
+        AttributeValue: Validated attribute value preserving tuples, lists, dicts, and IR types.
+
+    Raises:
+        ValueError: If ``val`` or any nested element is not a valid ``AttributeValue``.
     """
-    return val
+    if val is None or isinstance(
+        val,
+        (int, float, str, bool, bytes, SymNode, SymInt, DType, TensorShape, TensorSpec, pydantic.BaseModel),
+    ):
+        return val
+    if isinstance(val, Mapping):
+        for key, item in val.items():
+            if not isinstance(key, str):
+                raise ValueError(f"Attribute mapping key must be str, got {describe_value_type(key)}.")
+            _validate_attribute_value(item)
+        return val
+    if isinstance(val, Sequence):
+        for item in val:
+            _validate_attribute_value(item)
+        return val
+    raise ValueError(f"Unsupported AttributeValue of type {describe_value_type(val)}: {val!r}")
 
 
 class _AttributeValuePydanticAnnotation:
-    """Custom Pydantic annotation preserving AttributeValue dictionaries, lists, tuples, and IR types without coercion."""
+    """Recursive Pydantic v2 validator and JSON Schema provider for ``AttributeValue``."""
 
     @classmethod
     def __get_pydantic_core_schema__(
@@ -632,7 +839,7 @@ class _AttributeValuePydanticAnnotation:
         source_type: type[AttributeValue],
         handler: pydantic.GetCoreSchemaHandler,
     ) -> pydantic_core.CoreSchema:
-        """Return a plain validator schema for runtime AttributeValue preservation.
+        """Return recursive runtime validator schema for ``AttributeValue``.
 
         Args:
             source_type (type[AttributeValue]): Annotated type.
@@ -650,20 +857,44 @@ class _AttributeValuePydanticAnnotation:
         core_schema_obj: pydantic_core.CoreSchema,
         handler: pydantic.GetJsonSchemaHandler,
     ) -> dict[str, JsonValue]:
-        """Return an unconstrained JSON Schema object for AttributeValue fields.
+        """Return a Draft 2020-12 union JSON Schema object for ``AttributeValue`` fields.
 
         Args:
             core_schema_obj (pydantic_core.CoreSchema): Core schema object.
             handler (pydantic.GetJsonSchemaHandler): JSON schema handler.
 
         Returns:
-            dict[str, JsonValue]: Empty JSON Schema dictionary.
+            dict[str, JsonValue]: Structured JSON Schema dictionary.
         """
         del core_schema_obj, handler
-        return {}
+        return {
+            "anyOf": [
+                {"type": "integer"},
+                {"type": "number"},
+                {"type": "string"},
+                {"type": "boolean"},
+                {"type": "null"},
+                {"type": "array"},
+                {"type": "object"},
+            ]
+        }
 
 
-if typing.TYPE_CHECKING:
-    AttributeValue: typing_extensions.TypeAlias = int | float | str | bool | bytes | None | SymNode | SymInt | DType | TensorShape | TensorSpec | Sequence["AttributeValue"] | Mapping[str, "AttributeValue"]
-else:
-    AttributeValue: typing_extensions.TypeAlias = typing.Annotated[JsonValue, _AttributeValuePydanticAnnotation]
+AttributeValue: typing_extensions.TypeAlias = typing.Annotated[
+    typing.Union[
+        int,
+        float,
+        str,
+        bool,
+        bytes,
+        None,
+        SymNode,
+        SymInt,
+        DType,
+        TensorShape,
+        TensorSpec,
+        Sequence["AttributeValue"],
+        Mapping[str, "AttributeValue"],
+    ],
+    _AttributeValuePydanticAnnotation,
+]

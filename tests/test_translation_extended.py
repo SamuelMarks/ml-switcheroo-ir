@@ -242,3 +242,75 @@ def test_concept_map_transformer_blocks() -> None:
             domain="ml.switcheroo.custom",
         )
         assert validator.validate_kind(custom_node) == []
+
+
+def test_optimizer_betas_packing_unpacking_and_gqa_2d_qkv() -> None:
+    """Test b1/b2 <-> betas many-to-1 / 1-to-many translation and GQA + 2D QKV weight split/merge."""
+    engine = ParameterTranslationEngine()
+
+    # Optax b1 + b2 -> PyTorch betas=(0.9, 0.999)
+    to_torch = engine.translate_attributes(
+        "optimizer",
+        {"learning_rate": 1e-3, "b1": 0.9, "b2": 0.999},
+        source_framework="optax",
+        target_framework="torch",
+    )
+    assert to_torch == {"lr": 1e-3, "betas": (0.9, 0.999)}
+
+    # PyTorch betas=(0.9, 0.999) -> Optax b1=0.9, b2=0.999
+    to_optax = engine.translate_attributes(
+        "optimizer",
+        {"lr": 1e-3, "betas": (0.9, 0.999)},
+        source_framework="torch",
+        target_framework="optax",
+    )
+    assert to_optax == {"learning_rate": 1e-3, "b1": 0.9, "b2": 0.999}
+
+    # Unpack fallback branches: wrong tuple length, missing target framework, duplicate target keys
+    custom_eng = ParameterTranslationEngine(
+        translations={
+            "custom_opt": {
+                "roles": {
+                    "r1": {"src": ["pair"], "tgt_same": ["same"]},
+                    "r2": {"src": ["pair"], "tgt_same": ["same"]},
+                }
+            }
+        }
+    )
+    assert engine.translate_attributes("optimizer", {"betas": (0.9,)}, "torch", "optax") == {"b1": (0.9,)}
+    with pytest.raises(ValueError, match="Ungrounded parameter"):
+        engine.translate_attributes("optimizer", {"betas": (0.9, 0.999)}, "torch", "unknown_fw")
+    with pytest.raises(ValueError, match="No parameter translations defined"):
+        engine.translate_attributes("unknown_op_xyz", {"x": 1}, "torch", "jax")
+    assert custom_eng.translate_attributes("custom_opt", {"pair": (1, 2)}, "src", "tgt_same") == {"same": (1, 2)}
+
+    # GQA 1D list & tuple QKV split (num_heads=4, num_kv_heads=1, head_dim=2 -> q=8, k=2, v=2)
+    gqa_list = list(range(12))
+    q_gqa, k_gqa, v_gqa = engine.split_qkv_weights(gqa_list, num_heads=4, head_dim=2, num_kv_heads=1)
+    assert q_gqa == list(range(8)) and k_gqa == [8, 9] and v_gqa == [10, 11]
+    assert engine.merge_qkv_weights(q_gqa, k_gqa, v_gqa) == gqa_list
+
+    gqa_tup = tuple(range(12))
+    qt, kt, vt = engine.split_qkv_weights(gqa_tup, num_heads=4, head_dim=2, num_kv_heads=1)
+    assert qt == tuple(range(8)) and kt == (8, 9) and vt == (10, 11)
+    assert engine.merge_qkv_weights(qt, kt, vt) == gqa_tup
+
+    with pytest.raises(ValueError, match="does not match expected"):
+        engine.split_qkv_weights([1, 2, 3], num_heads=2, head_dim=2)
+
+    # 2D list and 2D tuple split_dim=1 / concat_dim=1
+    qkv_2d_list = [[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]]
+    q2l, k2l, v2l = engine.split_qkv_weights(qkv_2d_list, num_heads=1, head_dim=2, split_dim=1)
+    assert q2l == [[1, 2], [7, 8]] and k2l == [[3, 4], [9, 10]] and v2l == [[5, 6], [11, 12]]
+    assert engine.merge_qkv_weights(q2l, k2l, v2l, concat_dim=1) == qkv_2d_list
+
+    qkv_2d_tup = ((1, 2, 3, 4, 5, 6), (7, 8, 9, 10, 11, 12))
+    q2t, k2t, v2t = engine.split_qkv_weights(qkv_2d_tup, num_heads=1, head_dim=2, split_dim=-1)
+    assert q2t == ((1, 2), (7, 8))
+    assert engine.merge_qkv_weights(q2t, k2t, v2t, concat_dim=-1) == qkv_2d_tup
+
+    with pytest.raises(ValueError, match="2D QKV sequence inner size"):
+        engine.split_qkv_weights([[1, 2]], num_heads=1, head_dim=2, split_dim=1)
+
+    with pytest.raises(ValueError, match="mismatched row counts"):
+        engine.merge_qkv_weights([[1, 2]], [[3, 4], [5, 6]], [[7, 8]], concat_dim=1)

@@ -112,3 +112,66 @@ def test_pipeline_topology_models_and_graph_integration() -> None:
     g_cloned = graph.clone()
     assert g_cloned.pipeline_topology is not None
     assert g_cloned.pipeline_topology.mesh_mapping.devices_per_stage == 2
+
+
+def test_distributed_and_webrtc_domain_invariants() -> None:
+    """Verify domain invariants on LogicalMesh, PartitionSpec, PipelineTopologyConfig, and WebRTCSignalingTopology."""
+    import pydantic
+    import pytest
+
+    from ml_switcheroo_ir import LogicalMesh, PartitionSpec, WebRTCPeerConfig, WebRTCSignalingTopology
+
+    with pytest.raises(pydantic.ValidationError, match="must be a sequence"):
+        PartitionSpec.model_validate({"axes": "not_a_seq"})
+
+    with pytest.raises(pydantic.ValidationError, match="non-empty mapping"):
+        LogicalMesh(shape={})
+
+    with pytest.raises(pydantic.ValidationError, match="positive integer size >= 1"):
+        LogicalMesh(shape={"data": 0})
+
+    with pytest.raises(pydantic.ValidationError, match="positive integer size >= 1"):
+        LogicalMesh(shape={"data": True})
+
+    with pytest.raises(pydantic.ValidationError, match="num_microbatches must be >= 1"):
+        PipelineTopologyConfig(
+            microbatch_splitting=MicrobatchSplittingConfig(num_microbatches=0),
+            mesh_mapping=MeshMappingConfig(devices_per_stage=1),
+            stage_communication=StageCommunicationConfig(),
+        )
+
+    with pytest.raises(pydantic.ValidationError, match="devices_per_stage must be >= 1"):
+        PipelineTopologyConfig(
+            microbatch_splitting=MicrobatchSplittingConfig(num_microbatches=2),
+            mesh_mapping=MeshMappingConfig(devices_per_stage=0),
+            stage_communication=StageCommunicationConfig(),
+        )
+
+    with pytest.raises(pydantic.ValidationError, match="non-empty strings"):
+        PipelineTopologyConfig(
+            microbatch_splitting=MicrobatchSplittingConfig(num_microbatches=2),
+            mesh_mapping=MeshMappingConfig(devices_per_stage=1),
+            stage_communication=StageCommunicationConfig(),
+            dependencies=[DependencyConfig(source_stage=" ", target_stage="s1")],
+        )
+
+    with pytest.raises(pydantic.ValidationError, match="chunk_size_bytes must be >= 1"):
+        WebRTCSignalingTopology(chunk_size_bytes=0)
+
+    with pytest.raises(pydantic.ValidationError, match="Watermarks must satisfy"):
+        WebRTCSignalingTopology(low_watermark_bytes=2000, high_watermark_bytes=1000)
+
+    with pytest.raises(pydantic.ValidationError, match="unique peer_id"):
+        WebRTCSignalingTopology(peers=[WebRTCPeerConfig(peer_id="p0"), WebRTCPeerConfig(peer_id="p0")])
+
+    with pytest.raises(pydantic.ValidationError, match="connectivity_matrix must have dimensions"):
+        WebRTCSignalingTopology(
+            peers=[WebRTCPeerConfig(peer_id="p0"), WebRTCPeerConfig(peer_id="p1")],
+            connectivity_matrix=[[1]],
+        )
+
+    with pytest.raises(pydantic.ValidationError, match="binary integers 0 or 1"):
+        WebRTCSignalingTopology(
+            peers=[WebRTCPeerConfig(peer_id="p0")],
+            connectivity_matrix=[[2]],
+        )

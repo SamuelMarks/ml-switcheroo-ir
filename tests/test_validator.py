@@ -170,7 +170,11 @@ def test_validator_graph_integration(validator: Validator) -> None:
     assert "kernel_shape" in error_attrs
     assert "inputs" in error_attrs
 
-    # Check default was populated on Gemm
+    # Side-effect-free by default: Gemm attributes are NOT mutated
+    assert "transA" not in node1.attributes
+
+    # Explicit populate_defaults=True populates defaults in place
+    validator.validate_graph(graph, populate_defaults=True)
     assert node1.attributes.get("transA") == 0
 
 
@@ -302,3 +306,141 @@ def test_validator_edge_source_idx_out_of_bounds() -> None:
         ]
         errors_direct = validator.validate_graph(graph)
     assert len([e for e in errors_direct if "out of bounds" in str(e.message)]) == 2
+
+
+def test_validator_exhaustive_attribute_types_subgraphs_cycles_and_arity() -> None:
+    """Verify every AttributeType checker, nested subgraphs, cycles, outputs, arity, and suggested_fix."""
+    import pytest
+
+    from ml_switcheroo_ir import DType, LogicalGraph, LogicalNode, TensorSpec
+    from ml_switcheroo_ir.schema.base import AttributeType, OpAttribute, OpSchema
+    from ml_switcheroo_ir.validator import GroundingValidator, ValidationError, ValidationLevel, Validator
+
+    rich_schema = OpSchema(
+        name="RichOp",
+        domain="ai.onnx",
+        inputs=["x", "y"],
+        outputs=["z"],
+        attributes={
+            "d": OpAttribute("d", AttributeType.DICT, False),
+            "lst": OpAttribute("lst", AttributeType.LIST, False),
+            "ten": OpAttribute("ten", AttributeType.TENSOR, False),
+            "gr": OpAttribute("gr", AttributeType.GRAPH, False),
+            "dt": OpAttribute("dt", AttributeType.DTYPE, False),
+        },
+    )
+    v = Validator(registry={"RichOp": rich_schema, "Add": OpSchema("Add", "ai.onnx", 14, {}, ["A", "B"], ["C"])})
+
+    from ml_switcheroo_ir.validation.schema_validator import _is_valid_graph_attr
+
+    inner_sub = LogicalGraph(name="Sub", nodes={"s0": LogicalNode(id="s0", op_type="Input")}, outputs=["s0"])
+    assert _is_valid_graph_attr(inner_sub)
+    for valid_dt in (DType.float32, 1, "float16"):
+        ok_node = LogicalNode(
+            id="ok",
+            op_type="RichOp",
+            attributes={
+                "d": {"k": 1},
+                "lst": [1, "two"],
+                "ten": TensorSpec(shape=(2,), dtype=DType.float32),
+                "gr": {"nodes": {}},
+                "dt": valid_dt,
+            },
+        )
+        assert v.validate_node(ok_node) == []
+
+    bad_attr_node = LogicalNode(
+        id="bad_attrs",
+        op_type="RichOp",
+        attributes={"d": 5, "lst": "not_list", "ten": "not_tensor", "gr": 123, "dt": "not_a_dtype"},
+    )
+    attr_errs = v.validate_attribute_types(bad_attr_node)
+    assert {e.attribute for e in attr_errs} == {"d", "lst", "ten", "gr", "dt"}
+    assert len(v.validate_attribute_types(LogicalNode(id="bad_dt2", op_type="RichOp", attributes={"dt": True}))) == 1
+
+    # Arity underflow, overflow, unresolved output, key != node.id, cycle, and nested subgraph errors
+    bad_sub = LogicalGraph(
+        name="BadSub",
+        nodes={"add_under": LogicalNode(id="add_under", op_type="Add", inputs=["outer_in"])},
+        outputs=["missing_sub_out"],
+    )
+    cyc_a = LogicalNode(id="ca", op_type="Add", inputs=["cb", "cb"], subgraphs={"body": bad_sub})
+    cyc_b = LogicalNode(id="cb", op_type="Add", inputs=["ca", "ca", "ca"])
+    cyclic_g = LogicalGraph(name="CyclicG", nodes={"ca": cyc_a, "cb": cyc_b}, inputs=["outer_in"], outputs=["bad_out"])
+
+    g_errs = v.validate_graph(cyclic_g)
+    messages = [e.message for e in g_errs]
+    assert any("expects at least 2 positional input" in m for m in messages)
+    assert any("accepts at most 2 positional input" in m for m in messages)
+    assert any("does not resolve to any node" in m for m in messages)
+    assert any("Cycle" in m or "cycle" in m for m in messages)
+
+    edge_errs = v.validate_edges(cyclic_g)
+    assert any("missing_sub_out" in e.message for e in edge_errs)
+
+    corrupted_g = LogicalGraph(name="CorruptedKeyG", nodes={"ok_n": LogicalNode(id="ok_n", op_type="Input")})
+    corrupted_g.nodes._data["wrong_key"] = LogicalNode(id="actual_id", op_type="Input")
+    key_errs = v.validate_edges(corrupted_g)
+    assert any("does not match LogicalNode.id" in e.message for e in key_errs)
+
+    # Preserve suggested_fix on GroundingValidator conversion and validate(raise_on_error=True)
+    gv = GroundingValidator(
+        snapshot_manifest={"categories": {"ops": [{"name": "RichOp", "api_path": "ai.custom.RichOp"}]}}
+    )
+    mlir_custom = OpSchema("arith.custom_mul", "mlir.arith", 1, {}, ["a", "b"], ["c"])
+    opt_none_schema = OpSchema(
+        "OptNoneOp",
+        "ai.onnx",
+        1,
+        {"opt_a": OpAttribute("opt_a", AttributeType.INT, required=False, default=None)},
+        [],
+        ["out"],
+    )
+    v_strict = Validator(
+        registry={"RichOp": rich_schema, "arith.custom_mul": mlir_custom, "OptNoneOp": opt_none_schema},
+        mlir_registry={"other.op": OpSchema("other.op", "mlir.other", 1, {}, ["a", "b"], ["c"])},
+        level=ValidationLevel.STRICT,
+        grounding_validator=gv,
+    )
+    typo_node = LogicalNode(id="typo", op_type="Rich0p", domain="ai.custom", shape_metadata=(1,))
+    with pytest.raises(ValidationError) as exc_info:
+        v_strict.validate(typo_node, raise_on_error=True)
+    assert exc_info.value.suggested_fix == "ai.custom.RichOp"
+
+    # Cover MLIR override in self.registry (line 415), CORE_MLIR_DIALECTS fallback arity (454),
+    # optional None attribute (650), non-LogicalGraph subgraph entry (805->804, 1142->1141), and ISA arity skip (975)
+    assert v_strict._get_schema(LogicalNode(id="mc", op_type="arith.custom_mul", domain="mlir.arith")) is mlir_custom
+    v_core_custom = Validator(
+        mlir_registry={"arith.brand_new": OpSchema("arith.brand_new", "mlir.arith", 1, {}, ["a", "b"], ["c"])}
+    )
+    errs_core = v_core_custom.validate_kind(
+        LogicalNode(id="bn", op_type="brand_new", domain="arith", inputs=["only_one"])
+    )
+    assert any("expects at least 2 operands" in e.message for e in errs_core)
+    assert (
+        v_strict.validate_attribute_types(LogicalNode(id="on", op_type="OptNoneOp", attributes={"opt_a": None})) == []
+    )
+    isa_g = LogicalGraph(
+        name="IsaSubMeta",
+        nodes={
+            "i0": LogicalNode(
+                id="i0",
+                op_type="FFMA",
+                domain="nvidia_sass",
+                inputs=["x_in", "x_in", "x_in"],
+                shape_metadata=(1,),
+                subgraphs={"meta": "not_a_graph"},
+            ),
+            "c0": LogicalNode(
+                id="c0",
+                op_type="CustomUnregistered",
+                domain="ai.custom",
+                inputs=["x_in"],
+                shape_metadata=(1,),
+            ),
+        },
+        inputs=["x_in"],
+        outputs=["i0", "c0"],
+    )
+    assert v_core_custom.validate_edges(isa_g) == []
+    _ = v_core_custom.validate_graph(isa_g)

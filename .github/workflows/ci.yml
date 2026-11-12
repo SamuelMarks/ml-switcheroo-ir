@@ -32,86 +32,20 @@ jobs:
         path: ml-ecosystem-snapshots
         persist-credentials: false
 
-    - name: Move ml-ecosystem-snapshots to sibling directory
-      run: mv ml-ecosystem-snapshots ../ml-ecosystem-snapshots
+    - name: Link ../ml-framework-snapshots and ../ml-ecosystem-snapshots
+      run: |
+        mv ml-ecosystem-snapshots ../ml-ecosystem-snapshots
+        ln -s ../ml-ecosystem-snapshots ../ml-framework-snapshots
 
-    - name: Populate Ecosystem Snapshots
+    - name: Populate Ground-Truth Snapshots
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks
-        gh release download v0.0.6 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download v0.0.5 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber
+        gh release download v0.0.6 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/*_exhaustive.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks/ 2>/dev/null || true
         cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/concept_map.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/ 2>/dev/null || true
-        python -c "
-        import glob, json
-        snap_dir = '../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots'
-        # Ensure wgsl_ops.json is present
-        wgsl_path = f'{snap_dir}/wgsl_ops.json'
-        with open(wgsl_path, 'w', encoding='utf-8') as f:
-            json.dump({'ops': [
-                {'name': 'storageStore', 'domain': 'wgsl', 'inputs': ['buffer', 'index', 'value'], 'outputs': [], 'attributes': [{'name': 'address_space', 'type': 'str', 'required': False, 'default': 'storage, read_write'}]},
-                {'name': 'storageLoad', 'domain': 'wgsl', 'inputs': ['buffer', 'index'], 'outputs': ['value'], 'attributes': [{'name': 'address_space', 'type': 'str', 'required': False, 'default': 'storage, read'}]},
-                {'name': 'workgroupBarrier', 'domain': 'wgsl', 'inputs': [], 'outputs': [], 'attributes': []},
-                {'name': 'storageBarrier', 'domain': 'wgsl', 'inputs': [], 'outputs': [], 'attributes': []},
-                {'name': 'atomicAdd', 'domain': 'wgsl', 'inputs': ['atomic_ptr', 'value'], 'outputs': ['old_value'], 'attributes': []},
-                {'name': 'atomicSub', 'domain': 'wgsl', 'inputs': ['atomic_ptr', 'value'], 'outputs': ['old_value'], 'attributes': []},
-                {'name': 'atomicExchange', 'domain': 'wgsl', 'inputs': ['atomic_ptr', 'value'], 'outputs': ['old_value'], 'attributes': []}
-            ]}, f, indent=2)
-        # Ensure flash_attention_v2.6.3.json is present
-        flash_path = f'{snap_dir}/flash_attention_v2.6.3.json'
-        with open(flash_path, 'w', encoding='utf-8') as f:
-            json.dump({'categories': {'neural_ops': [{'name': 'FlashAttention', 'api_path': 'ml.switcheroo.custom.FlashAttention'}]}}, f)
-        # Ensure optax_v*.json includes apply_updates when populated from v0.0.4 release
-        for optax_path in sorted(glob.glob(f'{snap_dir}/optax_*.json')):
-            try:
-                with open(optax_path, 'r', encoding='utf-8') as f:
-                    optax_data = json.load(f)
-                cats = optax_data.setdefault('categories', {})
-                has_apply = any(
-                    isinstance(item, dict) and item.get('name') == 'apply_updates'
-                    for items in cats.values() if isinstance(items, list)
-                    for item in items
-                )
-                if not has_apply:
-                    cats.setdefault('array', []).append({
-                        'name': 'apply_updates',
-                        'api_path': 'optax.apply_updates',
-                        'kind': 'function',
-                        'params': [
-                            {'name': 'params', 'kind': 'POSITIONAL_OR_KEYWORD', 'is_mandatory': True},
-                            {'name': 'updates', 'kind': 'POSITIONAL_OR_KEYWORD', 'is_mandatory': True},
-                        ],
-                    })
-                    with open(optax_path, 'w', encoding='utf-8') as f:
-                        json.dump(optax_data, f, indent=2)
-            except Exception:
-                pass
-        
-        # Patch concept_map.json with missing newer blocks and keras3/mlx/onnx mappings
-        cmap_path = f'{snap_dir}/concept_map.json'
-        try:
-            with open(cmap_path, 'r', encoding='utf-8') as f:
-                cmap = json.load(f)
-            for block in ['grouped_query_attention', 'multi_head_latent_attention', 'rope_rotary_position_embedding', 'expert_moe_routing']:
-                cmap.setdefault(block, {'torch': [], 'jax': []})
-            pt = cmap.setdefault('_parameter_translations', {})
-            conv = pt.setdefault('convolution', {}).setdefault('roles', {})
-            conv.setdefault('kernel', {})['keras3'] = ['kernel']
-            conv.setdefault('kernel', {})['onnx'] = ['W']
-            conv.setdefault('bias', {})['onnx'] = ['B']
-            ln = pt.setdefault('layer_norm', {}).setdefault('roles', {})
-            ln.setdefault('scale', {})['keras3'] = ['gamma']
-            ln.setdefault('scale', {})['mlx'] = ['weight']
-            ln.setdefault('bias', {})['keras3'] = ['beta']
-            rn = pt.setdefault('rms_norm', {}).setdefault('roles', {})
-            rn.setdefault('scale', {})['keras3'] = ['gamma']
-            with open(cmap_path, 'w', encoding='utf-8') as f:
-                json.dump(cmap, f, indent=2)
-        except Exception:
-            pass
-        "
 
     - name: Install Dependencies
       run: |
@@ -138,14 +72,15 @@ jobs:
     - name: Granular AST Docstring & Signature Check
       run: python scripts/check_docs.py src scripts tests
 
-    - name: Test & Branch Coverage
+    - name: Test, Function, Line & Branch Coverage
       run: |
-        pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=term-missing --cov-report=xml --cov-report=json:coverage.json --cov-fail-under=100
+        pytest tests/ --cov=src/ml_switcheroo_ir --cov=scripts --cov-branch --cov-report=term-missing --cov-fail-under=100
+        python scripts/check_function_coverage.py
 
-    - name: Verify Grounding
-      run: python scripts/verify_grounding.py --strict --snapshots-dir ../ml-ecosystem-snapshots
+    - name: Verify Grounding via ../ml-framework-snapshots
+      run: python scripts/verify_grounding.py --strict --snapshots-dir ../ml-framework-snapshots --ecosystem-snapshots-dir ../ml-ecosystem-snapshots
 
-    - name: Update Badges
+    - name: Update & Enforce Badges
       if: matrix.python-version == '3.12'
       run: |
         python scripts/update_badges.py
@@ -153,17 +88,10 @@ jobs:
           echo "Coverage badges in README.md are out of date. Please run pre-commit or the update badges script locally and commit the changes."
           exit 1
         fi
+        python scripts/update_badges.py --enforce
 
-    - name: Enforce Badges
-      if: matrix.python-version == '3.12'
-      run: python scripts/update_badges.py --enforce
-
-    - name: Build Package Wheel and Source Distribution
-      run: python -m build
-
-    - name: Cross-Repo Downstream Compiler Integration Verification
-      if: matrix.python-version == '3.12'
+    - name: Build & Verify Wheel Installation
       run: |
-        echo "Verifying built wheel installation into downstream environments"
+        python -m build
         pip install --force-reinstall dist/*.whl
         python -c "import ml_switcheroo_ir; print('ml-switcheroo-ir version:', ml_switcheroo_ir.__version__)"

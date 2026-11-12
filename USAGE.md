@@ -17,13 +17,13 @@ This guide details programmatic graph manipulation, multi-dialect schema validat
    - [SPMD Sharding Propagation & Pipeline Validation](#spmd-sharding-propagation--pipeline-validation)
    - [Analytical Collective Communication Cost Estimation](#analytical-collective-communication-cost-estimation)
    - [Topological Sorting & Cycle Detection](#topological-sorting--cycle-detection)
-   - [Dual JSON Serialization & High-Throughput Streaming I/O](#dual-json-serialization--high-throughput-streaming-io)
+   - [Canonical JSON Serialization & High-Throughput Streaming I/O](#canonical-json-serialization--high-throughput-streaming-io)
    - [Native Graph Optimizations (DCE, CSE, Shape Propagation)](#native-graph-optimizations-dce-cse-shape-propagation)
-   - [Zero-Hallucination Parameter Translation](#zero-hallucination-parameter-translation)
+   - [Zero-Hallucination Parameter & Weight Translation](#zero-hallucination-parameter--weight-translation)
    - [Hardware ISA & GPU Shader Validation](#hardware-isa--gpu-shader-validation)
    - [Extending Custom Operator Schemas](#extending-custom-operator-schemas)
    - [Validating Graphs](#validating-graphs)
-   - [Auditing Graphs with `ml-ecosystem-snapshots`](#auditing-graphs-with-ml-ecosystem-snapshots)
+   - [Auditing Graphs with `ml-ecosystem-snapshots` / `ml-framework-snapshots`](#auditing-graphs-with-ml-ecosystem-snapshots--ml-framework-snapshots)
    - [Programmatic Schema Export, TypeScript & Python Code Generation](#programmatic-schema-export-typescript--python-code-generation)
 2. [Interface Protocols for Compilers & Frontends](#2-interface-protocols-for-compilers--frontends)
    - [Implementing `GraphFrontend`](#implementing-graphfrontend)
@@ -245,7 +245,9 @@ pipeline = PipelineTopologyConfig(
     mesh_mapping=MeshMappingConfig(devices_per_stage=2),
     stage_communication=StageCommunicationConfig(protocol="p2p"),
     dependencies=[DependencyConfig(source_stage="stage0", target_stage="stage1", offset_mb=0)],
-    schedule=PipelineScheduleConfig(phases=[SchedulePhaseConfig(type="1F1B", operations=["fwd", "bwd"], count_expression="4")]),
+    schedule=PipelineScheduleConfig(
+        phases=[SchedulePhaseConfig(type="1F1B", operations=["fwd", "bwd"], count_expression="4")]
+    ),
 )
 
 # 3. Shard dimension 0 along "data" and replicate dimension 1
@@ -311,7 +313,7 @@ s1 = LogicalNode(
     op_type="Relu",
     domain="ai.onnx",
     inputs=["stage0"],
-    attributes={"pipeline_stage": 1, "checkpoint_tag": "recompute"},
+    attributes={"pipeline_stage": 1, "activation_checkpoint": "recompute"},
 )
 pipe_graph = LogicalGraph(nodes={"stage0": s0, "stage1": s1})
 pipe_errors = validator.validate_pipeline_and_checkpointing(pipe_graph)
@@ -320,7 +322,7 @@ assert not pipe_errors
 
 ### Analytical Collective Communication Cost Estimation
 
-Calculate exact closed-form byte-level transfer volumes for distributed operations (`AllReduce`, `AllGather`, `ReduceScatter`, `P2P`):
+Calculate exact closed-form byte-level transfer volumes for distributed operations (`AllReduce`, `AllGather`, `ReduceScatter`, `AllToAll`, `P2P`):
 
 ```python
 from ml_switcheroo_ir import (
@@ -366,13 +368,13 @@ except CyclicGraphError as e:
     print("Graph contains dependency cycles:", e)
 ```
 
-### Dual JSON Serialization & High-Throughput Streaming I/O
+### Canonical JSON Serialization & High-Throughput Streaming I/O
 
 Serialize and deserialize graphs deterministically across frontends and backends, including zero-allocation streaming and compressed formats:
 
 ```python
 # 1. Deterministic JSON serialization
-json_str = graph.to_json(format="canonical", indent=2)
+json_str = graph.to_json(indent=2)
 restored_graph = LogicalGraph.from_json(json_str)
 assert len(restored_graph) == len(graph)
 
@@ -456,10 +458,14 @@ hwio_weights = engine.permute_conv_weights(
 )
 assert hwio_weights == [[[[1.0]], [[2.0]]]]  # shape (1, 2, 1, 1)
 
-# 5. Split and merge combined QKV projection weights
+# 5. Split and merge combined QKV projection weights (including Grouped-Query Attention via num_kv_heads)
 q, k, v = engine.split_qkv_weights([1, 2, 3, 4, 5, 6], num_heads=1, head_dim=2)
 merged_qkv = engine.merge_qkv_weights(list(q), list(k), list(v))
 assert merged_qkv == [1, 2, 3, 4, 5, 6]
+
+# Grouped-Query Attention (GQA): 4 query heads, 1 KV head, head_dim=2 -> total 12 elements (8 Q + 2 K + 2 V)
+q_gqa, k_gqa, v_gqa = engine.split_qkv_weights(list(range(12)), num_heads=4, head_dim=2, num_kv_heads=1)
+assert (len(q_gqa), len(k_gqa), len(v_gqa)) == (8, 2, 2)
 ```
 
 ### Hardware ISA & GPU Shader Validation
@@ -525,13 +531,16 @@ registry.register(
 
 ### Validating Graphs
 
-Ensure graphs satisfy operator schemas across ONNX, Modern Custom Ops, StableHLO, and MLIR:
+Ensure graphs satisfy operator schemas across ONNX, Modern Custom Ops, StableHLO, MLIR, and GPU ISAs. All `Validator.validate*` methods are **side-effect-free by default** (`populate_defaults=False`), leaving `LogicalNode.attributes` untouched unless `populate_defaults=True` or `validator.populate_defaults(node)` is explicitly requested:
 
 ```python
 from ml_switcheroo_ir.validator import ValidationLevel, Validator
 
 validator = Validator()
-errors = validator.validate_graph(graph)
+errors = validator.validate_graph(graph)  # Side-effect-free: never mutates node.attributes
+
+# Opt in explicitly if schema default injection in place is desired:
+validator.validate_graph(graph, populate_defaults=True)
 
 for err in errors:
     if err.level == ValidationLevel.ERROR:
@@ -580,7 +589,10 @@ assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
 ts_code = generate_typescript_definitions()
 assert "export interface LogicalGraph" in ts_code
 
-# 3. Generate standalone Python source code reconstructing a LogicalGraph
+# 3. Generate lossless standalone Python source code reconstructing any LogicalGraph
+#    (preserving nested subgraphs, ZeroTangent/NoTangent sentinels, DType, SymNode/SymInt,
+#     TensorShape/TensorSpec, bytes, attributes, and loop_options; formats with black if installed,
+#     otherwise falls back cleanly to ast.unparse)
 py_code = export_to_python(graph, function_name="build_model", standalone=True)
 assert "def build_model() -> sw_ir.LogicalGraph:" in py_code
 
@@ -642,10 +654,12 @@ The `ml-switcheroo-ir` CLI utility provides tools for graph verification, operat
 
 ### 1. Graph Validation (`validate`)
 
-Validates a JSON model graph against the canonical schema.
+Validates a raw or compressed model graph (`.json`, `.json.gz`, or `.json.zst`) against the canonical schema registries without mutating input attributes.
 
 ```bash
 ml-switcheroo-ir validate model.json
+ml-switcheroo-ir validate model.json.gz --strict
+ml-switcheroo-ir validate model.json.zst --strict
 ```
 
 **Options:**
@@ -661,10 +675,10 @@ Node linear1:
 
 ### 2. Snapshot Grounding (`ground`)
 
-Audits an IR graph against ground-truth framework snapshots from `SamuelMarks/ml-ecosystem-snapshots` or `SamuelMarks/ml-framework-snapshots` (or configured via `ML_ECOSYSTEM_SNAPSHOTS_DIR` / `ML_FRAMEWORK_SNAPSHOTS_DIR`) to detect phantom operators and illegal parameters:
+Audits an IR graph (`.json`, `.json.gz`, or `.json.zst`) against ground-truth framework snapshots from `../ml-framework-snapshots` (or configured via `ML_FRAMEWORK_SNAPSHOTS_DIR` / `ML_ECOSYSTEM_SNAPSHOTS_DIR`) to detect phantom operators and illegal parameters:
 
 ```bash
-ml-switcheroo-ir ground model.json --snapshots-dir /path/to/snapshots/
+ml-switcheroo-ir ground model.json.zst --snapshots-dir ../ml-framework-snapshots
 ```
 
 **Output:**
@@ -695,10 +709,10 @@ Target                  Compliance %    Reqs Met    Status
 ----------------------  --------------  ----------  --------
 my_framework (Dir)      100%            4/4         PASS
 
-DIALECT Compliance (ONNX Superset, 221 total ops):
+DIALECT Compliance (ONNX Superset, 259 total ops):
 Target                  Compliance %    Ops Implemented    Status      Missing Ops
 ----------------------  --------------  -----------------  --------  -------------
-my_framework (Dir)      56.6%           125/221            FAIL                 96
+my_framework (Dir)      48.3%           125/259            FAIL                134
 ```
 
 #### Generating Missing-Symbol Checklists (`-v` / `-m`)
@@ -773,7 +787,7 @@ ml-switcheroo-ir verify-backend src/compiler/wasm.py WasmBackend
 **Output:**
 ```text
 Verification Report:
- [PASS] Module loaded
+ [PASS] AST parsed
  [PASS] Class found
  [PASS] Inherits CompilerBackend
  [PASS] Has compile() method
@@ -784,7 +798,7 @@ Compliance: 100% (5/5 requirements met)
 
 ### 7. Exporting GhostRef Snapshots (`dump-snapshot`)
 
-Export all built-in operator schemas to GhostRef v2 JSON snapshot format:
+Export all public package classes, functions, and all 21 built-in operator registries into a GhostRef v2 `SnapshotEnvelope` JSON file:
 
 ```bash
 ml-switcheroo-ir dump-snapshot --output schemas_snapshot.json

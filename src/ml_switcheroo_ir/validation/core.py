@@ -6,6 +6,9 @@ from enum import Enum
 
 import pydantic
 
+from ml_switcheroo_ir.schema.base import REGISTRY_LOCK, LazyMetadataMap
+from ml_switcheroo_ir.schema.mlir_registry import build_core_mlir_dialects
+
 __all__ = [
     "CORE_MLIR_DIALECTS",
     "KNOWN_SYNONYMS",
@@ -78,66 +81,29 @@ KNOWN_SYNONYMS: dict[tuple[str, str], str] = {
     ("grain", "DataLoader"): "grain.DataLoader",
 }
 
-CORE_MLIR_DIALECTS: dict[str, dict[str, int]] = {
-    "arith": {
-        "addf": 2,
-        "subf": 2,
-        "mulf": 2,
-        "divf": 2,
-        "addi": 2,
-        "subi": 2,
-        "muli": 2,
-        "constant": 0,
-        "cmpf": 2,
-        "cmpi": 2,
-    },
-    "math": {
-        "exp": 1,
-        "exp2": 1,
-        "log": 1,
-        "sin": 1,
-        "cos": 1,
-        "tanh": 1,
-        "sqrt": 1,
-        "rsqrt": 1,
-        "erf": 1,
-        "absf": 1,
-    },
-    "tensor": {
-        "extract": 2,
-        "insert": 3,
-        "empty": 0,
-        "cast": 1,
-        "reshape": 2,
-        "dim": 2,
-        "expand_shape": 1,
-        "collapse_shape": 1,
-    },
-    "linalg": {
-        "generic": 2,
-        "matmul": 3,
-        "conv2d": 3,
-        "fill": 2,
-        "batch_matmul": 3,
-        "dot": 3,
-    },
-    "scf": {
-        "for": 3,
-        "if": 1,
-        "while": 1,
-        "yield": 1,
-        "condition": 1,
-    },
-    "func": {
-        "func": 0,
-        "call": 1,
-        "return": 1,
-    },
-}
+
+def _load_core_mlir_dialects() -> None:
+    """Populate ``CORE_MLIR_DIALECTS`` lazily from the unified ``MLIR_REGISTRY``."""
+    with REGISTRY_LOCK:
+        CORE_MLIR_DIALECTS.mark_loaded()
+        for dialect, ops in build_core_mlir_dialects().items():
+            CORE_MLIR_DIALECTS[dialect] = ops
+
+
+CORE_MLIR_DIALECTS: LazyMetadataMap[dict[str, int]] = LazyMetadataMap(
+    "CORE_MLIR_DIALECTS", loader=_load_core_mlir_dialects
+)
 
 
 class ValidationLevel(Enum):
-    """Severity levels for validation errors and validator configuration."""
+    """Severity levels for validation errors and validator configuration.
+
+    Attributes:
+        STRICT (ValidationLevel): Treat all errors and warnings as fatal errors.
+        WARNING (ValidationLevel): Emit non-fatal warning diagnostics.
+        LENIENT (ValidationLevel): Suppress warning-level diagnostics.
+        ERROR (ValidationLevel): Standard fatal validation error level.
+    """
 
     STRICT = "STRICT"
     WARNING = "WARNING"
@@ -146,7 +112,15 @@ class ValidationLevel(Enum):
 
 
 class _ValidationErrorPayload(pydantic.BaseModel):
-    """Pydantic schema validating ValidationError fields."""
+    """Pydantic schema validating ValidationError fields.
+
+    Attributes:
+        node_id (str): Node identifier where the error occurred.
+        attribute (str): Attribute or structural slot name.
+        message (str): Detailed diagnostic description.
+        level (ValidationLevel): Diagnostic severity level.
+        suggested_fix (str | None): Optional suggested correction string.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 

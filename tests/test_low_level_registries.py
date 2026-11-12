@@ -213,9 +213,14 @@ def test_missing_schema_json_files(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     import ml_switcheroo_ir.schema.low_level_registries as ll_mod
     import ml_switcheroo_ir.schema.rdna_registry as rdna_mod
     import ml_switcheroo_ir.schema.sass_registry as sass_mod
+    from ml_switcheroo_ir.schema.base import override_registry
 
     missing_path = tmp_path / "missing.json"
-    rdna_mod._load_rdna_schemas(json_path=missing_path)
-    sass_mod._load_sass_schemas(json_path=missing_path)
+    with (
+        override_registry(rdna_mod.RDNA_REGISTRY),
+        override_registry(sass_mod.SASS_REGISTRY),
+    ):
+        rdna_mod._load_rdna_schemas(json_path=missing_path)
+        sass_mod._load_sass_schemas(json_path=missing_path)
     monkeypatch.setattr(ll_mod, "find_schema_file", lambda filename, override=None: None)
     assert ll_mod._load_schema_file("missing.json", "dummy") == {}

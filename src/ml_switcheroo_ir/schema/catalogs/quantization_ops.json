@@ -1,0 +1,87 @@
+{
+  "ops": [
+    {
+      "name": "quantization.block_quantize",
+      "domain": "quantization",
+      "version": 1,
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "output",
+        "scale"
+      ],
+      "attributes": [
+        {
+          "name": "block_size",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "quant_dtype",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "axis",
+          "type": "int",
+          "required": false,
+          "default": -1
+        }
+      ],
+      "aliases": [
+        "block_quantize"
+      ]
+    },
+    {
+      "name": "quantization.dequantize_grouped_int4",
+      "domain": "quantization",
+      "version": 1,
+      "inputs": [
+        "weight",
+        "scales",
+        "qzeros"
+      ],
+      "outputs": [
+        "output"
+      ],
+      "attributes": [
+        {
+          "name": "group_size",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "packing_format",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "symmetric",
+          "type": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "axis",
+          "type": "int",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "scales_shape",
+          "type": "List[int]",
+          "required": false,
+          "default": null
+        }
+      ],
+      "aliases": [
+        "dequantize_grouped_int4"
+      ]
+    }
+  ]
+}

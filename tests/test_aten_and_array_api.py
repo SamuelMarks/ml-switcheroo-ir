@@ -50,7 +50,7 @@ def test_aten_and_array_api_registries_loaded() -> None:
 
 
 def test_validator_aten_and_array_api_validation() -> None:
-    """Verify that Validator._get_schema and validate_kind accept valid and reject unknown ATen, Array API, Chex, Grain, Orbax, and Optax ops."""
+    """Verify Validator accepts valid and rejects unknown ATen, Array API, Chex, Grain, Orbax, and Optax ops."""
     v = Validator(level=ValidationLevel.STRICT)
 
     # Valid ATen node

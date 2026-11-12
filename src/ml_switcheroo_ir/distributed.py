@@ -11,8 +11,56 @@ import typing_extensions
 from ml_switcheroo_ir.types import JsonValue
 
 PartitionAxisAtom: typing_extensions.TypeAlias = typing.Union[str, int, None]
-PartitionAxisInner: typing_extensions.TypeAlias = typing.Union[PartitionAxisAtom, tuple[PartitionAxisAtom, ...], list[PartitionAxisAtom]]
-PartitionAxisElement: typing_extensions.TypeAlias = typing.Union[PartitionAxisInner, tuple[PartitionAxisInner, ...], list[PartitionAxisInner]]
+PartitionAxisInner: typing_extensions.TypeAlias = typing.Union[
+    PartitionAxisAtom, tuple[PartitionAxisAtom, ...], list[PartitionAxisAtom]
+]
+PartitionAxisElement: typing_extensions.TypeAlias = typing.Union[
+    PartitionAxisInner, tuple[PartitionAxisInner, ...], list[PartitionAxisInner]
+]
+
+
+def _validate_partition_atom(atom: PartitionAxisAtom | JsonValue) -> PartitionAxisAtom:
+    """Validate an atomic partition axis entry (``str | int | None``, rejecting ``bool``).
+
+    Args:
+        atom (PartitionAxisAtom | JsonValue): Candidate atomic axis value.
+
+    Returns:
+        PartitionAxisAtom: Validated atomic axis value.
+
+    Raises:
+        ValueError: If ``atom`` is a boolean or unsupported type.
+    """
+    if isinstance(atom, bool) or not (atom is None or isinstance(atom, (str, int))):
+        raise ValueError(f"Invalid PartitionSpec axis atom: {atom!r}; expected str, int, or None.")
+    return atom
+
+
+def _normalize_partition_element(elem: PartitionAxisElement | JsonValue) -> PartitionAxisElement:
+    """Validate and normalize a single ``PartitionSpec`` dimension element into tuples/atoms.
+
+    Args:
+        elem (PartitionAxisElement | JsonValue): Candidate dimension axis element.
+
+    Returns:
+        PartitionAxisElement: Normalized axis element with nested lists converted to non-empty tuples.
+
+    Raises:
+        ValueError: If ``elem`` is an empty sub-sequence, boolean, or unsupported container.
+    """
+    if isinstance(elem, (list, tuple)):
+        if not elem:
+            raise ValueError("PartitionSpec nested axis tuple/list must not be empty.")
+        normalized_items: list[PartitionAxisInner] = []
+        for sub in elem:
+            if isinstance(sub, (list, tuple)):
+                if not sub:
+                    raise ValueError("PartitionSpec nested sub-axis tuple/list must not be empty.")
+                normalized_items.append(tuple(_validate_partition_atom(a) for a in sub))
+            else:
+                normalized_items.append(_validate_partition_atom(sub))
+        return tuple(normalized_items)
+    return _validate_partition_atom(elem)
 
 
 class LogicalAxis(pydantic.BaseModel):
@@ -42,8 +90,8 @@ class PartitionSpec(pydantic.BaseModel):
     """Describes how a tensor's dimensions are mapped to a logical mesh.
 
     Each element in `axes` corresponds to a tensor dimension. An element can be:
-    - A string representing the mesh axis name (e.g., 'data').
-    - A tuple of strings for multi-axis sharding (e.g., ('data', 'model')).
+    - A string or integer representing the mesh axis identifier (e.g., 'data').
+    - A non-empty tuple of identifiers for multi-axis sharding (e.g., ('data', 'model')).
     - None for a replicated/unsharded dimension.
 
     Attributes:
@@ -54,6 +102,22 @@ class PartitionSpec(pydantic.BaseModel):
 
     axes: tuple[PartitionAxisElement, ...] = ()
 
+    @pydantic.field_validator("axes", mode="before")
+    @classmethod
+    def _validate_axes_elements(
+        cls,
+        raw_axes: Sequence[PartitionAxisElement],
+    ) -> tuple[PartitionAxisElement, ...]:
+        """Validate and normalize PartitionSpec axis elements.
+
+        Args:
+            raw_axes (Sequence[PartitionAxisElement]): Raw axis sequence.
+
+        Returns:
+            tuple[PartitionAxisElement, ...]: Normalized tuple of axis elements.
+        """
+        return tuple(_normalize_partition_element(el) for el in raw_axes)
+
     def __init__(
         self,
         axes: Sequence[PartitionAxisElement] = (),
@@ -62,7 +126,12 @@ class PartitionSpec(pydantic.BaseModel):
 
         Args:
             axes (Sequence[PartitionAxisElement]): Sequence mapping tensor dimensions to mesh axes.
+
+        Raises:
+            ValueError: If ``axes`` is a string, bytes, or non-sequence.
         """
+        if isinstance(axes, (str, bytes)) or not isinstance(axes, Sequence):
+            raise ValueError(f"PartitionSpec axes must be a sequence, got {axes!r}.")
         super().__init__(axes=tuple(axes))
 
 
@@ -70,7 +139,7 @@ class LogicalMesh(pydantic.BaseModel):
     """Represents a multi-dimensional grid of devices for distributed execution.
 
     Attributes:
-        shape (dict[str, int]): Mapping of mesh axis names to their sizes (e.g., {'data': 4, 'model': 2}).
+        shape (dict[str, int]): Mapping of mesh axis names to positive sizes (e.g., ``{'data': 4}``).
         webrtc_topology (WebRTCSignalingTopology | None): WebRTC cluster mesh signaling configuration.
     """
 
@@ -78,6 +147,29 @@ class LogicalMesh(pydantic.BaseModel):
 
     shape: dict[str, int]
     webrtc_topology: WebRTCSignalingTopology | None = None
+
+    @pydantic.field_validator("shape", mode="before")
+    @classmethod
+    def _validate_mesh_shape(cls, raw_shape: Mapping[str, int] | JsonValue) -> dict[str, int]:
+        """Validate that mesh shape is non-empty and all axis sizes are strictly positive integers.
+
+        Args:
+            raw_shape (Mapping[str, int] | JsonValue): Raw mapping of axis names to sizes.
+
+        Returns:
+            dict[str, int]: Validated mesh shape dictionary.
+
+        Raises:
+            ValueError: If ``raw_shape`` is empty or any axis name/size is invalid.
+        """
+        if not isinstance(raw_shape, Mapping) or not raw_shape:
+            raise ValueError("LogicalMesh 'shape' must be a non-empty mapping of axis names to positive sizes.")
+        validated: dict[str, int] = {}
+        for axis_name, size in raw_shape.items():
+            if not axis_name or isinstance(size, bool) or not isinstance(size, int) or size < 1:
+                raise ValueError(f"LogicalMesh axis {axis_name!r} must have positive integer size >= 1, got {size!r}.")
+            validated[str(axis_name)] = size
+        return validated
 
     def __init__(
         self,
@@ -98,7 +190,7 @@ class MicrobatchSplittingConfig(pydantic.BaseModel):
 
     Attributes:
         strategy (str): Microbatch splitting strategy (e.g. 'uniform', 'adaptive').
-        num_microbatches (int): Total number of microbatches.
+        num_microbatches (int): Total number of microbatches (>= 1).
     """
 
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -111,7 +203,7 @@ class MeshMappingConfig(pydantic.BaseModel):
     """Configuration for mapping pipeline stages to accelerator devices.
 
     Attributes:
-        devices_per_stage (int): Number of devices assigned to each pipeline stage.
+        devices_per_stage (int): Number of devices assigned to each pipeline stage (>= 1).
     """
 
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -193,6 +285,25 @@ class PipelineTopologyConfig(pydantic.BaseModel):
     stage_communication: StageCommunicationConfig
     dependencies: list[DependencyConfig] = pydantic.Field(default_factory=list)
     schedule: PipelineScheduleConfig | None = None
+
+    @pydantic.model_validator(mode="after")
+    def _validate_pipeline_invariants(self) -> PipelineTopologyConfig:
+        """Validate positive microbatch/device counts and non-empty stage identifiers.
+
+        Returns:
+            PipelineTopologyConfig: Validated pipeline topology instance.
+
+        Raises:
+            ValueError: If microbatch count, devices_per_stage, or stage identifiers are invalid.
+        """
+        if self.microbatch_splitting.num_microbatches < 1:
+            raise ValueError(f"num_microbatches must be >= 1, got {self.microbatch_splitting.num_microbatches}.")
+        if self.mesh_mapping.devices_per_stage < 1:
+            raise ValueError(f"devices_per_stage must be >= 1, got {self.mesh_mapping.devices_per_stage}.")
+        for dep in self.dependencies:
+            if not dep.source_stage.strip() or not dep.target_stage.strip():
+                raise ValueError("DependencyConfig source_stage and target_stage must be non-empty strings.")
+        return self
 
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert pipeline topology configuration to dictionary representation.
@@ -290,6 +401,39 @@ class WebRTCSignalingTopology(pydantic.BaseModel):
     connectivity_matrix: list[list[int]] = pydantic.Field(default_factory=list)
     peers: list[WebRTCPeerConfig] = pydantic.Field(default_factory=list)
 
+    @pydantic.model_validator(mode="after")
+    def _validate_webrtc_invariants(self) -> WebRTCSignalingTopology:
+        """Validate chunk size, buffer watermarks, unique peer IDs, and adjacency matrix dimensions.
+
+        Returns:
+            WebRTCSignalingTopology: Validated WebRTC signaling topology instance.
+
+        Raises:
+            ValueError: If buffer watermarks, chunk size, peer IDs, or connectivity matrix are invalid.
+        """
+        if self.chunk_size_bytes < 1:
+            raise ValueError(f"chunk_size_bytes must be >= 1, got {self.chunk_size_bytes}.")
+        if self.low_watermark_bytes < 0 or self.low_watermark_bytes > self.high_watermark_bytes:
+            raise ValueError(
+                f"Watermarks must satisfy 0 <= low_watermark_bytes ({self.low_watermark_bytes}) "
+                f"<= high_watermark_bytes ({self.high_watermark_bytes})."
+            )
+        peer_ids = [p.peer_id for p in self.peers]
+        if len(set(peer_ids)) != len(peer_ids):
+            raise ValueError(f"WebRTCSignalingTopology peers must have unique peer_id values, got {peer_ids}.")
+        if self.connectivity_matrix:
+            expected_n = len(self.peers)
+            if len(self.connectivity_matrix) != expected_n or any(
+                len(row) != expected_n for row in self.connectivity_matrix
+            ):
+                raise ValueError(
+                    f"connectivity_matrix must have dimensions {expected_n}x{expected_n} matching len(peers)."
+                )
+            for row in self.connectivity_matrix:
+                if any(isinstance(cell, bool) or cell not in (0, 1) for cell in row):
+                    raise ValueError("connectivity_matrix entries must be binary integers 0 or 1.")
+        return self
+
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert WebRTC signaling topology to dictionary representation.
 
@@ -319,7 +463,8 @@ class WebRTCSignalingTopology(pydantic.BaseModel):
         """Construct WebRTCSignalingTopology from dictionary representation.
 
         Args:
-            data (WebRTCSignalingTopology | Mapping[str, JsonValue]): Dictionary containing signaling topology configuration.
+            data (WebRTCSignalingTopology | Mapping[str, JsonValue]):
+                Dictionary containing signaling topology configuration.
 
         Returns:
             WebRTCSignalingTopology: Parsed signaling topology instance.

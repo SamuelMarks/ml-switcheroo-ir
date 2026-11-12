@@ -1,0 +1,93 @@
+{
+  "ops": [
+    {
+      "name": "MapDataset",
+      "domain": "grain",
+      "version": 1,
+      "inputs": [
+        "parents"
+      ],
+      "outputs": [
+        "dataset"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "IterDataset",
+      "domain": "grain",
+      "version": 1,
+      "inputs": [
+        "parents"
+      ],
+      "outputs": [
+        "dataset"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "DataLoader",
+      "domain": "grain",
+      "version": 1,
+      "inputs": [
+        "data_source",
+        "sampler",
+        "operations"
+      ],
+      "outputs": [
+        "loader"
+      ],
+      "attributes": [
+        {
+          "name": "worker_count",
+          "type": "int",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "worker_buffer_size",
+          "type": "int",
+          "required": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "batch",
+      "domain": "grain",
+      "version": 1,
+      "inputs": [
+        "dataset"
+      ],
+      "outputs": [
+        "batched"
+      ],
+      "attributes": [
+        {
+          "name": "batch_size",
+          "type": "int",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "drop_remainder",
+          "type": "bool",
+          "required": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "map",
+      "domain": "grain",
+      "version": 1,
+      "inputs": [
+        "dataset",
+        "transform"
+      ],
+      "outputs": [
+        "mapped"
+      ],
+      "attributes": []
+    }
+  ]
+}

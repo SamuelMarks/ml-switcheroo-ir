@@ -1,0 +1,78 @@
+{
+  "ops": [
+    {
+      "name": "add",
+      "domain": "aten",
+      "version": 1,
+      "inputs": [
+        "self",
+        "other"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": [
+        {
+          "name": "alpha",
+          "type": "float",
+          "required": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "matmul",
+      "domain": "aten",
+      "version": 1,
+      "inputs": [
+        "self",
+        "other"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "relu",
+      "domain": "aten",
+      "version": 1,
+      "inputs": [
+        "self"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "layer_norm",
+      "domain": "aten",
+      "version": 1,
+      "inputs": [
+        "input",
+        "normalized_shape",
+        "weight",
+        "bias"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "scaled_dot_product_attention",
+      "domain": "aten",
+      "version": 1,
+      "inputs": [
+        "query",
+        "key",
+        "value"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attributes": []
+    }
+  ]
+}

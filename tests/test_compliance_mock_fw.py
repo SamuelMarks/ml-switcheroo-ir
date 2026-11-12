@@ -1,157 +1,177 @@
-"""Tests for CLI compliance scanning on mock framework adapters and AST branches."""
+"""Tests for ComplianceReport model, static IR class scoring, and CLI compliance formatting."""
 
+from __future__ import annotations
+
+import json
 import pathlib
 
 import pytest
 
 from ml_switcheroo_ir.cli import main as cli_main
+from ml_switcheroo_ir.compliance import (
+    ComplianceReport,
+    analyze_python_file,
+    collect_files,
+    evaluate_compliance,
+    format_compliance_report,
+    get_dialect_ops,
+    run_compliance_check,
+)
 
 
 def test_cli_compliance_framework_adapter(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Test compliance subcommand scanning mock framework adapters.
+    """Verify evaluate_compliance and CLI output on a FrameworkAdapter with dynamic JSON definitions.
 
     Args:
         tmp_path (pathlib.Path): Pytest temporary directory fixture.
         capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
     """
-    import json
-
     workspace = tmp_path / "workspace"
     frameworks_dir = workspace / "src" / "ml_switcheroo" / "frameworks"
     defs_dir = frameworks_dir / "definitions"
-
+    (workspace / "node_modules").mkdir(parents=True)
+    (workspace / ".venv").mkdir(parents=True)
     frameworks_dir.mkdir(parents=True)
     defs_dir.mkdir(parents=True)
 
-    # Create mock dynamic json
     mock_json = {"Abs": {"api": "foo.abs"}, "Add": {"api": "foo.add"}}
-    with open(defs_dir / "mockfw.json", "w") as f:
-        json.dump(mock_json, f)
+    (defs_dir / "mockfw.json").write_text(json.dumps(mock_json), encoding="utf-8")
 
-    # Create mock python adapter
     adapter = frameworks_dir / "mockfw.py"
-    adapter.write_text("""
-@register_framework("mockfw")
+    adapter.write_text(
+        """@register_framework("mockfw")
 class MockAdapter:
     def convert(self, data):
         pass
     def definitions(self):
         return load_definitions("mockfw")
-""")
+""",
+        encoding="utf-8",
+    )
 
-    cli_main(["compliance", str(workspace)])
+    report = run_compliance_check([str(workspace)])
+    assert isinstance(report, ComplianceReport)
+    assert report.found_fw is True
+    assert report.fw_score == (4, 4)
+    assert report.found_dialect is True
+    assert set(report.implemented_ops) == {"Abs", "Add"}
 
+    assert cli_main(["compliance", str(workspace)]) == 0
     captured = capsys.readouterr()
-
-    # Assert Framework tracking
     assert "FrameworkAdapter Compliance:" in captured.out
-    assert "workspace" in captured.out
-    assert "100%" in captured.out
     assert "4/4" in captured.out
-
-    # Assert Dialect tracking picked up from dynamic definitions
     assert "DIALECT Compliance" in captured.out
-    assert "workspace" in captured.out
 
 
-def test_cli_compliance_branch_coverage(
+def test_compliance_ir_scoring_and_multi_file_aggregation(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test compliance subcommand branch coverage across Python and JSON files.
+    """Verify 0/5..5/5 genuine IR scoring across qualified/subscripted bases and parameter names.
 
     Args:
         tmp_path (pathlib.Path): Pytest temporary directory fixture.
         capsys (pytest.CaptureFixture[str]): Pytest stdout/stderr capture fixture.
-        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
     """
-    import json
-
-    from ml_switcheroo_ir.cli import main as cli_main
-
     workspace = tmp_path / "workspace2"
     workspace.mkdir(parents=True)
 
-    # 1. A .txt file to cover 30->24
-    (workspace / "dummy.txt").write_text("hello")
-    # Also explicitly target the txt file
+    (workspace / "dummy.txt").write_text("hello", encoding="utf-8")
+    (workspace / "empty.json").write_text(json.dumps({"NotAnOp": "foo"}), encoding="utf-8")
+    (workspace / "empty_list.json").write_text(json.dumps([]), encoding="utf-8")
+    (workspace / "broken.py").write_text(
+        """def broken(:
+""",
+        encoding="utf-8",
+    )
 
-    # 2. A JSON file with a non-op key to cover 73->72 and 288->291
-    with open(workspace / "empty.json", "w") as f:
-        json.dump({"NotAnOp": "foo"}, f)
+    dialect_ops = get_dialect_ops()
+    assert analyze_python_file(str(workspace / "broken.py"), dialect_ops).ir_score == (0, 5)
 
-    with open(workspace / "empty_list.json", "w") as f:
-        json.dump([], f)
+    full_ir_py = workspace / "full_ir.py"
+    full_ir_py.write_text(
+        """class QualifiedBackend(sw_ir.CompilerBackend[str]):
+    def compile(self, ir_graph):
+        return ''
 
-    # 3. A Python file covering AST branches
-    py_code = """
-class CompilerBackend: pass
-class Adapter: pass
-def register_op(a, b): return lambda f: f
-def load_definitions(a): pass
+class QualifiedFrontend(sw_ir.GraphFrontend):
+    @staticmethod
+    def parse_to_graph(src_code):
+        return None
 
-class NormalClass:
+class DynamicBase(get_base()):
     pass
 
-my_var = "Abs"
-@register_op("fw", my_var)
-def some_op1(): pass
+my_var = 'Abs'
+@register_op('fw', my_var)
+def some_op1():
+    pass
 
-@register_op("fw", "add")
-def some_op2(): pass
+@register_op('fw', 'add')
+def some_op2():
+    pass
 
-@register_op("fw", "notanop")
-def some_op3(): pass
+@register_op('fw', 'notanop')
+def some_op3():
+    pass
 
-my_dict = {
-    1: "foo",
-    "NotAnOp": "bar",
-}
-
+my_dict = {1: 'foo', 'NotAnOp': 'bar', 'Relu': 1}
 load_definitions(my_var)
-load_definitions("non_existent_fw")
-
-class GoodBackend(CompilerBackend):
-    def compile(self, graph): pass
-
-class GoodAdapter(Adapter):
+load_definitions('non_existent_fw')
+class GoodAdapter:
     def convert(self): pass
     def definitions(self): pass
-"""
-    (workspace / "branches.py").write_text(py_code)
+""",
+        encoding="utf-8",
+    )
 
-    py_code2 = """
-class CompilerBackend: pass
-class Adapter: pass
-class EmptyBackend(CompilerBackend): pass
-class IncompleteAdapter(Adapter): pass
-class WrongMethodBackend(CompilerBackend):
-    def other_method(self): pass
-class WrongArgBackend(CompilerBackend):
-    def compile(self, code): pass
-"""
-    (workspace / "branches2.py").write_text(py_code2)
+    partial_ir_py = workspace / "partial_ir.py"
+    partial_ir_py.write_text(
+        """class EmptyBackend(CompilerBackend):
+    pass
+class ZeroPositionalBackend(CompilerBackend):
+    def compile():
+        pass
+class StaticZeroArgBackend(CompilerBackend):
+    @staticmethod
+    def compile():
+        pass
+class ReceiverOnlyBackend(CompilerBackend):
+    def compile(self):
+        pass
+class IncompleteAdapter:
+    pass
+""",
+        encoding="utf-8",
+    )
 
-    import ml_switcheroo_ir.compliance
+    partial_res = analyze_python_file(str(partial_ir_py), dialect_ops)
+    assert partial_res.is_ir is True
+    assert partial_res.ir_score == (4, 5)
+    assert partial_res.fw_score == (2, 4)
 
-    files = ml_switcheroo_ir.compliance.collect_files([str(workspace)])
-    assert len(files) >= 4
+    empty_only = workspace / "only_empty_backend.py"
+    empty_only.write_text(
+        """class B(CompilerBackend):
+    def other(self): pass
+""",
+        encoding="utf-8",
+    )
+    assert analyze_python_file(str(empty_only), dialect_ops).ir_score == (2, 5)
 
-    cli_main(["compliance", str(workspace)])
-    captured_ws = capsys.readouterr()
-    assert "IR Compliance (CompilerBackend / GraphFrontend):" in captured_ws.out
-    assert "FrameworkAdapter Compliance:" in captured_ws.out
-    assert "DIALECT Compliance" in captured_ws.out
+    files = collect_files([str(workspace)])
+    assert len(files) >= 5
+    rep_ws = evaluate_compliance([str(workspace)])
+    assert rep_ws.ir_score == (5, 5)
 
-    # Explicitly test both file orderings (high-then-low and low-then-high)
-    # so best_ir_score / best_fw_score comparison True and False branches are
-    # deterministically exercised independent of filesystem directory order.
-    cli_main(["compliance", str(workspace / "branches.py"), str(workspace / "branches2.py")])
-    capsys.readouterr()
-    cli_main(["compliance", str(workspace / "branches2.py"), str(workspace / "branches.py")])
-    capsys.readouterr()
+    rep_a = evaluate_compliance([str(full_ir_py), str(partial_ir_py)])
+    rep_b = evaluate_compliance([str(partial_ir_py), str(full_ir_py)])
+    assert rep_a.ir_score == (5, 5) and rep_b.ir_score == (5, 5)
+    assert rep_a.fw_score == (4, 4) and rep_b.fw_score == (4, 4)
+    assert {"Add", "Relu"}.issubset(set(rep_a.implemented_ops))
+    assert "PASS" in format_compliance_report(rep_a)
 
-    cli_main(["compliance", str(workspace / "dummy.txt")])
-    captured_txt = capsys.readouterr()
-    assert "No Python or JSON files found in the specified targets." in captured_txt.out
+    rep_txt = evaluate_compliance([str(workspace / "dummy.txt")])
+    assert rep_txt.analyzed_files == []
+    assert cli_main(["compliance", str(workspace / "dummy.txt")]) == 0
+    assert "No Python or JSON files found in the specified targets." in capsys.readouterr().out

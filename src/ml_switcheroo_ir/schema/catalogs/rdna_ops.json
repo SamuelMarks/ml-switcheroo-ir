@@ -1,0 +1,271 @@
+{
+  "ops": [
+    {
+      "name": "V_FMA_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1",
+        "src2"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_target": "V_DUAL_FMAC_F32"
+    },
+    {
+      "name": "V_ADD_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_target": "V_DUAL_ADD_F32"
+    },
+    {
+      "name": "V_MUL_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_target": "V_DUAL_MUL_F32"
+    },
+    {
+      "name": "V_DOT2_F32_F16",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1",
+        "src2"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_target": "V_DUAL_DOT2ACC_F32_F16"
+    },
+    {
+      "name": "V_DOT4_I32_I8",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1",
+        "src2"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "V_FMAC_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_target": "V_DUAL_FMAC_F32"
+    },
+    {
+      "name": "V_MOV_B32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_target": "V_DUAL_MOV_B32"
+    },
+    {
+      "name": "V_CNDMASK_B32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_target": "V_DUAL_CNDMASK_B32"
+    },
+    {
+      "name": "V_SUB_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_target": "V_DUAL_SUB_F32"
+    },
+    {
+      "name": "V_DUAL_FMAC_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "BOTH"
+    },
+    {
+      "name": "V_DUAL_FMAAK_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "BOTH"
+    },
+    {
+      "name": "V_DUAL_FMAMK_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "BOTH"
+    },
+    {
+      "name": "V_DUAL_MUL_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "BOTH"
+    },
+    {
+      "name": "V_DUAL_ADD_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "BOTH"
+    },
+    {
+      "name": "V_DUAL_SUB_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "BOTH"
+    },
+    {
+      "name": "V_DUAL_SUBREV_F32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "BOTH"
+    },
+    {
+      "name": "V_DUAL_MOV_B32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "BOTH"
+    },
+    {
+      "name": "V_DUAL_CNDMASK_B32",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "X"
+    },
+    {
+      "name": "V_DUAL_DOT2ACC_F32_F16",
+      "domain": "amd_rdna",
+      "version": 1,
+      "inputs": [
+        "src0",
+        "src1",
+        "src2"
+      ],
+      "outputs": [
+        "dst"
+      ],
+      "attributes": [],
+      "vopd_slot": "Y"
+    }
+  ]
+}

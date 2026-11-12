@@ -75,7 +75,7 @@ def test_autodiff_sentinels_strict_validation() -> None:
         domain="ml.switcheroo.ad",
         shape_metadata=(2, 4),
     )
-    bad_graph = LogicalGraph(nodes={"bad": bad_ad_node}, outputs=["bad"])
+    bad_graph = LogicalGraph(nodes={"bad_ad": bad_ad_node}, outputs=["bad_ad"])
     bad_errors = validator.validate(bad_graph)
     assert len(bad_errors) == 1
     assert "UnknownTangentOp" in bad_errors[0].message
@@ -126,3 +126,21 @@ def test_autodiff_sentinels_serialization_roundtrip() -> None:
     assert isinstance(cloned_nt, NoTangent)
     assert cloned_zt.id == "zt_cloned"
     assert cloned_nt.id == "nt_cloned"
+
+    # Short 'ad' domain alias deserializes into ZeroTangent/NoTangent and bool shape dims raise TypeError
+    ad_short_graph = LogicalGraph.from_dict(
+        {
+            "name": "ShortAd",
+            "nodes": {
+                "z_short": {"id": "z_short", "op_type": "ZeroTangent", "domain": "ad"},
+                "n_short": {"id": "n_short", "op_type": "NoTangent", "domain": "ad"},
+            },
+        }
+    )
+    assert isinstance(ad_short_graph.nodes["z_short"], ZeroTangent)
+    assert isinstance(ad_short_graph.nodes["n_short"], NoTangent)
+
+    with pytest.raises(TypeError, match="Boolean value"):
+        LogicalGraph.from_dict(
+            {"name": "BoolDim", "nodes": {"n1": {"id": "n1", "op_type": "Relu", "shape_metadata": [True]}}}
+        )

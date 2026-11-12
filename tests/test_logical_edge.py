@@ -71,7 +71,8 @@ def test_graph_add_edge_and_node_helpers() -> None:
     graph.add_edge("x", "y")  # Deduplication
     graph.add_edge("y", "z")
     graph.add_edge("missing_source", "z")
-    graph.add_edge("x", "non_existent_target")
+    with pytest.raises(KeyError, match="non_existent_target"):
+        graph.add_edge("x", "non_existent_target")
 
     assert graph.get_inputs("y") == [n1]
     assert graph.get_outputs("x") == [n2]
@@ -186,3 +187,125 @@ def test_add_edge_multi_port_value_name_and_nodedict_mutations() -> None:
     assert "new_n" in cloned.nodes
     cloned.nodes.clear()
     assert len(cloned.nodes) == 0
+
+
+def test_versioned_output_list_and_nodedict_full_invalidation() -> None:
+    """Verify every VersionedOutputList and NodeDict mutator invalidates LogicalGraph._output_map."""
+    from ml_switcheroo_ir import NodeDict, VersionedOutputList
+
+    n1 = LogicalNode(id="n1", op_type="Split", outputs=["a0", "a1"])
+    n2 = LogicalNode(id="n2", op_type="Split", outputs=["b0", "b1"])
+    g = LogicalGraph(nodes={"n1": n1, "n2": n2}, outputs=["b1"])
+
+    assert [n.id for n in g.iter_nodes()] == ["n1", "n2"]
+    assert g.nodes[0] is n1
+    assert g.nodes[1] is n2
+    assert g.get_output_producer("b0") is n2
+
+    # Mutate SECOND node's outputs via every mutating sequence method and reassignment
+    n2.outputs[0] = "b0_set"
+    assert g.get_output_producer("b0") is None
+    assert g.get_output_producer("b0_set") is n2
+
+    n2.outputs[0:1] = ["b0_slice1", "b0_slice2"]
+    assert g.get_output_producer("b0_slice2") is n2
+
+    n2.outputs[0:1] = "single_str_slice"
+    assert g.get_output_producer("single_str_slice") is n2
+
+    n2.outputs.insert(0, "b_ins")
+    assert g.get_output_producer("b_ins") is n2
+
+    n2.outputs.extend(["b_ext"])
+    assert g.get_output_producer("b_ext") is n2
+
+    popped_out = n2.outputs.pop()
+    assert popped_out == "b_ext" and g.get_output_producer("b_ext") is None
+
+    n2.outputs.remove("b_ins")
+    assert g.get_output_producer("b_ins") is None
+
+    n2.outputs.reverse()
+    assert g.get_producing_output_index("b1") == (n2, 0)
+
+    del n2.outputs[0]
+    assert g.get_output_producer("b1") is None
+
+    n2.outputs *= 2
+    assert len(n2.outputs) >= 2
+
+    n2.outputs.clear()
+    assert g.get_output_producer("single_str_slice") is None
+
+    # Reassigning .outputs on the SECOND node must invalidate g._output_map!
+    n2.outputs = VersionedOutputList(["reassigned_b0"])
+    assert g.get_output_producer("reassigned_b0") is n2
+
+    # NodeDict kwargs init, iterable update, setdefault, popitem, and assignment revalidation
+    nd_kw = NodeDict(k1=LogicalNode(id="k1", op_type="Relu"))
+    assert nd_kw["k1"].id == "k1"
+    nd_kw.update([("k2", LogicalNode(id="k2", op_type="Relu"))], k3=LogicalNode(id="k3", op_type="Relu"))
+    assert len(nd_kw) == 3
+
+    existing = g.nodes.setdefault("n1", LogicalNode(id="n1", op_type="Relu"))
+    assert existing is n1
+    with pytest.raises(TypeError, match="requires a LogicalNode default"):
+        g.nodes.setdefault("missing_key")
+    inserted = g.nodes.setdefault("n3", LogicalNode(id="n3", op_type="Relu", outputs=["c0"]))
+    assert g.get_output_producer("c0") is inserted
+
+    k_pop, v_pop = g.nodes.popitem()
+    assert k_pop == "n3" and v_pop is inserted and g.get_output_producer("c0") is None
+
+    g.nodes = g.nodes
+    assert g.get_output_producer("reassigned_b0") is n2
+
+
+def test_nodedict_merge_key_validation_and_add_edge_ports() -> None:
+    """Test NodeDict |=, |, copy, eq, key mismatch ValueError, and add_edge port positioning."""
+    import io
+
+    from ml_switcheroo_ir import NodeDict
+
+    a = LogicalNode(id="a", op_type="Input")
+    split = LogicalNode(id="split", op_type="Split", inputs=["a"], outputs=["s0", "s1"])
+    sub = LogicalNode(id="sub", op_type="Sub")
+    add = LogicalNode(id="add", op_type="Add")
+    barrier = LogicalNode(id="bar", op_type="Barrier", outputs=[])
+
+    nd = NodeDict({"a": a})
+    nd |= {"split": split}
+    nd |= [("sub", sub)]
+    merged = nd | {"add": add, "bar": barrier}
+    assert set(merged.keys()) == {"a", "split", "sub", "add", "bar"}
+    assert merged.copy() == merged
+    assert merged == dict(merged)
+    assert (merged == 42) is False
+    assert "split" in repr(merged)
+
+    with pytest.raises(ValueError, match="does not match LogicalNode.id"):
+        nd["wrong_key"] = LogicalNode(id="actual_id", op_type="Relu")
+
+    # Unconsumed Input pseudo-node is NOT inferred as a graph output
+    g_only_in = LogicalGraph(nodes={"a": LogicalNode(id="a", op_type="Input")})
+    assert g_only_in.outputs == []
+
+    g = LogicalGraph(nodes=merged, outputs=["sub", "add"])
+    # source_idx=0 on multi-output Split resolves to 's0'
+    g.add_edge("split", "sub", source_idx=1, target_idx=1, value_name="v_s1")
+    g.add_edge("split", "sub", source_idx=0, target_idx=0, value_name="v_s0")
+    assert g.nodes["sub"].inputs == ["s0", "s1"]
+
+    # Repeated operand Add(s0, s0) and out-of-range source_idx / zero-output barrier
+    g.add_edge("split", "add", source_idx=0, target_idx=0)
+    g.add_edge("split", "add", source_idx=0, target_idx=1)
+    assert g.nodes["add"].inputs == ["s0", "s0"]
+
+    g.add_edge("split", "bar", source_idx=5)
+    g.add_edge("bar", "add", source_idx=0, value_name="bar_tok")
+    assert "split:5" in g.nodes["bar"].inputs
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        g.add_edge("a", "add", target_idx=-1)
+    streamed = LogicalGraph.from_stream(io.StringIO(g.to_json()))
+    assert streamed.nodes["add"].inputs == ["s0", "s0", "bar_tok"]

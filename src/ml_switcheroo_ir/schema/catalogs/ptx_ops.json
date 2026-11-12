@@ -1,0 +1,57 @@
+{
+  "ops": [
+    {
+      "name": "add",
+      "domain": "nvidia_ptx",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "outputs": [
+        "d"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "sub",
+      "domain": "nvidia_ptx",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "outputs": [
+        "d"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "mul",
+      "domain": "nvidia_ptx",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b"
+      ],
+      "outputs": [
+        "d"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "fma",
+      "domain": "nvidia_ptx",
+      "version": 1,
+      "inputs": [
+        "a",
+        "b",
+        "c"
+      ],
+      "outputs": [
+        "d"
+      ],
+      "attributes": []
+    }
+  ]
+}

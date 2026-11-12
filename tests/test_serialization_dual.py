@@ -71,7 +71,7 @@ def test_from_json_with_explicit_edges() -> None:
     }
     graph = LogicalGraph.from_json(json.dumps(data))
     assert graph.nodes["b"].inputs == ["a"]
-    assert graph.edges == [LogicalEdge(source="a", target="b")]
+    assert graph.edges == (LogicalEdge(source="a", target="b"),)
 
 
 def test_to_json_deterministic() -> None:
@@ -128,3 +128,101 @@ def test_roundtrip_json_serialization() -> None:
     assert deserialized.mesh.shape == {"data": 8}
     assert deserialized.outputs == ["y"]
     assert deserialized.edges == graph.edges
+
+
+def test_stream_parser_rejects_non_mapping_node_entry() -> None:
+    """Verify streaming parser raises ValueError when a node entry in 'nodes' is not a JSON object."""
+    import io
+
+    bad_stream = io.StringIO('{"name": "Bad", "nodes": {"n1": 123}}')
+    with pytest.raises(ValueError, match="Expected JSON object mapping for node 'n1'"):
+        LogicalGraph.from_json(bad_stream)
+
+
+def test_lossless_symbolic_piecewise_and_error_paths() -> None:
+    """Test SymUnaryOp, SymPiecewise, untagged dim expressions, empty streaming, and malformed SymNode errors."""
+    import io
+
+    from ml_switcheroo_ir.serialization import (
+        RawGraphValue,
+        _coerce_attribute_value,
+        _coerce_initializer_value,
+        _decode_symint_mapping,
+        _decode_symnode,
+        _encode_special_types,
+        _encode_sym_condition,
+        _encode_symnode,
+        _parse_raw_dim_entry,
+    )
+    from ml_switcheroo_ir.shapes import SymBinaryOp, SymConst, SymInt, SymNode, SymPiecewise, SymUnaryOp, SymVar
+    from ml_switcheroo_ir.types import DType, TensorShape, TensorSpec
+
+    pw = SymPiecewise(
+        cases=[
+            (SymBinaryOp(">", SymVar("N"), SymConst(0)), SymUnaryOp("abs", SymVar("N"))),
+            (True, SymConst(2)),
+            ("N == 0", SymConst(1)),
+        ],
+        default=SymConst(4),
+    )
+    node = LogicalNode(
+        id="op1",
+        op_type="Custom",
+        shape_metadata=(pw, SymInt("N + 2")),
+        attributes={
+            "raw_bytes": b"\x00\xff\x10",
+            "dt": DType.int4,
+            "tshape": TensorShape((SymVar("N"), 8)),
+            "tspec": TensorSpec(shape=[SymInt("N"), 8], dtype=DType.float16, sparsity="2:4"),
+        },
+    )
+    g = LogicalGraph(
+        name="RichTest",
+        nodes={"op1": node},
+        initializers={"blob": b"\x01\x02", "nested": {"raw": b"\x03"}, "arr": [1, 2]},
+        attributes={"pw": pw},
+        loop_options={"max_k": SymInt(8)},
+    )
+    restored = LogicalGraph.from_json(g.to_json())
+    assert restored.nodes["op1"].attributes["raw_bytes"] == b"\x00\xff\x10"
+    assert restored.nodes["op1"].attributes["dt"] is DType.int4
+    assert restored.initializers["blob"] == b"\x01\x02"
+    assert restored.initializers["nested"] == {"raw": b"\x03"}
+    assert restored.attributes["pw"] == pw
+    assert restored.loop_options == {"max_k": SymInt(8)}
+
+    # Empty graph streaming covers empty edges, initializers, and nodes sections
+    empty_g = LogicalGraph(name="Empty")
+    assert LogicalGraph.from_json(empty_g.to_json()).nodes == {}
+
+    # Fallback and malformed branches in symnode/dim/initializer codecs
+    cond_enc = _encode_sym_condition(lambda env: True)
+    assert isinstance(cond_enc, str) and cond_enc.startswith("<function")
+    base_encoded = _encode_symnode(SymNode())
+    assert _decode_symnode({"__sw_type__": "SymNode", "expr": "N + 1"}) == SymVar("N") + 1
+    assert _decode_symint_mapping({"__sw_type__": "SymInt", "expr": "N * 2"}) == SymInt("N * 2")
+    assert _parse_raw_dim_entry(SymVar("K")) == SymVar("K")
+    assert _parse_raw_dim_entry("N + 1") == SymVar("N") + 1
+    assert _parse_raw_dim_entry("bad$dim") == "bad$dim"
+    assert isinstance(_parse_raw_dim_entry({"untagged": 1}), str)
+    assert _encode_special_types(b"hi") == {"__sw_type__": "bytes", "data": "aGk="}
+    assert _encode_special_types(TensorShape((2,))) == "dims=(2,)"
+    g_skip_spec = LogicalGraph.from_dict({"nodes": {"n": {"id": "n", "op_type": "Relu", "output_specs": [123]}}})
+    assert g_skip_spec.nodes["n"].output_specs == []
+    enc_k = _encode_special_types(SymInt("K"))
+    assert isinstance(enc_k, dict) and enc_k["__sw_type__"] == "SymInt"
+    assert _coerce_initializer_value(None) == ""
+    assert isinstance(_coerce_attribute_value(LogicalMesh(shape={"d": 2})), str)
+
+    bad_syms: list[dict[str, RawGraphValue]] = [
+        {"__sw_type__": "SymNode", "kind": "const", "value": True},
+        {"__sw_type__": "SymNode", "kind": "binary_op", "op": "+", "left": 1, "right": 2},
+        {"__sw_type__": "SymNode", "kind": "unary_op", "op": "abs", "operand": 1},
+        {"__sw_type__": "SymNode", "kind": "piecewise", "cases": [], "default": 1},
+        {"__sw_type__": "SymNode"},
+    ]
+    for bad_sym in bad_syms:
+        with pytest.raises(ValueError):
+            _decode_symnode(bad_sym)
+    assert base_encoded["__sw_type__"] == "SymNode"
+    assert isinstance(io.StringIO(), io.StringIO)

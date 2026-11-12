@@ -1,0 +1,18 @@
+{
+  "ops": [
+    {
+      "name": "texelFetch",
+      "domain": "webgl",
+      "version": 1,
+      "inputs": [
+        "sampler",
+        "P",
+        "lod"
+      ],
+      "outputs": [
+        "rgba"
+      ],
+      "attributes": []
+    }
+  ]
+}

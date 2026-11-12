@@ -10,12 +10,20 @@ from pathlib import Path
 
 import pydantic
 
+from ml_switcheroo_ir.schema.base import AttributeType, normalize_attribute_type
+from ml_switcheroo_ir.snapshots import get_effective_snapshot_dir
 from ml_switcheroo_ir.types import JsonValue
-from ml_switcheroo_ir.validator import DEFAULT_SNAPSHOT_DIR
 
 
 class StableHloAttrSpecModel(pydantic.BaseModel):
-    """Pydantic model for a generated StableHLO operator attribute schema."""
+    """Pydantic model for a generated StableHLO operator attribute schema.
+
+    Attributes:
+        name (str): Attribute identifier name.
+        type (str): Normalized attribute type string.
+        required (bool): Whether the attribute is required on the op.
+        default (JsonValue): Optional default attribute value.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
@@ -26,7 +34,15 @@ class StableHloAttrSpecModel(pydantic.BaseModel):
 
 
 class StableHloOpSpecModel(pydantic.BaseModel):
-    """Pydantic model for a generated StableHLO operator schema."""
+    """Pydantic model for a generated StableHLO operator schema.
+
+    Attributes:
+        name (str): StableHLO operation mnemonic.
+        domain (str): Dialect domain ('stablehlo').
+        inputs (list[str]): Ordered SSA operand names.
+        outputs (list[str]): Ordered SSA result names.
+        attributes (list[StableHloAttrSpecModel]): Structured attribute specifications.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
@@ -140,9 +156,21 @@ def _infer_stablehlo_attr_spec(op_name: str, a_name: str, a_info: JsonValue) -> 
         py_type = "int"
     elif "FloatAttr" in a_type or "F32" in a_type or "F64" in a_type or a_type == "number":
         py_type = "float"
-    elif "Array" in a_type or a_type == "array" or (isinstance(a_info, dict) and "items" in a_info) or a_name in _ARRAY_STABLEHLO_ATTRS:
+    elif (
+        "Array" in a_type
+        or a_type == "array"
+        or (isinstance(a_info, dict) and "items" in a_info)
+        or a_name in _ARRAY_STABLEHLO_ATTRS
+    ):
         py_type = "List[int]" if a_name != "precision_config" else "List[str]"
-    elif "Dictionary" in a_type or "NumbersAttr" in a_type or "Numbers" in a_type or a_type == "object" or (isinstance(a_info, dict) and "properties" in a_info) or a_name in _DICT_STABLEHLO_ATTRS:
+    elif (
+        "Dictionary" in a_type
+        or "NumbersAttr" in a_type
+        or "Numbers" in a_type
+        or a_type == "object"
+        or (isinstance(a_info, dict) and "properties" in a_info)
+        or a_name in _DICT_STABLEHLO_ATTRS
+    ):
         py_type = "dict"
 
     model = StableHloAttrSpecModel(
@@ -175,10 +203,18 @@ def _extract_stablehlo_attributes(op_name: str, attrs_raw: JsonValue) -> list[di
                 a_name = str(a.get("name") or "").strip()
                 if a_name:
                     def_val: JsonValue = a.get("default", None)
+                    req_flag = bool(a.get("required", False))
+                    if op_name == "convolution" and a_name in ("dimension_numbers", "padding"):
+                        req_flag = True
+                    raw_t = str(a.get("type", "str"))
+                    if a_name in ("dimension_numbers", "dot_dimension_numbers"):
+                        norm_t = AttributeType.DICT.value
+                    else:
+                        norm_t = normalize_attribute_type(raw_t).value
                     model = StableHloAttrSpecModel(
                         name=a_name,
-                        type=str(a.get("type", "str")),
-                        required=bool(a.get("required", False)),
+                        type=norm_t,
+                        required=req_flag,
                         default=def_val,
                     )
                     attributes.append(model.model_dump())
@@ -222,20 +258,56 @@ def extract_stablehlo_schemas(
         seen.add(op_name)
 
         raw_operands = raw.get("operands")
-        inputs = [str(opnd.get("name") or "").strip() for opnd in raw_operands if isinstance(opnd, dict) and str(opnd.get("name") or "").strip()] if isinstance(raw_operands, list) else []
+        inputs = (
+            [
+                str(opnd.get("name") or "").strip()
+                for opnd in raw_operands
+                if isinstance(opnd, dict) and str(opnd.get("name") or "").strip()
+            ]
+            if isinstance(raw_operands, list)
+            else []
+        )
         raw_returns = raw.get("returns")
-        outputs = ([str(ret.get("name") or "").strip() for ret in raw_returns if isinstance(ret, dict) and str(ret.get("name") or "").strip()] if isinstance(raw_returns, list) else []) or ["result"]
+        if not isinstance(raw_returns, list):
+            raw_returns = raw.get("results")
+        outputs = (
+            [
+                str(ret.get("name") or "").strip()
+                for ret in raw_returns
+                if isinstance(ret, dict) and str(ret.get("name") or "").strip()
+            ]
+            if isinstance(raw_returns, list)
+            else []
+        )
+        if not outputs and raw.get("returns") is not None:
+            outputs = ["result"]
 
         op_model = StableHloOpSpecModel(
             name=op_name,
             domain="stablehlo",
             inputs=inputs,
             outputs=outputs,
-            attributes=[StableHloAttrSpecModel.model_validate(attr) for attr in _extract_stablehlo_attributes(op_name, raw.get("attributes"))],
+            attributes=[
+                StableHloAttrSpecModel.model_validate(attr)
+                for attr in _extract_stablehlo_attributes(op_name, raw.get("attributes"))
+            ],
         )
         ops.append(op_model.model_dump())
 
     return ops
+
+
+def _default_stablehlo_snapshot_path() -> str:
+    """Resolve the default StableHLO snapshot manifest path (preferring exhaustive).
+
+    Returns:
+        str: Path to ``stablehlo_exhaustive.json`` or ``stablehlo_v1.9.0.json``.
+    """
+    base_dir = get_effective_snapshot_dir()
+    exhaustive = os.path.join(base_dir, "stablehlo_exhaustive.json")
+    if os.path.isfile(exhaustive):
+        return exhaustive
+    return os.path.join(base_dir, "stablehlo_v1.9.0.json")
 
 
 def main(snapshot_path: str | None = None, output_path: str | None = None) -> None:
@@ -245,10 +317,19 @@ def main(snapshot_path: str | None = None, output_path: str | None = None) -> No
         snapshot_path (str | None): Source snapshot file path.
         output_path (str | None): Target stablehlo_ops.json path.
     """
-    target_snap = snapshot_path if snapshot_path is not None else (sys.argv[1] if len(sys.argv) > 1 else os.path.join(DEFAULT_SNAPSHOT_DIR, "stablehlo_v1.9.0.json"))
-    target_out = output_path if output_path is not None else (sys.argv[2] if len(sys.argv) > 2 else "src/ml_switcheroo_ir/schema/stablehlo_ops.json")
+    target_snap = (
+        snapshot_path
+        if snapshot_path is not None
+        else (sys.argv[1] if len(sys.argv) > 1 else _default_stablehlo_snapshot_path())
+    )
+    target_out = (
+        output_path
+        if output_path is not None
+        else (sys.argv[2] if len(sys.argv) > 2 else "src/ml_switcheroo_ir/schema/catalogs/stablehlo_ops.json")
+    )
 
     ops = extract_stablehlo_schemas(target_snap)
+    Path(target_out).parent.mkdir(parents=True, exist_ok=True)
     with open(target_out, "w", encoding="utf-8") as f:
         json.dump({"ops": ops}, f, indent=2)
 

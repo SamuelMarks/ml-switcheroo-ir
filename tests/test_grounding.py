@@ -319,14 +319,20 @@ def test_grounding_validator_fuzzy_suggestions() -> None:
     node_fuzzy_global = LogicalNode(id="n3", op_type="addff", domain="other")
     errors_fuzzy_global = gv.validate_grounding(node_fuzzy_global)
     assert len(errors_fuzzy_global) == 1
-    assert "Did you mean 'addf'?" in errors_fuzzy_global[0].message or "Did you mean 'arith.addf'?" in errors_fuzzy_global[0].message
+    assert (
+        "Did you mean 'addf'?" in errors_fuzzy_global[0].message
+        or "Did you mean 'arith.addf'?" in errors_fuzzy_global[0].message
+    )
     assert errors_fuzzy_global[0].suggested_fix in ("addf", "arith.addf")
 
     # 3b. Empty domain fuzzy match
     node_fuzzy_empty_dom = LogicalNode(id="n3b", op_type="addff", domain="")
     errors_fuzzy_empty = gv.validate_grounding(node_fuzzy_empty_dom)
     assert len(errors_fuzzy_empty) == 1
-    assert "Did you mean 'addf'?" in errors_fuzzy_empty[0].message or "Did you mean 'arith.addf'?" in errors_fuzzy_empty[0].message
+    assert (
+        "Did you mean 'addf'?" in errors_fuzzy_empty[0].message
+        or "Did you mean 'arith.addf'?" in errors_fuzzy_empty[0].message
+    )
     assert errors_fuzzy_empty[0].suggested_fix in ("addf", "arith.addf")
 
     # 4. Far distance hallucination (> 3 edit distance): no suggestion
@@ -490,16 +496,86 @@ def test_grounding_against_dumped_ir_snapshot(tmp_path: Path) -> None:
 def test_grounding_against_ml_ecosystem_snapshots_golden_fallback(
     tmp_path: Path,
 ) -> None:
-    """Test fallback branch when live snapshot directory has no stablehlo*.json files.
+    """Verify SnapshotEnvelope operations, instructions, categories, and nested subgraphs against live snapshots.
 
     Args:
         tmp_path (Path): Temporary path fixture.
     """
+    from ml_switcheroo_ir.snapshots import get_default_snapshots_dir
+    from ml_switcheroo_ir.validator import DiagnosticSeverity, GroundingDiagnostic, GroundingReport
+
     empty_snap_dir = tmp_path / "empty_snaps"
     empty_snap_dir.mkdir(parents=True, exist_ok=True)
     with patch("ml_switcheroo_ir.validator.DEFAULT_SNAPSHOT_DIR", str(empty_snap_dir)):
         test_grounding_against_ml_ecosystem_snapshots_golden(tmp_path)
-    assert empty_snap_dir.is_dir()
+
+    envelope_path = tmp_path / "combined_envelope.json"
+    envelope_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "0.0.6",
+                "target": "hybrid_ir",
+                "categories": {"array": [{"name": "add", "api_path": "array_api.add"}]},
+                "operations": [{"name": "dot_general", "api_path": "stablehlo.dot_general"}],
+                "instructions": [{"mnemonic": "FFMA", "api_path": "nvidia_sass.inst.FFMA"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    gv = GroundingValidator(snapshot_manifest=str(envelope_path))
+    nested = LogicalGraph(
+        name="NestedSubgraph",
+        nodes={
+            "dot": LogicalNode(id="dot", op_type="dot_general", domain="stablehlo"),
+            "bad": LogicalNode(id="bad", op_type="nonexistent_op", domain="stablehlo"),
+        },
+        outputs=["dot"],
+    )
+    root = LogicalGraph(
+        name="RootEnvelopeGraph",
+        nodes={
+            "arr_add": LogicalNode(id="arr_add", op_type="add", domain="array_api", subgraphs={"region": nested}),
+            "sass_fma": LogicalNode(id="sass_fma", op_type="FFMA", domain="nvidia_sass"),
+        },
+        outputs=["sass_fma"],
+    )
+    report = gv.audit_graph(root)
+    assert isinstance(report, GroundingReport)
+    assert report.total_nodes == 4
+    assert report.grounded_count == 3
+    assert report.ungrounded_count == 1
+    assert not report.is_grounded
+    assert report.has_errors
+
+    diag = GroundingDiagnostic(field="op_type", message="ungrounded", severity=DiagnosticSeverity.ERROR, node_id="bad")
+    assert diag.attribute == "op_type"
+    assert diag.level.name == "ERROR"
+
+    from ml_switcheroo_ir.validator import ValidationError, ValidationLevel
+
+    warn_only_rep = GroundingReport(
+        is_grounded=True,
+        target="graph",
+        symbol="WarnOnly",
+        diagnostics=[ValidationError(node_id="n", attribute="a", message="warn", level=ValidationLevel.WARNING)],
+    )
+    assert not warn_only_rep.has_errors
+    warn_only_rep.add_diagnostic("f1", "err1", DiagnosticSeverity.ERROR)
+    warn_only_rep.add_diagnostic("f2", "err2", DiagnosticSeverity.ERROR)
+    assert warn_only_rep.ungrounded_count == 1
+
+    live_dir = get_default_snapshots_dir()
+    assert live_dir != ""
+    gv_live = GroundingValidator(snapshot_manifest=str(Path(live_dir) / "stablehlo_v1.9.0.json"))
+    live_report = gv_live.audit_graph(
+        LogicalGraph(
+            name="LiveStableHLO",
+            nodes={"add0": LogicalNode(id="add0", op_type="add", domain="stablehlo")},
+            outputs=["add0"],
+        )
+    )
+    assert live_report.is_grounded
+    assert live_report.ungrounded_count == 0
 
 
 def test_snapshots_dir_resolution_env_and_siblings(tmp_path: Path) -> None:
@@ -533,7 +609,9 @@ def test_snapshots_dir_resolution_env_and_siblings(tmp_path: Path) -> None:
         patch("importlib.util.find_spec", return_value=None),
         patch(
             "os.path.isdir",
-            side_effect=lambda d: ".cache/ml_ecosystem_snapshots" in str(d) or (".cache" in str(d) and "ml_ecosystem_snapshots" in str(d)),
+            side_effect=lambda d: (
+                ".cache/ml_ecosystem_snapshots" in str(d) or (".cache" in str(d) and "ml_ecosystem_snapshots" in str(d))
+            ),
         ),
         patch("os.listdir", return_value=["snapshot.json"]),
     ):
@@ -694,6 +772,9 @@ def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> N
 
             Returns:
                 ExtendedGhostRef | None: Never returns.
+
+            Raises:
+                RuntimeError: Always raised to exercise fallback handling.
             """
             raise RuntimeError(f"broken get_symbol for {target}.{symbol}")
 
@@ -707,6 +788,9 @@ def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> N
 
             Returns:
                 str | None: Never returns.
+
+            Raises:
+                RuntimeError: Always raised to exercise fallback handling.
             """
             raise RuntimeError(f"broken suggest for {target}.{symbol} ({max_distance})")
 
@@ -743,3 +827,36 @@ def test_grounding_validator_snapshots_dir_and_multi_target(tmp_path: Path) -> N
         attributes={"base_param": 1, "ov_param_2": 2},
     )
     assert gv_v6.validate_grounding(ov_node) == []
+
+    # SnapshotEnvelope with categories={} plus operations/instructions and nested subgraphs
+    env_manifest = {
+        "categories": {},
+        "operations": [{"name": "stablehlo.add", "api_path": "stablehlo.add"}, "ignored_str"],
+        "instructions": [{"mnemonic": "FADD", "api_path": "sass.FADD"}],
+    }
+    gv_env = GroundingValidator(snapshot_manifest=env_manifest)
+    assert "stablehlo.add" in gv_env.grounded_symbols
+    assert "FADD" in gv_env.grounded_symbols
+
+    sub_graph = LogicalGraph(
+        name="InnerSub",
+        nodes={
+            "inner_ok": LogicalNode(id="inner_ok", op_type="add", domain="stablehlo"),
+            "inner_bad": LogicalNode(id="inner_bad", op_type="hallucinated_op", domain="stablehlo"),
+        },
+    )
+    outer_graph = LogicalGraph(
+        name="Outer",
+        nodes={
+            "outer_if": LogicalNode(
+                id="outer_if",
+                op_type="FADD",
+                domain="sass",
+                subgraphs={"body": sub_graph, "meta": "scalar"},
+            )
+        },
+    )
+    audit_rep = gv_env.audit_graph(outer_graph)
+    assert audit_rep.total_nodes == 3
+    assert audit_rep.grounded_count == 2
+    assert audit_rep.ungrounded_count == 1

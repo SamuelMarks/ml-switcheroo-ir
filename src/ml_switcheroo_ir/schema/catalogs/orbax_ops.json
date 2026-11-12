@@ -1,0 +1,104 @@
+{
+  "ops": [
+    {
+      "name": "PyTreeCheckpointer",
+      "domain": "orbax",
+      "version": 1,
+      "inputs": [],
+      "outputs": [
+        "checkpointer"
+      ],
+      "attributes": [
+        {
+          "name": "primary_host",
+          "type": "int",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "use_ocdbt",
+          "type": "bool",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "use_zarr3",
+          "type": "bool",
+          "required": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "StandardCheckpointer",
+      "domain": "orbax",
+      "version": 1,
+      "inputs": [],
+      "outputs": [
+        "checkpointer"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "CheckpointManager",
+      "domain": "orbax",
+      "version": 1,
+      "inputs": [
+        "directory",
+        "checkpointers"
+      ],
+      "outputs": [
+        "manager"
+      ],
+      "attributes": []
+    },
+    {
+      "name": "AsyncCheckpointer",
+      "domain": "orbax",
+      "version": 1,
+      "inputs": [
+        "handler"
+      ],
+      "outputs": [
+        "checkpointer"
+      ],
+      "attributes": [
+        {
+          "name": "timeout_secs",
+          "type": "int",
+          "required": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "name": "SaveArgs",
+      "domain": "orbax",
+      "version": 1,
+      "inputs": [],
+      "outputs": [
+        "save_args"
+      ],
+      "attributes": [
+        {
+          "name": "aggregate",
+          "type": "bool",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "dtype",
+          "type": "str",
+          "required": false,
+          "default": null
+        },
+        {
+          "name": "chunk_byte_size",
+          "type": "int",
+          "required": false,
+          "default": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,11 @@
-"""Schema and validation for ml_switcheroo_ir."""
+"""Schema and validation models for ml_switcheroo_ir."""
 
 from ml_switcheroo_ir.schema.base import (
     REGISTRY_LOCK,
+    AttributeType,
+    LazyMetadataMap,
+    SchemaRegistry,
+    normalize_attribute_type,
     override_registry,
 )
 from ml_switcheroo_ir.schema.custom_ops import (
@@ -34,10 +38,13 @@ from ml_switcheroo_ir.schema.ghost import (
     GhostRef,
     GhostResult,
     IRParameterRole,
+    LogicConstraint,
+    LogicOp,
     OperandDirection,
     ParameterKind,
     SemanticTier,
     SnapshotEnvelope,
+    StandardMap,
 )
 from ml_switcheroo_ir.schema.low_level_registries import (
     METAL_REGISTRY,
@@ -46,7 +53,12 @@ from ml_switcheroo_ir.schema.low_level_registries import (
     WEBGL_REGISTRY,
     WGSL_REGISTRY,
 )
-from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
+from ml_switcheroo_ir.schema.mlir_registry import (
+    CORE_MLIR_DIALECT_NAMES,
+    MLIR_REGISTRY,
+    build_core_mlir_dialects,
+    resolve_mlir_op_schema,
+)
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpAttribute, OpSchema
 from ml_switcheroo_ir.schema.rdna_registry import (
     RDNA_REGISTRY,
@@ -62,9 +74,14 @@ from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
 __all__ = [
     "ARRAY_API_REGISTRY",
     "ATEN_REGISTRY",
+    "AttributeType",
     "CHEX_REGISTRY",
+    "CORE_MLIR_DIALECT_NAMES",
     "CUSTOM_OPS_REGISTRY",
     "GRAIN_REGISTRY",
+    "LazyMetadataMap",
+    "LogicConstraint",
+    "LogicOp",
     "METAL_REGISTRY",
     "MLIR_REGISTRY",
     "ODL_CATALOG",
@@ -81,6 +98,8 @@ __all__ = [
     "SASS_REGISTRY",
     "STABLEHLO_REGISTRY",
     "STATE_OPS_REGISTRY",
+    "SchemaRegistry",
+    "StandardMap",
     "WASM_REGISTRY",
     "WEBGL_REGISTRY",
     "WGSL_REGISTRY",
@@ -104,6 +123,9 @@ __all__ = [
     "Registry",
     "SemanticTier",
     "SnapshotEnvelope",
+    "build_core_mlir_dialects",
     "get_abstract_op",
+    "normalize_attribute_type",
     "override_registry",
+    "resolve_mlir_op_schema",
 ]

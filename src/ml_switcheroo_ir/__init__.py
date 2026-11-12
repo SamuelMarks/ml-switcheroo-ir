@@ -42,7 +42,6 @@ from ml_switcheroo_ir.graph import (
     VersionedOutputList,
     _load_zstandard,
     topological_sort,
-    zstandard,
 )
 from ml_switcheroo_ir.schema.framework_registries import (
     ARRAY_API_REGISTRY,
@@ -92,6 +91,8 @@ from ml_switcheroo_ir.types import (
     ShapeMetadataType,
     TensorShape,
     TensorSpec,
+    is_dynamic_dimension,
+    is_symbolic_dimension,
 )
 from ml_switcheroo_ir.validator import (
     DiagnosticSeverity,
@@ -173,9 +174,10 @@ __all__ = [
     "generate_typescript_definitions",
     "get_abstract_op",
     "get_json_schema",
+    "is_dynamic_dimension",
+    "is_symbolic_dimension",
     "matmul_shape",
     "normalize_axis",
     "propagate_shapes_and_constants",
     "topological_sort",
-    "zstandard",
 ]

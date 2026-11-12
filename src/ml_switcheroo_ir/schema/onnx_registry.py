@@ -10,7 +10,14 @@ from pathlib import Path
 
 import pydantic
 
-from ml_switcheroo_ir.schema.base import REGISTRY_LOCK, OpAttribute, OpSchema
+from ml_switcheroo_ir.schema.base import (
+    REGISTRY_LOCK,
+    AttributeType,
+    OpAttribute,
+    OpSchema,
+    SchemaRegistry,
+    load_bundled_catalog_json,
+)
 from ml_switcheroo_ir.snapshots import find_schema_file
 from ml_switcheroo_ir.types import AttributeValue, JsonValue
 
@@ -55,7 +62,8 @@ def _parse_onnx_fallback_ops(
     """Convert raw upstream ONNX snapshot operator entries into OpSchema instances.
 
     Args:
-        raw_ops (Sequence[Mapping[str, JsonValue | Sequence[pydantic.BaseModel | dict[str, JsonValue]]]]): Raw operator records from _load_onnx_ops().
+        raw_ops (Sequence[Mapping[str, JsonValue | Sequence[pydantic.BaseModel | dict[str, JsonValue]]]]):
+            Raw operator records from ``_load_onnx_ops()``.
 
     Returns:
         dict[str, OpSchema]: Mapping of operator names to OpSchema definitions.
@@ -69,19 +77,25 @@ def _parse_onnx_fallback_ops(
         raw_attrs = op_data.get("attributes", [])
         if isinstance(raw_attrs, list):
             for a_raw in raw_attrs:
-                a_dict = a_raw.model_dump() if isinstance(a_raw, pydantic.BaseModel) else (a_raw if isinstance(a_raw, dict) else {})
+                a_dict = (
+                    a_raw.model_dump()
+                    if isinstance(a_raw, pydantic.BaseModel)
+                    else (a_raw if isinstance(a_raw, dict) else {})
+                )
                 if "name" in a_dict:
                     a_name = str(a_dict["name"])
                     parsed_default = _parse_onnx_proto_default(a_dict.get("default"))
                     attributes[a_name] = OpAttribute(
                         name=a_name,
-                        type=str(a_dict.get("type", "Any")),
+                        type=str(a_dict.get("type", AttributeType.ANY.value)),
                         required=bool(a_dict.get("required", False)),
                         default=parsed_default,
                     )
         elif isinstance(raw_attrs, dict):
             for a_name, a_val in raw_attrs.items():
-                val_type = a_val.get("type", "Any") if isinstance(a_val, dict) else "Any"
+                val_type = (
+                    a_val.get("type", AttributeType.ANY.value) if isinstance(a_val, dict) else AttributeType.ANY.value
+                )
                 val_req = a_val.get("required", False) if isinstance(a_val, dict) else False
                 val_def = _parse_onnx_proto_default(a_val.get("default")) if isinstance(a_val, dict) else None
                 attributes[str(a_name)] = OpAttribute(
@@ -94,9 +108,17 @@ def _parse_onnx_fallback_ops(
         ver = int(raw_ver) if isinstance(raw_ver, (int, str)) else 1
         raw_sv = op_data.get("schema_version")
         raw_inputs = op_data.get("inputs", [])
-        inputs_list = [str(i) for i in raw_inputs] if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, (str, bytes)) else []
+        inputs_list = (
+            [str(i) for i in raw_inputs]
+            if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, (str, bytes))
+            else []
+        )
         raw_outputs = op_data.get("outputs", [])
-        outputs_list = [str(o) for o in raw_outputs] if isinstance(raw_outputs, Sequence) and not isinstance(raw_outputs, (str, bytes)) else []
+        outputs_list = (
+            [str(o) for o in raw_outputs]
+            if isinstance(raw_outputs, Sequence) and not isinstance(raw_outputs, (str, bytes))
+            else []
+        )
         loaded[name] = OpSchema(
             name=name,
             domain=str(op_data.get("domain") or "ai.onnx"),
@@ -109,66 +131,104 @@ def _parse_onnx_fallback_ops(
     return loaded
 
 
-ONNX_REGISTRY: dict[str, OpSchema] = {}
+def _parse_onnx_json_dict(data: Mapping[str, JsonValue]) -> dict[str, OpSchema]:
+    """Parse an ONNX JSON catalog dictionary into OpSchema instances.
+
+    Args:
+        data (Mapping[str, JsonValue]): Dictionary mapping operator names to raw schema specs.
+
+    Returns:
+        dict[str, OpSchema]: Parsed ONNX operator schemas.
+    """
+    loaded: dict[str, OpSchema] = {}
+    for op_name, op_data in data.items():
+        if not isinstance(op_data, Mapping):
+            continue
+        raw_attrs = op_data.get("attributes", {})
+        attributes: dict[str, OpAttribute] = {}
+        if isinstance(raw_attrs, Mapping):
+            for attr_name, attr_data in raw_attrs.items():
+                if isinstance(attr_data, Mapping):
+                    attributes[str(attr_name)] = OpAttribute(
+                        name=str(attr_name),
+                        type=str(attr_data.get("type", AttributeType.ANY.value)),
+                        required=bool(attr_data.get("required", False)),
+                        default=_parse_onnx_proto_default(attr_data.get("default", None)),
+                    )
+        raw_ver = op_data.get("version", 1)
+        ver = int(raw_ver) if isinstance(raw_ver, (int, str)) else 1
+        raw_sv = op_data.get("schema_version")
+        raw_inputs = op_data.get("inputs", [])
+        inputs_list = (
+            [str(x) for x in raw_inputs]
+            if isinstance(raw_inputs, Sequence) and not isinstance(raw_inputs, (str, bytes))
+            else []
+        )
+        raw_outputs = op_data.get("outputs", [])
+        outputs_list = (
+            [str(x) for x in raw_outputs]
+            if isinstance(raw_outputs, Sequence) and not isinstance(raw_outputs, (str, bytes))
+            else []
+        )
+        loaded[str(op_name)] = OpSchema(
+            name=str(op_name),
+            domain=str(op_data.get("domain", "ai.onnx")),
+            version=ver,
+            attributes=attributes,
+            inputs=inputs_list,
+            outputs=outputs_list,
+            schema_version=int(raw_sv) if isinstance(raw_sv, int) else ver,
+        )
+    return loaded
+
+
+def _initialize_onnx_registry() -> None:
+    """Lazy loader populating ``ONNX_REGISTRY`` on first access under ``REGISTRY_LOCK``."""
+    load_onnx_schemas()
+
+
+ONNX_REGISTRY: SchemaRegistry = SchemaRegistry("ONNX_REGISTRY", loader=_initialize_onnx_registry)
 
 
 def load_onnx_schemas(json_path: Path | str | None = None) -> dict[str, OpSchema]:
-    """Dynamically load ONNX schemas from onnx_ops.json or upstream snapshot into ONNX_REGISTRY.
+    """Dynamically load ONNX schemas from external snapshot, bundled catalog, or upstream spec.
 
     Args:
-        json_path (Optional[Union[Path, str]]): Optional custom path to onnx_ops.json.
+        json_path (Path | str | None): Optional custom path to onnx_ops.json.
 
     Returns:
         dict[str, OpSchema]: Mapping of operator names to OpSchema objects.
     """
     with REGISTRY_LOCK:
-        if ONNX_REGISTRY and json_path is None:
-            return ONNX_REGISTRY
+        if ONNX_REGISTRY.is_loaded and len(ONNX_REGISTRY) > 0 and json_path is None:
+            return ONNX_REGISTRY.copy()
 
         target = find_schema_file("onnx_ops.json", override_path=json_path)
         if (target is None or not target.exists()) and json_path is not None:
-            return dict(ONNX_REGISTRY)
+            return ONNX_REGISTRY.copy()
 
         loaded: dict[str, OpSchema] = {}
 
         if target is not None and target.exists():
             with open(target, encoding="utf-8") as f:
                 data = json.load(f)
-
-            for op_name, op_data in data.items():
-                attributes = {
-                    attr_name: OpAttribute(
-                        name=attr_name,
-                        type=attr_data.get("type", "Any"),
-                        required=attr_data.get("required", False),
-                        default=attr_data.get("default", None),
-                    )
-                    for attr_name, attr_data in op_data.get("attributes", {}).items()
-                }
-                ver = int(op_data.get("version", 1))
-                raw_sv = op_data.get("schema_version")
-                loaded[op_name] = OpSchema(
-                    name=op_name,
-                    domain=op_data.get("domain", "ai.onnx"),
-                    version=ver,
-                    attributes=attributes,
-                    inputs=op_data.get("inputs", []),
-                    outputs=op_data.get("outputs", []),
-                    schema_version=int(raw_sv) if isinstance(raw_sv, int) else ver,
-                )
+            if isinstance(data, Mapping):
+                loaded = _parse_onnx_json_dict(data)
         else:
+            bundled = load_bundled_catalog_json("onnx_ops.json")
+            if bundled is not None:
+                loaded = _parse_onnx_json_dict(bundled)
+
+        if not loaded and json_path is None:
             try:
                 from ml_ecosystem_snapshots.frameworks.onnx_spec import _load_onnx_ops
 
                 loaded.update(_parse_onnx_fallback_ops(_load_onnx_ops()))
-            except (ImportError, AttributeError, ValueError, OSError) as exc:
+            except (ImportError, SyntaxError, AttributeError, ValueError, OSError) as exc:
                 _logger.debug("Fallback ONNX schema loading skipped: %s", exc)
 
         if json_path is None:
             ONNX_REGISTRY.clear()
             ONNX_REGISTRY.update(loaded)
-            return ONNX_REGISTRY
+            return ONNX_REGISTRY.copy()
         return loaded
-
-
-load_onnx_schemas()

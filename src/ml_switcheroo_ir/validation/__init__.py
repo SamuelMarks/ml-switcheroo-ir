@@ -69,3 +69,5 @@ __all__ = [
     "validate_sharding_propagation_graph",
     "validate_vopd_pairing",
 ]
+
+VALIDATION_PUBLIC_API: tuple[str, ...] = tuple(__all__)
