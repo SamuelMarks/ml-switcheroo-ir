@@ -21,6 +21,11 @@ jobs:
       with:
         python-version: '3.12'
 
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: '22'
+
     - name: Checkout ml-ecosystem-snapshots
       uses: actions/checkout@v7
       with:
@@ -36,10 +41,14 @@ jobs:
         mv ml-ecosystem-snapshots ../ml-ecosystem-snapshots
         ln -s ../ml-ecosystem-snapshots ../ml-framework-snapshots
         mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots
+        mkdir -p ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks
         gh release download v0.0.6 -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber || gh release download -p "*.json" -R SamuelMarks/ml-ecosystem-snapshots --dir ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots --clobber
+        cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/*_exhaustive.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/frameworks/ 2>/dev/null || true
+        cp ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/snapshots/concept_map.json ../ml-ecosystem-snapshots/src/ml_ecosystem_snapshots/ 2>/dev/null || true
 
     - name: Install Dependencies
       run: |
+        npm install -g typescript
         python -m pip install --upgrade pip
         grep -v '^ml-switcheroo-ir' ../ml-ecosystem-snapshots/requirements.txt | pip install -r /dev/stdin
         pip install --no-deps -e ../ml-ecosystem-snapshots

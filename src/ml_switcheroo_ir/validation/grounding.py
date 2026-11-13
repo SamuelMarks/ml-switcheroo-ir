@@ -14,12 +14,10 @@ from pathlib import Path
 import pydantic
 import typing_extensions
 
+import ml_switcheroo_ir.snapshots as _snapshots
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.ghost import ExtendedGhostRef
 from ml_switcheroo_ir.schema.onnx_registry import OpSchema
-from ml_switcheroo_ir.snapshots import (
-    get_effective_snapshot_dir as _get_snapshot_dir,
-)
 from ml_switcheroo_ir.validation.core import (
     KNOWN_SYNONYMS,
     ValidationError,
@@ -284,7 +282,7 @@ class GroundingValidator(Validator):
         self._engine: GroundingEngineProtocol | None = None
 
         target = snapshot_manifest if snapshot_manifest is not None else snapshots_dir
-        default_dir = _get_snapshot_dir()
+        default_dir = _snapshots.get_effective_snapshot_dir()
 
         try:
             from ml_ecosystem_snapshots.grounding.engine import GroundingEngine
@@ -781,7 +779,7 @@ def audit_graph_grounding(
     Returns:
         GroundingReport: Resulting unified grounding report.
     """
-    default_dir = _get_snapshot_dir()
+    default_dir = _snapshots.get_effective_snapshot_dir()
     resolved_path: SnapshotManifestType
     if snapshots_path is None and os.path.isdir(default_dir):
         resolved_path = default_dir

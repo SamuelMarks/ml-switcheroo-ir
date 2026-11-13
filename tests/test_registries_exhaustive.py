@@ -588,17 +588,21 @@ def test_snapshots_discovery_precedence(tmp_path: Path) -> None:
         assert get_default_snapshots_dir() == str(env_fw_dir.resolve())
         assert get_effective_snapshot_dir() == str(env_fw_dir.resolve())
 
-    # Sibling repo root with empty snapshots subdir honors explicit path, or falls back with allow_default_fallback=True
-    sibling_root = Path(__file__).resolve().parent.parent.parent / "ml-ecosystem-snapshots"
-    with mock.patch("ml_switcheroo_ir.snapshots._has_snapshot_files", return_value=False):
-        assert (
-            resolve_snapshots_path(sibling_root)
-            == (sibling_root / "src" / "ml_ecosystem_snapshots" / "snapshots").resolve()
-        )
-        assert (
-            resolve_snapshots_path(sibling_root, allow_default_fallback=True)
-            == Path(get_effective_snapshot_dir()).resolve()
-        )
+    # Hermetic repo shell with empty nested snapshots subdir honors explicit path or falls back when enabled
+    empty_sibling_shell = tmp_path / "empty_ml_ecosystem_snapshots"
+    empty_nested_snaps = empty_sibling_shell / "src" / "ml_ecosystem_snapshots" / "snapshots"
+    empty_nested_snaps.mkdir(parents=True)
+    with mock.patch.dict("os.environ", {"ML_FRAMEWORK_SNAPSHOTS_DIR": str(env_fw_dir)}, clear=True):
+        assert resolve_snapshots_path(empty_sibling_shell) == empty_nested_snaps.resolve()
+        assert resolve_snapshots_path(empty_sibling_shell, allow_default_fallback=True) == env_fw_dir.resolve()
+
+    populated_sibling_shell = tmp_path / "populated_ml_ecosystem_snapshots"
+    populated_nested_snaps = populated_sibling_shell / "src" / "ml_ecosystem_snapshots" / "snapshots"
+    populated_nested_snaps.mkdir(parents=True)
+    (populated_nested_snaps / "snap.json").write_text("{}", encoding="utf-8")
+    assert (
+        resolve_snapshots_path(populated_sibling_shell, allow_default_fallback=True) == populated_nested_snaps.resolve()
+    )
 
     direct_snaps_root = tmp_path / "custom_repo"
     direct_snaps = direct_snaps_root / "snapshots"
