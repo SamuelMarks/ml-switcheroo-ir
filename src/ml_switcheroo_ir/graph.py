@@ -264,23 +264,31 @@ class VersionedOutputList(list[str]):
         """
 
     @typing.overload
-    def __setitem__(self, index: builtins.slice[int | None, int | None, int | None], value: Iterable[str]) -> None:
+    def __setitem__(
+        self,
+        index: builtins.slice[typing.SupportsIndex | None, typing.SupportsIndex | None, typing.SupportsIndex | None],
+        value: Iterable[str],
+    ) -> None:
         """Assign iterable of output names to slice.
 
         Args:
-            index (slice[int | None, int | None, int | None]): Target slice.
+            index (slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]): Target slice.
             value (Iterable[str]): Replacement output SSA names.
         """
 
     def __setitem__(
         self,
-        index: typing.SupportsIndex | builtins.slice[int | None, int | None, int | None],
+        index: (
+            typing.SupportsIndex
+            | builtins.slice[typing.SupportsIndex | None, typing.SupportsIndex | None, typing.SupportsIndex | None]
+        ),
         value: str | Iterable[str],
     ) -> None:
         """Assign output name(s) at index or slice and increment mutation version.
 
         Args:
-            index (SupportsIndex | slice[int | None, int | None, int | None]): Target index or slice.
+            index (SupportsIndex | slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]):
+                Target index or slice.
             value (str | Iterable[str]): Output name or sequence of output names.
         """
         if isinstance(index, builtins.slice):
@@ -289,11 +297,18 @@ class VersionedOutputList(list[str]):
             super().__setitem__(index, str(value))
         self._bump_version()
 
-    def __delitem__(self, index: typing.SupportsIndex | builtins.slice[int | None, int | None, int | None]) -> None:
+    def __delitem__(
+        self,
+        index: (
+            typing.SupportsIndex
+            | builtins.slice[typing.SupportsIndex | None, typing.SupportsIndex | None, typing.SupportsIndex | None]
+        ),
+    ) -> None:
         """Delete output name(s) at index or slice and increment mutation version.
 
         Args:
-            index (SupportsIndex | slice[int | None, int | None, int | None]): Target index or slice.
+            index (SupportsIndex | slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]):
+                Target index or slice.
         """
         super().__delitem__(index)
         self._bump_version()

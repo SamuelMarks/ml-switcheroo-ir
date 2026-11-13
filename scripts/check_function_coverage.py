@@ -130,7 +130,7 @@ def _load_or_generate_coverage_json(coverage_json_path: str | None) -> dict[str,
     os.close(fd)
     try:
         res = subprocess.run(
-            [sys.executable, "-m", "coverage", "json", "-o", tmp_path],
+            [sys.executable, "-m", "coverage", "json", "--fail-under=0", "-o", tmp_path],
             capture_output=True,
             text=True,
             check=False,

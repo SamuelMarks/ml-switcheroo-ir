@@ -2974,6 +2974,12 @@ def test_verify_onnx_grounding_snapshot_mismatches(tmp_path: Path) -> None:
         with patch("scripts.generate_registry.extract_onnx_from_defs", return_value={"Already": {"version": 1}}):
             _ = _supplement_onnx_defs_specs({"Already": {"name": "Already"}}, is_partial=True)
 
+    from scripts.generate_registry import extract_onnx_from_defs
+
+    hist_defs = extract_onnx_from_defs(target_versions={"Relu": 6, "Add": 999999})
+    assert hist_defs["Relu"]["version"] == 6
+    assert isinstance(hist_defs["Add"]["version"], int) and hist_defs["Add"]["version"] != 999999
+
 
 def test_verify_concept_map_and_translation_grounding_branches(tmp_path: Path) -> None:
     """Verify Quantization, State, ODL, and ParameterTranslationEngine snapshot checks.

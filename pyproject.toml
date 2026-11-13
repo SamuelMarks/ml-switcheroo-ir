@@ -27,6 +27,7 @@ dynamic = ["version", "dependencies"]
 [project.optional-dependencies]
 format = ["black"]
 test = [
+    "black",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff",
@@ -124,12 +125,9 @@ warn_required_dynamic_aliases = true
 [[tool.mypy.overrides]]
 module = [
     "tabulate",
-    "ml_ecosystem_snapshots",
     "ml_ecosystem_snapshots.*",
     "onnx",
     "onnx.*",
-    "jsonschema",
-    "jsonschema.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

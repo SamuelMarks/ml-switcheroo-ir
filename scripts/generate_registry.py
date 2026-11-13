@@ -303,8 +303,45 @@ def extract_onnx_from_snapshot_json(snapshot_file: Path | str) -> dict[str, dict
     return ops
 
 
-def extract_onnx_from_defs() -> dict[str, dict[str, OnnxOpEntryValue]]:
+def _onnx_schema_to_spec_dict(schema: OnnxSchemaProtocol) -> dict[str, OnnxOpEntryValue]:
+    """Serialize an ``OnnxSchemaProtocol`` descriptor into a dumped ``OnnxOpSpecModel`` dictionary.
+
+    Args:
+        schema (OnnxSchemaProtocol): Upstream ``onnx.defs`` operator schema object.
+
+    Returns:
+        dict[str, OnnxOpEntryValue]: Normalized operator specification dictionary.
+    """
+    attrs_out: dict[str, dict[str, JsonValue]] = {}
+    for attr_name, attr_def in schema.attributes.items():
+        raw_type_str = str(attr_def.type).split(".")[-1].lower()
+        raw_def = str(attr_def.default_value).strip() if attr_def.default_value.ByteSize() > 0 else None
+        attrs_out[str(attr_name)] = OnnxAttrSpecModel(
+            type=map_onnx_attribute_type(raw_type_str),
+            required=bool(attr_def.required),
+            default=_parse_proto_default_str(raw_def),
+        ).model_dump()
+    domain_str = str(schema.domain) if schema.domain else "ai.onnx"
+    return OnnxOpSpecModel(
+        domain=domain_str,
+        version=int(schema.since_version),
+        attributes=attrs_out,
+        inputs=[str(inp.name) for inp in schema.inputs],
+        outputs=[str(out.name) for out in schema.outputs],
+    ).model_dump()
+
+
+def extract_onnx_from_defs(
+    target_versions: Mapping[str, int] | None = None,
+) -> dict[str, dict[str, OnnxOpEntryValue]]:
     """Extract canonical ONNX operator schemas via ``onnx.defs.get_all_schemas_with_history()``.
+
+    When ``target_versions`` is provided, resolves the exact historical ``since_version``
+    matching ``target_versions[op_name]`` when present in ``onnx.defs`` history so that
+    pinned catalog opset versions remain grounded across newer ``onnx`` releases.
+
+    Args:
+        target_versions (Mapping[str, int] | None): Optional desired ``since_version`` per operator name.
 
     Returns:
         dict[str, dict[str, OnnxOpEntryValue]]: Grounded operator dictionary keyed by operator name.
@@ -314,10 +351,12 @@ def extract_onnx_from_defs() -> dict[str, dict[str, OnnxOpEntryValue]]:
         import onnx.defs
 
         history_schemas: Sequence[OnnxSchemaProtocol] = onnx.defs.get_all_schemas_with_history()
+        by_name_ver: dict[tuple[str, int], OnnxSchemaProtocol] = {}
         latest_by_name: dict[str, OnnxSchemaProtocol] = {}
         for schema in history_schemas:
             if schema.domain not in ("", "ai.onnx") or schema.deprecated:
                 continue
+            by_name_ver[(schema.name, int(schema.since_version))] = schema
             if schema.name not in latest_by_name or schema.since_version > latest_by_name[schema.name].since_version:
                 latest_by_name[schema.name] = schema
 
@@ -325,28 +364,15 @@ def extract_onnx_from_defs() -> dict[str, dict[str, OnnxOpEntryValue]]:
         for schema in current_schemas:
             if schema.domain not in ("", "ai.onnx") or schema.deprecated:
                 continue
+            by_name_ver[(schema.name, int(schema.since_version))] = schema
             if schema.name not in latest_by_name or schema.since_version >= latest_by_name[schema.name].since_version:
                 latest_by_name[schema.name] = schema
 
         for op_name in sorted(latest_by_name):
-            s = latest_by_name[op_name]
-            attrs_out: dict[str, dict[str, JsonValue]] = {}
-            for attr_name, attr_def in s.attributes.items():
-                raw_type_str = str(attr_def.type).split(".")[-1].lower()
-                raw_def = str(attr_def.default_value).strip() if attr_def.default_value.ByteSize() > 0 else None
-                attrs_out[str(attr_name)] = OnnxAttrSpecModel(
-                    type=map_onnx_attribute_type(raw_type_str),
-                    required=bool(attr_def.required),
-                    default=_parse_proto_default_str(raw_def),
-                ).model_dump()
-            domain_str = str(s.domain) if s.domain else "ai.onnx"
-            ops[op_name] = OnnxOpSpecModel(
-                domain=domain_str,
-                version=int(s.since_version),
-                attributes=attrs_out,
-                inputs=[str(inp.name) for inp in s.inputs],
-                outputs=[str(out.name) for out in s.outputs],
-            ).model_dump()
+            selected = latest_by_name[op_name]
+            if target_versions is not None and op_name in target_versions:
+                selected = by_name_ver.get((op_name, target_versions[op_name]), selected)
+            ops[op_name] = _onnx_schema_to_spec_dict(selected)
     except ImportError:
         return {}
     return ops

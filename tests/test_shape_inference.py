@@ -237,7 +237,8 @@ def test_shape_tracker_inference_and_feedback() -> None:
     )
     assert bounds_pure == {"batch": 8, "seq_len": 128, "embed_dim": 512}
     # Default mutate=False leaves node untouched
-    assert n1.shape_metadata == (si_b, sv_s, "embed_dim", 64)
+    expected_untouched: tuple[DimensionType, ...] = (si_b, sv_s, "embed_dim", 64)
+    assert n1.shape_metadata == expected_untouched
 
     bounds = ShapeTracker.resolve_dynamic_bounds(
         g,

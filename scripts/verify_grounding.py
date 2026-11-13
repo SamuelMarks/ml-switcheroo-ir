@@ -882,12 +882,14 @@ def _compare_onnx_op_against_spec(op_name: str, schema: OpSchema, gt: Mapping[st
 def _supplement_onnx_defs_specs(
     snap_specs: Mapping[str, dict[str, JsonValue]],
     is_partial: bool,
+    target_versions: Mapping[str, int] | None = None,
 ) -> dict[str, dict[str, JsonValue]]:
     """Supplement partial ONNX category snapshots with canonical ``onnx.defs`` schemas.
 
     Args:
         snap_specs (Mapping[str, dict[str, JsonValue]]): Specs parsed directly from ``onnx_*.json``.
         is_partial (bool): Whether the JSON file was a partial category summary.
+        target_versions (Mapping[str, int] | None): Optional desired opset ``since_version`` per op name.
 
     Returns:
         dict[str, dict[str, JsonValue]]: Complete ground-truth spec dictionary.
@@ -900,7 +902,12 @@ def _supplement_onnx_defs_specs(
         sys.path.insert(0, repo_root)
     from scripts.generate_registry import extract_onnx_from_defs
 
-    for def_name, def_data in extract_onnx_from_defs().items():
+    defs_map = (
+        extract_onnx_from_defs(target_versions=target_versions)
+        if target_versions is not None
+        else extract_onnx_from_defs()
+    )
+    for def_name, def_data in defs_map.items():
         if def_name not in full_specs:
             raw_in = def_data.get("inputs")
             raw_out = def_data.get("outputs")
@@ -969,7 +976,11 @@ def verify_onnx_grounding(snapshots_dir: Path | None = None, *, strict: bool = F
                 _compare_onnx_op_against_spec(snap_op_name, ONNX_REGISTRY[snap_op_name], snap_gt, onnx_file.name)
             )
 
-    full_specs = _supplement_onnx_defs_specs(snap_specs, is_partial)
+    full_specs = _supplement_onnx_defs_specs(
+        snap_specs,
+        is_partial,
+        target_versions={op_name: schema.version for op_name, schema in ONNX_REGISTRY.items()},
+    )
     for op_name, schema in ONNX_REGISTRY.items():
         if op_name not in full_specs:
             errors.append(f"ONNX op '{op_name}' is not grounded in {onnx_file.name} snapshot.")
