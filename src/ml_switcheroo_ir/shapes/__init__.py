@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from ml_switcheroo_ir.shapes.ast import (
     DimensionType,
+    DimensionValue,
     ShapeType,
     SymBinaryOp,
     SymCondition,
@@ -17,6 +18,7 @@ from ml_switcheroo_ir.shapes.ast import (
     SymPiecewise,
     SymUnaryOp,
     SymVar,
+    format_symbolic_protocol_expr,
 )
 from ml_switcheroo_ir.shapes.inference import (
     SHAPE_TRANSFER_REGISTRY,
@@ -55,6 +57,7 @@ from ml_switcheroo_ir.shapes.tracker import (
 __all__ = [
     "DimensionBound",
     "DimensionType",
+    "DimensionValue",
     "MonomialType",
     "Polynomial",
     "SHAPE_TRANSFER_REGISTRY",
@@ -80,6 +83,7 @@ __all__ = [
     "TelemetryValueType",
     "broadcast_dimension",
     "broadcast_shapes",
+    "format_symbolic_protocol_expr",
     "infer_node_shapes",
     "infer_op_output_shape",
     "matmul_shape",

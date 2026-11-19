@@ -112,7 +112,7 @@ def test_node_clone_partial_overrides() -> None:
     assert cloned.outputs == ["y_new"]
     assert cloned.shape_metadata == (4, 16)
     assert cloned.source_ast_ref == "new.py:42"
-    assert cloned.sharding is not None and cloned.sharding.axes == ("batch",)
+    assert isinstance(cloned.sharding, PartitionSpec) and cloned.sharding.axes == ("batch",)
     assert cloned.dtype == DType.float16
     assert len(cloned.output_specs) == 1
     assert cloned.device == "cpu"

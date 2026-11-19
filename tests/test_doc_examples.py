@@ -738,7 +738,7 @@ def test_usage_distributed_pipeline_and_webrtc_topologies() -> None:
         mesh=mesh,
         pipeline_topology=pipeline,
     )
-    assert graph.mesh is not None and graph.mesh.webrtc_topology is not None
+    assert isinstance(graph.mesh, LogicalMesh) and graph.mesh.webrtc_topology is not None
     assert graph.pipeline_topology is not None
 
 

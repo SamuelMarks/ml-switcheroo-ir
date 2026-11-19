@@ -7,7 +7,7 @@ from collections.abc import Mapping
 
 import pydantic
 
-from ml_switcheroo_ir.distributed import PartitionAxisElement
+from ml_switcheroo_ir.distributed import PartitionAxisElement, PartitionSpec
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalMesh, LogicalNode
 from ml_switcheroo_ir.shapes.ast import SymNode
 from ml_switcheroo_ir.types import DType, describe_value_type
@@ -186,7 +186,8 @@ def estimate_graph_communication_volume(
             or node.op_type.startswith("collective.")
             or node.op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all")
         ):
-            vol = estimate_communication_volume(node, graph.mesh, symbol_bindings=symbol_bindings)
+            logical_mesh = graph.mesh if isinstance(graph.mesh, LogicalMesh) else None
+            vol = estimate_communication_volume(node, logical_mesh, symbol_bindings=symbol_bindings)
             total_bytes += vol
             axis = str(node.attributes.get("mesh_axis", "unknown"))
             by_axis[axis] = by_axis.get(axis, 0) + vol
@@ -278,7 +279,7 @@ def validate_sharding_node(node: LogicalNode, mesh: LogicalMesh | None) -> list[
     Returns:
         list[ValidationError]: A list of sharding validation errors.
     """
-    if node.sharding is None:
+    if not isinstance(node.sharding, PartitionSpec):
         return []
 
     if mesh is None:
@@ -358,13 +359,17 @@ def _validate_elementwise_sharding(
     Returns:
         list[ValidationError]: Detected sharding propagation errors.
     """
-    if node.sharding is None:
+    if not isinstance(node.sharding, PartitionSpec):
         return []
     lvl = ValidationLevel.ERROR if level == ValidationLevel.STRICT else ValidationLevel.WARNING
     errors: list[ValidationError] = []
     for inp_id in node.inputs:
         inp_node = graph.nodes.get(inp_id) or graph.get_output_producer(inp_id)
-        if inp_node is not None and inp_node.sharding is not None and inp_node.sharding.axes != node.sharding.axes:
+        if (
+            inp_node is not None
+            and isinstance(inp_node.sharding, PartitionSpec)
+            and inp_node.sharding.axes != node.sharding.axes
+        ):
             errors.append(
                 ValidationError(
                     node_id=node.id,
@@ -409,7 +414,12 @@ def _validate_contraction_sharding(node: LogicalNode, graph: LogicalGraph) -> li
         return []
     node0 = graph.nodes.get(node.inputs[0]) or graph.get_output_producer(node.inputs[0])
     node1 = graph.nodes.get(node.inputs[1]) or graph.get_output_producer(node.inputs[1])
-    if node0 is None or node1 is None or node0.sharding is None or node1.sharding is None:
+    if (
+        node0 is None
+        or node1 is None
+        or not isinstance(node0.sharding, PartitionSpec)
+        or not isinstance(node1.sharding, PartitionSpec)
+    ):
         return []
     trans_a = bool(node.attributes.get("transA", 0))
     trans_b = bool(node.attributes.get("transB", 0))
@@ -446,8 +456,8 @@ def _validate_reduction_sharding(node: LogicalNode, graph: LogicalGraph) -> list
     if (
         not isinstance(reduced_axes, (list, tuple))
         or inp_node is None
-        or inp_node.sharding is None
-        or node.sharding is None
+        or not isinstance(inp_node.sharding, PartitionSpec)
+        or not isinstance(node.sharding, PartitionSpec)
     ):
         return []
     errors: list[ValidationError] = []
@@ -489,7 +499,7 @@ def _validate_gather_or_scatter_sharding(
     mesh_axis = node.attributes.get("mesh_axis")
     if (
         not isinstance(dim_attr, int)
-        or graph.mesh is None
+        or not isinstance(graph.mesh, LogicalMesh)
         or mesh_axis is None
         or str(mesh_axis) not in graph.mesh.shape
         or not node.inputs
@@ -557,7 +567,7 @@ def _validate_collective_node_sharding(node: LogicalNode, graph: LogicalGraph) -
                 )
             )
         mesh_axis = node.attributes.get("axis") or node.attributes.get("mesh_axis")
-        if mesh_axis is not None and graph.mesh is not None and str(mesh_axis) not in graph.mesh.shape:
+        if mesh_axis is not None and isinstance(graph.mesh, LogicalMesh) and str(mesh_axis) not in graph.mesh.shape:
             errors.append(
                 ValidationError(
                     node_id=node.id,

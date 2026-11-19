@@ -8,6 +8,7 @@ from ml_switcheroo_ir.schema.base import (
     normalize_attribute_type,
     override_registry,
 )
+from ml_switcheroo_ir.schema.catalogs import get_catalog_path
 from ml_switcheroo_ir.schema.custom_ops import (
     CUSTOM_OPS_REGISTRY,
     STATE_OPS_REGISTRY,
@@ -33,6 +34,7 @@ from ml_switcheroo_ir.schema.ghost import (
     GhostIsaRef,
     GhostMlirRef,
     GhostOperationRef,
+    GhostOverload,
     GhostParam,
     GhostPythonRef,
     GhostRef,
@@ -111,6 +113,7 @@ __all__ = [
     "GhostIsaRef",
     "GhostMlirRef",
     "GhostOperationRef",
+    "GhostOverload",
     "GhostParam",
     "GhostPythonRef",
     "GhostRef",
@@ -125,6 +128,7 @@ __all__ = [
     "SnapshotEnvelope",
     "build_core_mlir_dialects",
     "get_abstract_op",
+    "get_catalog_path",
     "normalize_attribute_type",
     "override_registry",
     "resolve_mlir_op_schema",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import builtins
 import typing
 from collections.abc import Iterable, Mapping, Sequence
@@ -10,34 +11,77 @@ from enum import Enum
 import pydantic
 import pydantic_core
 import typing_extensions
+from pydantic_core import core_schema
 
+from ml_switcheroo_ir.protocols import (
+    ArrayBufferProtocol,
+    CustomRuleHandleProtocol,
+    DeviceLikeProtocol,
+    DTypeLikeProtocol,
+    LoopOptionsProtocol,
+    MeshLikeProtocol,
+    SerializationInfoProtocol,
+    SubgraphLikeProtocol,
+    SymbolicDimProtocol,
+    SymbolicIntWrapperProtocol,
+    SymbolicNodeProtocol,
+)
 from ml_switcheroo_ir.shapes import (
     DimensionType,
+    DimensionValue,
     SymInt,
     SymNode,
     broadcast_shapes,
+    format_symbolic_protocol_expr,
     matmul_shape,
 )
 
 __all__ = [
+    "ArrayBufferProtocol",
     "AttributeValue",
     "AutodiffSentinelProtocol",
+    "CustomRuleHandleProtocol",
     "DType",
+    "DTypeLikeProtocol",
+    "DeviceLikeProtocol",
     "DimensionType",
+    "DimensionValue",
     "InitializerValue",
     "JsonValue",
+    "LoopOptionsProtocol",
+    "MeshLikeProtocol",
     "ShapeMetadataType",
+    "SubgraphLikeProtocol",
+    "SymbolicDimProtocol",
+    "SymbolicIntWrapperProtocol",
+    "SymbolicNodeProtocol",
     "TensorShape",
     "TensorSpec",
     "_validate_dimension_tuple",
     "describe_value_type",
     "is_dynamic_dimension",
     "is_symbolic_dimension",
+    "normalize_dimension_tuple",
+    "normalize_dtype",
+    "normalize_optional_dtype",
 ]
 
 JsonScalar: typing_extensions.TypeAlias = typing.Union[str, int, float, bool, None]
 
 JsonValue: typing_extensions.TypeAlias = pydantic.JsonValue
+
+
+def _is_valid_array_buffer(val: ArrayBufferProtocol) -> bool:
+    """Validate structural invariants of an ``ArrayBufferProtocol`` instance.
+
+    Args:
+        val (ArrayBufferProtocol): Candidate array buffer protocol object.
+
+    Returns:
+        bool: True if ``shape`` contains no boolean dimensions and ``tobytes()`` succeeds.
+    """
+    _ = val.tobytes()
+    return all(not isinstance(dim, bool) for dim in val.shape)
 
 
 def _validate_initializer_value(val: InitializerValue) -> InitializerValue:
@@ -54,17 +98,63 @@ def _validate_initializer_value(val: InitializerValue) -> InitializerValue:
     """
     if isinstance(val, (int, float, bool, str, bytes)):
         return val
-    if isinstance(val, list):
+    if isinstance(val, ArrayBufferProtocol):
+        if _is_valid_array_buffer(val):
+            return val
+        raise ValueError(f"Invalid ArrayBufferProtocol payload in InitializerValue: {val!r}")
+    if isinstance(val, Sequence):
         for item in val:
             _validate_initializer_value(item)
         return val
-    if isinstance(val, dict):
+    if isinstance(val, Mapping):
         for key, item in val.items():
             if not isinstance(key, str):
                 raise ValueError(f"Initializer dictionary key must be str, got {describe_value_type(key)}.")
             _validate_initializer_value(item)
         return val
     raise ValueError(f"Unsupported InitializerValue of type {describe_value_type(val)}: {val!r}")
+
+
+def _encode_json_safe_initializer(val: InitializerValue) -> JsonValue:
+    """Convert an ``InitializerValue`` into a deterministic JSON-serializable structure.
+
+    Args:
+        val (InitializerValue): Validated initializer payload.
+
+    Returns:
+        JsonValue: Deterministic JSON-compatible payload.
+    """
+    if isinstance(val, (int, float, bool, str)):
+        return val
+    if isinstance(val, bytes):
+        return {"__sw_type__": "bytes", "data": base64.b64encode(val).decode("ascii")}
+    if isinstance(val, ArrayBufferProtocol):
+        return {
+            "__sw_type__": "ArrayBuffer",
+            "data": base64.b64encode(val.tobytes()).decode("ascii"),
+            "shape": list(val.shape),
+        }
+    if isinstance(val, Mapping):
+        return {str(k): _encode_json_safe_initializer(v) for k, v in val.items()}
+    return [_encode_json_safe_initializer(item) for item in val]
+
+
+def _serialize_initializer_pydantic(
+    val: InitializerValue,
+    info: SerializationInfoProtocol,
+) -> InitializerValue | JsonValue:
+    """Serialize ``InitializerValue`` for Pydantic Python or JSON mode.
+
+    Args:
+        val (InitializerValue): Validated initializer payload.
+        info (SerializationInfoProtocol): Pydantic serialization context.
+
+    Returns:
+        InitializerValue | JsonValue: Raw value in Python mode, or JSON-safe payload in JSON mode.
+    """
+    if info.mode == "json":
+        return _encode_json_safe_initializer(val)
+    return val
 
 
 class _InitializerValuePydanticAnnotation:
@@ -86,7 +176,13 @@ class _InitializerValuePydanticAnnotation:
             pydantic_core.CoreSchema: Validating CoreSchema instance.
         """
         del source_type, handler
-        return pydantic_core.core_schema.no_info_plain_validator_function(_validate_initializer_value)
+        return core_schema.no_info_plain_validator_function(
+            _validate_initializer_value,
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                _serialize_initializer_pydantic,
+                info_arg=True,
+            ),
+        )
 
     @classmethod
     def __get_pydantic_json_schema__(
@@ -123,8 +219,9 @@ InitializerValue: typing_extensions.TypeAlias = typing.Annotated[
         bool,
         str,
         bytes,
-        list["InitializerValue"],
-        dict[str, "InitializerValue"],
+        ArrayBufferProtocol,
+        Sequence["InitializerValue"],
+        Mapping[str, "InitializerValue"],
     ],
     _InitializerValuePydanticAnnotation,
 ]
@@ -132,14 +229,15 @@ InitializerValue: typing_extensions.TypeAlias = typing.Annotated[
 
 def is_symbolic_dimension(
     dim: DimensionType | JsonValue,
-) -> typing.TypeGuard[str | SymNode | SymInt]:
-    """Narrow a dimension entry strictly to symbolic identifier/AST types (never negative ``int``).
+) -> typing.TypeGuard[str | SymNode | SymInt | SymbolicNodeProtocol | SymbolicIntWrapperProtocol]:
+    """Narrow a dimension entry strictly to symbolic identifier/AST/protocol types (never negative ``int``).
 
     Args:
         dim (DimensionType | JsonValue): Dimension entry to inspect.
 
     Returns:
-        typing.TypeGuard[str | SymNode | SymInt]: True iff ``dim`` is a symbolic ``str``, ``SymNode``, or ``SymInt``.
+        typing.TypeGuard[str | SymNode | SymInt | SymbolicNodeProtocol | SymbolicIntWrapperProtocol]:
+            True iff ``dim`` is a symbolic ``str``, ``SymNode``, ``SymInt``, or symbolic protocol.
 
     Raises:
         TypeError: If ``dim`` is a boolean value.
@@ -150,7 +248,9 @@ def is_symbolic_dimension(
         return not dim.isdigit()
     if isinstance(dim, (SymNode, SymInt)):
         return True
-    return False
+    if isinstance(dim, SymbolicIntWrapperProtocol):
+        return isinstance(dim.node, SymbolicNodeProtocol)
+    return isinstance(dim, SymbolicNodeProtocol)
 
 
 def is_dynamic_dimension(
@@ -418,6 +518,15 @@ DescribeValueTarget: typing_extensions.TypeAlias = typing.Union[
     "AttributeValue",
     InitializerValue,
     DimensionType,
+    DTypeLikeProtocol,
+    DeviceLikeProtocol,
+    SymbolicNodeProtocol,
+    SymbolicIntWrapperProtocol,
+    CustomRuleHandleProtocol,
+    LoopOptionsProtocol,
+    MeshLikeProtocol,
+    ArrayBufferProtocol,
+    SubgraphLikeProtocol,
     pydantic.BaseModel,
     Iterable[typing.Union["AttributeValue", InitializerValue, pydantic.BaseModel, "DescribeValueTarget"]],
     Mapping[str, typing.Union["AttributeValue", InitializerValue, pydantic.BaseModel, "DescribeValueTarget"]],
@@ -466,6 +575,43 @@ def describe_value_type(
     return raw_repr.strip("<>").rsplit(".", 1)[-1]
 
 
+def normalize_dtype(val: DType | DTypeLikeProtocol | str) -> DType:
+    """Normalize a ``DType``, ``DTypeLikeProtocol``, or string into a canonical ``DType``.
+
+    Args:
+        val (DType | DTypeLikeProtocol | str): Input data type representation.
+
+    Returns:
+        DType: Canonical ``DType`` enum member.
+
+    Raises:
+        TypeError: If ``val`` does not satisfy ``DType``, ``DTypeLikeProtocol``, or ``str``.
+        ValueError: If the string representation is not a supported data type.
+    """
+    if isinstance(val, DType):
+        return val
+    if isinstance(val, str):
+        return DType.from_str(val)
+    if isinstance(val, DTypeLikeProtocol):
+        if isinstance(val.value, str):
+            return DType.from_str(val.value)
+    raise TypeError(f"Unsupported dtype of type {describe_value_type(val)}: {val!r}")
+
+
+def normalize_optional_dtype(val: DType | DTypeLikeProtocol | str | None) -> DType | None:
+    """Normalize an optional ``DType | DTypeLikeProtocol | str | None`` into ``DType | None``.
+
+    Args:
+        val (DType | DTypeLikeProtocol | str | None): Optional input data type representation.
+
+    Returns:
+        DType | None: Canonical ``DType`` enum member or ``None``.
+    """
+    if val is None:
+        return None
+    return normalize_dtype(val)
+
+
 def _validate_dimension_tuple(
     dims: (
         tuple[DimensionType, ...]
@@ -489,7 +635,10 @@ def _validate_dimension_tuple(
     """
     if isinstance(dims, TensorShape):
         raw_dims: Sequence[DimensionType | float] = dims.dims
-    elif isinstance(dims, (int, str, SymNode, SymInt)):
+    elif isinstance(
+        dims,
+        (int, str, SymNode, SymInt, SymbolicNodeProtocol, SymbolicIntWrapperProtocol),
+    ):
         raw_dims = (dims,)
     else:
         raw_dims = tuple(dims) if isinstance(dims, Iterable) else (dims,)
@@ -498,10 +647,32 @@ def _validate_dimension_tuple(
     for d in raw_dims:
         if isinstance(d, bool):
             raise TypeError(f"Boolean value {d!r} is not a valid tensor dimension in TensorShape.")
-        if not isinstance(d, (int, str, SymNode, SymInt)):
+        if isinstance(d, (int, str, SymNode, SymInt)):
+            validated.append(d)
+        elif isinstance(d, SymbolicIntWrapperProtocol):
+            if not isinstance(d.node, SymbolicNodeProtocol):
+                raise TypeError(f"SymbolicIntWrapperProtocol.node {d.node!r} does not satisfy SymbolicNodeProtocol.")
+            validated.append(d)
+        elif isinstance(d, SymbolicNodeProtocol):
+            validated.append(d)
+        else:
             raise TypeError(f"Value {d!r} of type {describe_value_type(d)} is not a valid DimensionType.")
-        validated.append(d)
     return tuple(validated)
+
+
+def normalize_dimension_tuple(
+    dims: (tuple[DimensionType, ...] | Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType),
+) -> tuple[DimensionType, ...]:
+    """Public helper normalizing a shape sequence, iterable, single dimension, or ``TensorShape`` into a tuple.
+
+    Args:
+        dims (Sequence[DimensionType] | Iterable[DimensionType] | TensorShape | DimensionType):
+            Input dimensions or ``TensorShape``.
+
+    Returns:
+        tuple[DimensionType, ...]: Normalized tuple of ``DimensionType`` entries.
+    """
+    return _validate_dimension_tuple(dims)
 
 
 class TensorShape(pydantic.BaseModel):
@@ -589,33 +760,40 @@ class TensorShape(pydantic.BaseModel):
             raise ValueError(f"Shape {self.dims} contains dynamic or symbolic dimensions.")
         res: list[int] = []
         for d in self.dims:
-            if isinstance(d, (SymNode, SymInt)):
+            if isinstance(d, int):
+                res.append(d)
+            elif isinstance(d, (SymNode, SymInt)):
                 res.append(d.eval({}))
             else:
-                res.append(int(d))
+                res.append(int(str(d)))
         return tuple(res)
 
-    def evaluate(self, bindings: dict[str, int]) -> tuple[int, ...]:
+    def evaluate(self, bindings: Mapping[str, int]) -> tuple[int, ...]:
         """Evaluate all symbolic dimensions into concrete integers using runtime bindings.
 
         Args:
-            bindings (dict[str, int]): Mapping from dimension variable names to concrete integers.
+            bindings (Mapping[str, int]): Mapping from dimension variable names to concrete integers.
 
         Returns:
             tuple[int, ...]: Tuple of concrete integer dimension sizes.
         """
+        env_dict = dict(bindings)
         res: list[int] = []
         for d in self.dims:
             if isinstance(d, int) and not isinstance(d, bool):
                 res.append(d)
             elif isinstance(d, (SymNode, SymInt)):
-                res.append(d.evaluate(bindings))
+                res.append(d.evaluate(env_dict))
+            elif isinstance(d, SymbolicIntWrapperProtocol):
+                res.append(int(d.node.eval(env_dict)))
+            elif isinstance(d, SymbolicNodeProtocol):
+                res.append(int(d.eval(env_dict)))
             elif isinstance(d, str) and d.isdigit():
                 res.append(int(d))
-            elif isinstance(d, str) and d in bindings:
-                res.append(bindings[d])
+            elif isinstance(d, str) and d in env_dict:
+                res.append(env_dict[d])
             else:
-                res.append(SymNode.to_node(d).evaluate(bindings))
+                res.append(SymNode.to_node(d).evaluate(env_dict))
         return tuple(res)
 
     def broadcast_with(self, other: TensorShape | Sequence[DimensionType]) -> TensorShape:
@@ -733,21 +911,34 @@ class TensorSpec(pydantic.BaseModel):
     dtype: DType
     sparsity: str | None = None
 
+    @pydantic.field_validator("dtype", mode="before")
+    @classmethod
+    def _validate_dtype_field(cls, val: DType | DTypeLikeProtocol | str) -> DType:
+        """Normalize ``dtype`` field input from ``DType``, ``DTypeLikeProtocol``, or ``str``.
+
+        Args:
+            val (DType | DTypeLikeProtocol | str): Raw dtype value.
+
+        Returns:
+            DType: Canonical ``DType`` enum member.
+        """
+        return normalize_dtype(val)
+
     def __init__(
         self,
         shape: tuple[DimensionType, ...] | Sequence[DimensionType] | TensorShape,
-        dtype: DType | str,
+        dtype: DType | DTypeLikeProtocol | str,
         sparsity: str | None = None,
     ) -> None:
         """Initialize TensorSpec with shape and dtype normalization.
 
         Args:
             shape (tuple[DimensionType, ...] | Sequence[DimensionType] | TensorShape): Tensor dimensions.
-            dtype (DType | str): Data type as DType enum or string name.
+            dtype (DType | DTypeLikeProtocol | str): Data type as DType, DTypeLikeProtocol, or string name.
             sparsity (str | None): Optional sparsity layout.
         """
         norm_shape = _validate_dimension_tuple(shape)
-        norm_dtype = dtype if isinstance(dtype, DType) else DType.from_str(dtype)
+        norm_dtype = normalize_dtype(dtype)
         super().__init__(shape=norm_shape, dtype=norm_dtype, sparsity=sparsity)
 
     @property
@@ -782,11 +973,11 @@ class TensorSpec(pydantic.BaseModel):
         """
         return len(self.shape)
 
-    def evaluate(self, bindings: dict[str, int]) -> TensorSpec:
+    def evaluate(self, bindings: Mapping[str, int]) -> TensorSpec:
         """Evaluate symbolic dimensions into concrete integers using runtime bindings.
 
         Args:
-            bindings (dict[str, int]): Variable bindings mapping names to integer sizes.
+            bindings (Mapping[str, int]): Variable bindings mapping names to integer sizes.
 
         Returns:
             TensorSpec: New TensorSpec instance with concrete evaluated shape.
@@ -800,6 +991,52 @@ class TensorSpec(pydantic.BaseModel):
         )
 
 
+def is_valid_loop_options_protocol(val: LoopOptionsProtocol) -> bool:
+    """Validate field types on a ``LoopOptionsProtocol`` instance.
+
+    Args:
+        val (LoopOptionsProtocol): Candidate loop options object.
+
+    Returns:
+        bool: True if ``parallel_iterations`` and ``maximum_iterations`` are not booleans.
+    """
+    return not isinstance(val.parallel_iterations, bool) and not isinstance(val.maximum_iterations, bool)
+
+
+def is_valid_device_protocol(val: DeviceLikeProtocol) -> bool:
+    """Validate field types on a ``DeviceLikeProtocol`` instance.
+
+    Args:
+        val (DeviceLikeProtocol): Candidate device descriptor object.
+
+    Returns:
+        bool: True if ``index`` is not a boolean value.
+    """
+    return not isinstance(val.index, bool)
+
+
+def _is_valid_protocol_attribute_leaf(val: AttributeValue) -> bool:
+    """Check whether ``val`` is a valid structural protocol leaf for ``AttributeValue``.
+
+    Args:
+        val (AttributeValue): Candidate attribute leaf value.
+
+    Returns:
+        bool: True if ``val`` satisfies one of the accepted structural protocol contracts.
+    """
+    if isinstance(val, (DTypeLikeProtocol, CustomRuleHandleProtocol, SymbolicNodeProtocol)):
+        return True
+    if isinstance(val, DeviceLikeProtocol):
+        return is_valid_device_protocol(val)
+    if isinstance(val, SymbolicIntWrapperProtocol):
+        return isinstance(val.node, SymbolicNodeProtocol)
+    if isinstance(val, LoopOptionsProtocol):
+        return is_valid_loop_options_protocol(val)
+    if isinstance(val, ArrayBufferProtocol):
+        return _is_valid_array_buffer(val)
+    return False
+
+
 def _validate_attribute_value(val: AttributeValue) -> AttributeValue:
     """Recursively validate an ``AttributeValue`` at runtime during Pydantic validation.
 
@@ -807,7 +1044,7 @@ def _validate_attribute_value(val: AttributeValue) -> AttributeValue:
         val (AttributeValue): Input attribute value.
 
     Returns:
-        AttributeValue: Validated attribute value preserving tuples, lists, dicts, and IR types.
+        AttributeValue: Validated attribute value preserving tuples, lists, dicts, protocols, and IR types.
 
     Raises:
         ValueError: If ``val`` or any nested element is not a valid ``AttributeValue``.
@@ -816,6 +1053,8 @@ def _validate_attribute_value(val: AttributeValue) -> AttributeValue:
         val,
         (int, float, str, bool, bytes, SymNode, SymInt, DType, TensorShape, TensorSpec, pydantic.BaseModel),
     ):
+        return val
+    if _is_valid_protocol_attribute_leaf(val):
         return val
     if isinstance(val, Mapping):
         for key, item in val.items():
@@ -828,6 +1067,129 @@ def _validate_attribute_value(val: AttributeValue) -> AttributeValue:
             _validate_attribute_value(item)
         return val
     raise ValueError(f"Unsupported AttributeValue of type {describe_value_type(val)}: {val!r}")
+
+
+def _encode_json_safe_protocol_leaf(
+    val: (
+        DTypeLikeProtocol
+        | DeviceLikeProtocol
+        | SymbolicNodeProtocol
+        | SymbolicIntWrapperProtocol
+        | CustomRuleHandleProtocol
+        | LoopOptionsProtocol
+        | ArrayBufferProtocol
+    ),
+) -> dict[str, JsonValue]:
+    """Encode a structural protocol ``AttributeValue`` leaf into a deterministic tagged JSON dictionary.
+
+    Args:
+        val: Structural protocol leaf instance.
+
+    Returns:
+        dict[str, JsonValue]: Deterministic JSON-compatible dictionary.
+    """
+    if isinstance(val, DTypeLikeProtocol):
+        return {"__sw_type__": "DType", "value": val.value}
+    if isinstance(val, DeviceLikeProtocol):
+        return {"__sw_type__": "Device", "index": val.index, "type": val.type}
+    if isinstance(val, (SymbolicNodeProtocol, SymbolicIntWrapperProtocol)):
+        return {"__sw_type__": "SymDim", "expr": format_symbolic_protocol_expr(val)}
+    if isinstance(val, CustomRuleHandleProtocol):
+        return {"__sw_type__": "CustomRuleHandle", "handle_id": val.handle_id, "kind": val.kind}
+    if isinstance(val, LoopOptionsProtocol):
+        return {
+            "__sw_type__": "LoopOptions",
+            "maximum_iterations": val.maximum_iterations,
+            "parallel_iterations": val.parallel_iterations,
+            "swap_memory": val.swap_memory,
+        }
+    return {
+        "__sw_type__": "ArrayBuffer",
+        "data": base64.b64encode(val.tobytes()).decode("ascii"),
+        "shape": list(val.shape),
+    }
+
+
+def _encode_json_safe_ir_leaf(
+    val: bytes | DType | SymNode | SymInt | TensorShape | TensorSpec | pydantic.BaseModel,
+) -> JsonValue:
+    """Serialize a core IR or ``pydantic.BaseModel`` leaf into a JSON-compatible representation.
+
+    Args:
+        val (bytes | DType | SymNode | SymInt | TensorShape | TensorSpec | pydantic.BaseModel):
+            IR leaf value.
+
+    Returns:
+        JsonValue: Deterministic JSON-compatible representation.
+    """
+    if isinstance(val, (bytes, DType)):
+        return (
+            {"__sw_type__": "bytes", "data": base64.b64encode(val).decode("ascii")}
+            if isinstance(val, bytes)
+            else {"__sw_type__": "DType", "value": val.value}
+        )
+    if isinstance(val, (SymNode, SymInt)):
+        return str(val)
+    if isinstance(val, TensorShape):
+        return {"__sw_type__": "TensorShape", "dims": [_encode_json_safe_attribute(d) for d in val.dims]}
+    if isinstance(val, TensorSpec):
+        return {
+            "__sw_type__": "TensorSpec",
+            "dtype": val.dtype.value,
+            "shape": [_encode_json_safe_attribute(d) for d in val.shape],
+            "sparsity": val.sparsity,
+        }
+    dumped: JsonValue = val.model_dump(mode="json")
+    return dumped
+
+
+def _encode_json_safe_attribute(val: AttributeValue) -> JsonValue:
+    """Recursively serialize an ``AttributeValue`` into a deterministic JSON-compatible structure.
+
+    Args:
+        val (AttributeValue): Validated attribute value.
+
+    Returns:
+        JsonValue: Deterministic JSON-compatible representation.
+    """
+    if val is None or isinstance(val, (bool, int, float, str)):
+        return val
+    if isinstance(val, (bytes, DType, SymNode, SymInt, TensorShape, TensorSpec, pydantic.BaseModel)):
+        return _encode_json_safe_ir_leaf(val)
+    if isinstance(
+        val,
+        (
+            DTypeLikeProtocol,
+            DeviceLikeProtocol,
+            SymbolicNodeProtocol,
+            SymbolicIntWrapperProtocol,
+            CustomRuleHandleProtocol,
+            LoopOptionsProtocol,
+            ArrayBufferProtocol,
+        ),
+    ):
+        return _encode_json_safe_protocol_leaf(val)
+    if isinstance(val, Mapping):
+        return {str(k): _encode_json_safe_attribute(v) for k, v in val.items()}
+    return [_encode_json_safe_attribute(item) for item in val]
+
+
+def _serialize_attribute_pydantic(
+    val: AttributeValue,
+    info: SerializationInfoProtocol,
+) -> AttributeValue | JsonValue:
+    """Serialize ``AttributeValue`` cleanly for Pydantic Python and JSON serialization modes.
+
+    Args:
+        val (AttributeValue): Validated attribute value.
+        info (SerializationInfoProtocol): Pydantic serialization context.
+
+    Returns:
+        AttributeValue | JsonValue: Raw value in Python mode, or deterministic JSON structure in JSON mode.
+    """
+    if info.mode == "json":
+        return _encode_json_safe_attribute(val)
+    return val
 
 
 class _AttributeValuePydanticAnnotation:
@@ -849,7 +1211,13 @@ class _AttributeValuePydanticAnnotation:
             pydantic_core.CoreSchema: Pydantic CoreSchema instance.
         """
         del source_type, handler
-        return pydantic_core.core_schema.no_info_plain_validator_function(_validate_attribute_value)
+        return core_schema.no_info_plain_validator_function(
+            _validate_attribute_value,
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                _serialize_attribute_pydantic,
+                info_arg=True,
+            ),
+        )
 
     @classmethod
     def __get_pydantic_json_schema__(
@@ -891,8 +1259,16 @@ AttributeValue: typing_extensions.TypeAlias = typing.Annotated[
         SymNode,
         SymInt,
         DType,
+        DTypeLikeProtocol,
+        DeviceLikeProtocol,
+        SymbolicNodeProtocol,
+        SymbolicIntWrapperProtocol,
+        CustomRuleHandleProtocol,
+        LoopOptionsProtocol,
+        ArrayBufferProtocol,
         TensorShape,
         TensorSpec,
+        pydantic.BaseModel,
         Sequence["AttributeValue"],
         Mapping[str, "AttributeValue"],
     ],

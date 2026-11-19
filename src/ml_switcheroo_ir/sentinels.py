@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import typing
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 
 import typing_extensions
 
 from ml_switcheroo_ir.distributed import PartitionSpec
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode, LogicalNodeKwargs
+from ml_switcheroo_ir.protocols import DeviceLikeProtocol, DTypeLikeProtocol
 from ml_switcheroo_ir.shapes import DimensionType
 from ml_switcheroo_ir.types import (
     AttributeValue,
@@ -39,12 +40,13 @@ class ZeroTangentKwargs(typing_extensions.TypedDict, total=False):
         inputs (list[str] | None): Ordered list of upstream LogicalNode IDs or SSA names.
         outputs (Iterable[str] | None): Ordered list of output SSA names.
         shape_metadata (ShapeMetadataType | Iterable[DimensionType]): Optional explicit shape_metadata override.
-        source_ast_ref (str | None): Source AST traceback reference.
-        sharding (PartitionSpec | None): Distributed SPMD partition layout.
+        source_ast_ref (str | int | None): Source AST traceback reference or integer AST node ID.
+        sharding (PartitionSpec | str | Mapping[str, AttributeValue] | None): Distributed SPMD partition layout.
         output_specs (list[TensorSpec] | None): Explicit output tensor specifications.
         subgraphs (Mapping[str, LogicalGraph | AttributeValue] | None): Nested control-flow subgraphs.
-        device (str | None): Target execution device placement.
-        stream (str | None): Asynchronous execution stream name.
+        device (str | DeviceLikeProtocol | None): Target execution device placement.
+        stream (str | int | None): Asynchronous execution stream name or ID.
+        strides (Sequence[int] | None): Optional physical memory stride tuple.
     """
 
     op_type: str
@@ -54,22 +56,23 @@ class ZeroTangentKwargs(typing_extensions.TypedDict, total=False):
     inputs: list[str] | None
     outputs: Iterable[str] | None
     shape_metadata: ShapeMetadataType | Iterable[DimensionType]
-    source_ast_ref: str | None
-    sharding: PartitionSpec | None
+    source_ast_ref: str | int | None
+    sharding: PartitionSpec | str | Mapping[str, AttributeValue] | None
     output_specs: list[TensorSpec] | None
     subgraphs: Mapping[str, LogicalGraph | AttributeValue] | None
-    device: str | None
-    stream: str | None
+    device: str | DeviceLikeProtocol | None
+    stream: str | int | None
+    strides: Sequence[int] | None
 
 
 class SentinelNodeKwargs(ZeroTangentKwargs, total=False):
     """Structured optional keyword parameters for ``NoTangent`` construction.
 
     Attributes:
-        dtype (DType | None): Optional tensor data type.
+        dtype (DType | DTypeLikeProtocol | str | None): Optional tensor data type.
     """
 
-    dtype: DType | None
+    dtype: DType | DTypeLikeProtocol | str | None
 
 
 class _AutodiffSentinelBase(LogicalNode):
@@ -85,7 +88,7 @@ class _AutodiffSentinelBase(LogicalNode):
         self,
         id: str,
         resolved_shape: ShapeMetadataType | Iterable[DimensionType],
-        resolved_dtype: DType | None,
+        resolved_dtype: DType | DTypeLikeProtocol | str | None,
         extra: ZeroTangentKwargs | SentinelNodeKwargs,
     ) -> None:
         """Initialize the underlying LogicalNode for an autodiff sentinel.
@@ -93,7 +96,7 @@ class _AutodiffSentinelBase(LogicalNode):
         Args:
             id (str): Unique node identifier.
             resolved_shape (ShapeMetadataType | Iterable[DimensionType]): Resolved tensor shape metadata.
-            resolved_dtype (DType | None): Tensor data type.
+            resolved_dtype (DType | DTypeLikeProtocol | str | None): Tensor data type.
             extra (ZeroTangentKwargs | SentinelNodeKwargs): Structured optional node fields.
         """
         version = extra.get("version", 1)
@@ -109,6 +112,7 @@ class _AutodiffSentinelBase(LogicalNode):
             "subgraphs": extra.get("subgraphs"),
             "device": extra.get("device"),
             "stream": extra.get("stream"),
+            "strides": extra.get("strides"),
         }
         super().__init__(
             id=id,
@@ -136,7 +140,7 @@ class ZeroTangent(_AutodiffSentinelBase):
         self,
         id: str,
         shape: ShapeMetadataType | Iterable[DimensionType] = None,
-        dtype: DType | None = DType.float32,
+        dtype: DType | DTypeLikeProtocol | str | None = DType.float32,
         **kwargs: typing_extensions.Unpack[ZeroTangentKwargs],
     ) -> None:
         """Initialize ZeroTangent sentinel node.
@@ -144,7 +148,7 @@ class ZeroTangent(_AutodiffSentinelBase):
         Args:
             id (str): Unique node identifier.
             shape (ShapeMetadataType | Iterable[DimensionType]): Vector shape.
-            dtype (DType | None): Tensor data type (default: ``DType.float32``).
+            dtype (DType | DTypeLikeProtocol | str | None): Tensor data type (default: ``DType.float32``).
             **kwargs (typing_extensions.Unpack[ZeroTangentKwargs]): Structured optional node fields.
         """
         explicit_shape = kwargs.get("shape_metadata")

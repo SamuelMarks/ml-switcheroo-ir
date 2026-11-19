@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from ml_switcheroo_ir.shapes.ast import (
+    DimensionType,
     SymBinaryOp,
     SymConst,
-    SymInt,
     SymNode,
     SymPiecewise,
     SymUnaryOp,
@@ -337,14 +337,14 @@ class SymbolicSolver:
 
     @staticmethod
     def is_consistent(
-        expr1: SymInt | SymNode | int | str,
-        expr2: SymInt | SymNode | int | str,
+        expr1: DimensionType,
+        expr2: DimensionType,
     ) -> bool:
         """Check if two symbolic expressions are mathematically equivalent.
 
         Args:
-            expr1 (SymInt | SymNode | int | str): First expression.
-            expr2 (SymInt | SymNode | int | str): Second expression.
+            expr1 (DimensionType): First expression.
+            expr2 (DimensionType): Second expression.
 
         Returns:
             bool: True if expressions evaluate to identical canonical representations.

@@ -6,6 +6,10 @@ import typing
 
 import typing_extensions
 
+from ml_switcheroo_ir.protocols import (
+    SymbolicIntWrapperProtocol,
+    SymbolicNodeProtocol,
+)
 from ml_switcheroo_ir.shapes.ast import (
     DimensionType,
     SymBinaryOp,
@@ -16,11 +20,12 @@ from ml_switcheroo_ir.shapes.ast import (
     SymPiecewise,
     SymUnaryOp,
     SymVar,
+    format_symbolic_protocol_expr,
 )
 from ml_switcheroo_ir.shapes.parser import parse_symbolic_expr
 from ml_switcheroo_ir.shapes.polynomial import MonomialType, Polynomial
 
-DimensionBound: typing_extensions.TypeAlias = typing.Union[int, str, SymNode, SymInt]
+DimensionBound: typing_extensions.TypeAlias = DimensionType
 
 __all__ = [
     "DimensionBound",
@@ -123,11 +128,11 @@ def _substitute_symnode(node: SymNode, solved: dict[str, int]) -> SymNode:
     return node
 
 
-def _safe_parse_dim_node(dim: int | str | SymNode | SymInt) -> SymNode | None:
+def _safe_parse_dim_node(dim: DimensionBound) -> SymNode | None:
     """Convert ``dim`` to a ``SymNode`` if syntactically valid, returning ``None`` on parse failure.
 
     Args:
-        dim (int | str | SymNode | SymInt): Dimension bound candidate.
+        dim (DimensionBound): Dimension bound candidate.
 
     Returns:
         SymNode | None: Parsed ``SymNode`` or ``None`` if ``dim`` is an unparseable raw string.
@@ -138,8 +143,13 @@ def _safe_parse_dim_node(dim: int | str | SymNode | SymInt) -> SymNode | None:
         return dim.node
     if isinstance(dim, int):
         return SymConst(dim)
+    expr_str = (
+        format_symbolic_protocol_expr(dim)
+        if isinstance(dim, (SymbolicNodeProtocol, SymbolicIntWrapperProtocol))
+        else dim
+    )
     try:
-        return parse_symbolic_expr(dim)
+        return parse_symbolic_expr(expr_str)
     except ValueError:
         return None
 
@@ -155,17 +165,19 @@ class SymbolicConstraintTracker:
         self._contradiction: bool = False
         self._error_msg: str = ""
 
-    def _canonical_key(self, dim: int | str | SymNode | SymInt) -> str:
+    def _canonical_key(self, dim: DimensionBound) -> str:
         """Return canonical string representation key for ``dim``.
 
         Args:
-            dim (int | str | SymNode | SymInt): Dimension to stringify.
+            dim (DimensionBound): Dimension to stringify.
 
         Returns:
             str: Canonical key string.
         """
         if isinstance(dim, (SymInt, SymNode)):
             return str(dim.canonical())
+        if isinstance(dim, (SymbolicNodeProtocol, SymbolicIntWrapperProtocol)):
+            return format_symbolic_protocol_expr(dim)
         return str(dim)
 
     def _find(self, key: str) -> str:
@@ -186,14 +198,14 @@ class SymbolicConstraintTracker:
 
     def _extract_const_value(
         self,
-        dim: int | str | SymNode | SymInt,
+        dim: DimensionBound,
         key: str,
         root: str,
     ) -> int | None:
         """Resolve an integer constant bound for ``dim`` if known.
 
         Args:
-            dim (int | str | SymNode | SymInt): Dimension value.
+            dim (DimensionBound): Dimension value.
             key (str): Canonical string key for ``dim``.
             root (str): Disjoint-set root key for ``dim``.
 
@@ -216,11 +228,11 @@ class SymbolicConstraintTracker:
         return self._const_map.get(root)
 
     @staticmethod
-    def _is_unit_dimension(dim: int | str | SymNode | SymInt) -> bool:
+    def _is_unit_dimension(dim: DimensionBound) -> bool:
         """Return True if ``dim`` represents a unit (size-1) dimension.
 
         Args:
-            dim (int | str | SymNode | SymInt): Dimension value.
+            dim (DimensionBound): Dimension value.
 
         Returns:
             bool: True if unit dimension.
@@ -304,14 +316,14 @@ class SymbolicConstraintTracker:
 
     def _record_algebraic_equality(
         self,
-        a: int | str | SymNode | SymInt,
-        b: int | str | SymNode | SymInt,
+        a: DimensionBound,
+        b: DimensionBound,
     ) -> None:
         """Record polynomial difference ``a - b == 0`` and solve affine constraints.
 
         Args:
-            a (int | str | SymNode | SymInt): Left-hand dimension expression.
-            b (int | str | SymNode | SymInt): Right-hand dimension expression.
+            a (DimensionBound): Left-hand dimension expression.
+            b (DimensionBound): Right-hand dimension expression.
         """
         node_a = _safe_parse_dim_node(a)
         node_b = _safe_parse_dim_node(b)
@@ -331,14 +343,14 @@ class SymbolicConstraintTracker:
 
     def record_equality(
         self,
-        a: int | str | SymNode | SymInt,
-        b: int | str | SymNode | SymInt,
+        a: DimensionBound,
+        b: DimensionBound,
     ) -> None:
         """Record an equality constraint between two dimensions and solve affine bindings.
 
         Args:
-            a (int | str | SymNode | SymInt): First dimension.
-            b (int | str | SymNode | SymInt): Second dimension.
+            a (DimensionBound): First dimension.
+            b (DimensionBound): Second dimension.
 
         Raises:
             TypeError: If either dimension is a boolean value.
@@ -374,17 +386,17 @@ class SymbolicConstraintTracker:
 
     def unify(
         self,
-        a: int | str | SymNode | SymInt,
-        b: int | str | SymNode | SymInt,
-    ) -> int | str | SymNode | SymInt:
+        a: DimensionBound,
+        b: DimensionBound,
+    ) -> DimensionBound:
         """Unify two dimensions according to broadcasting semantics.
 
         Args:
-            a (int | str | SymNode | SymInt): First dimension.
-            b (int | str | SymNode | SymInt): Second dimension.
+            a (DimensionBound): First dimension.
+            b (DimensionBound): Second dimension.
 
         Returns:
-            int | str | SymNode | SymInt: Unified dimension representative.
+            DimensionBound: Unified dimension representative.
         """
         if self._is_unit_dimension(a):
             return b
@@ -404,11 +416,16 @@ class SymbolicConstraintTracker:
 
         return a
 
-    def add_constraint(self, dim: str | SymNode | SymInt, val: int) -> None:
+    def add_constraint(
+        self,
+        dim: str | SymNode | SymInt | SymbolicNodeProtocol | SymbolicIntWrapperProtocol,
+        val: int,
+    ) -> None:
         """Assign a concrete integer value constraint to a symbolic dimension.
 
         Args:
-            dim (str | SymNode | SymInt): Symbolic dimension.
+            dim (str | SymNode | SymInt | SymbolicNodeProtocol | SymbolicIntWrapperProtocol):
+                Symbolic dimension.
             val (int): Concrete integer value.
         """
         self.record_equality(dim, val)

@@ -17,12 +17,22 @@ from pathlib import Path
 import pydantic
 import pydantic_core
 import typing_extensions
+from pydantic_core import core_schema
 
 from ml_switcheroo_ir.distributed import (
     LogicalAxis,
     LogicalMesh,
     PartitionSpec,
     PipelineTopologyConfig,
+)
+from ml_switcheroo_ir.protocols import (
+    DeviceLikeProtocol,
+    DTypeLikeProtocol,
+    LoopOptionsProtocol,
+    MeshLikeProtocol,
+    SerializationInfoProtocol,
+    SymbolicIntWrapperProtocol,
+    SymbolicNodeProtocol,
 )
 from ml_switcheroo_ir.serialization import (
     RawGraphValue,
@@ -54,9 +64,15 @@ from ml_switcheroo_ir.types import (
     TensorShape,
     TensorSpec,
     _AttributeValuePydanticAnnotation,
+    _encode_json_safe_attribute,
+    _encode_json_safe_protocol_leaf,
+    _validate_attribute_value,
     _validate_dimension_tuple,
     describe_value_type,
     is_dynamic_dimension,
+    is_valid_device_protocol,
+    is_valid_loop_options_protocol,
+    normalize_optional_dtype,
 )
 
 __all__ = [
@@ -67,6 +83,8 @@ __all__ = [
     "CyclicGraphError",
     "EdgeList",
     "GraphFrontend",
+    "IRGraph",
+    "IRNode",
     "LogicalAxis",
     "LogicalEdge",
     "LogicalGraph",
@@ -400,6 +418,173 @@ def _coerce_clone_extra_attr(val: CloneOverrideValue) -> AttributeValue:
     return [_coerce_clone_extra_attr(x) for x in val] if isinstance(val, Iterable) else str(val)
 
 
+def _normalize_strides(value: Sequence[int] | None) -> tuple[int, ...] | None:
+    """Validate and normalize optional tensor memory strides into ``tuple[int, ...] | None``.
+
+    Args:
+        value (Sequence[int] | None): Optional sequence of integer memory strides.
+
+    Returns:
+        tuple[int, ...] | None: Normalized stride tuple or ``None``.
+
+    Raises:
+        TypeError: If ``value`` is not ``None`` or a sequence of non-boolean integers.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise TypeError(f"LogicalNode 'strides' must be Sequence[int] or None, got {describe_value_type(value)}.")
+    normalized: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise TypeError(f"Stride element must be int, got {describe_value_type(item)}: {item!r}")
+        normalized.append(int(item))
+    return tuple(normalized)
+
+
+def _validate_str_or_int_optional(val: str | int | None) -> str | int | None:
+    """Validate an optional ``str | int | None`` field without coercing between ``str`` and ``int``.
+
+    Args:
+        val (str | int | None): Candidate field value.
+
+    Returns:
+        str | int | None: Validated ``str``, ``int``, or ``None``.
+
+    Raises:
+        ValueError: If ``val`` is a ``bool`` or neither ``str``, ``int``, nor ``None``.
+    """
+    if val is None:
+        return None
+    if isinstance(val, bool) or not isinstance(val, (str, int)):
+        raise ValueError(f"Expected str, int, or None, got {val!r}.")
+    return val
+
+
+class _StrOrIntOptionalAnnotation:
+    """Pydantic v2 CoreSchema and JSON Schema provider for ``str | int | None`` fields."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: type[str | int | None],
+        handler: pydantic.GetCoreSchemaHandler,
+    ) -> pydantic_core.CoreSchema:
+        """Build strict non-coercing CoreSchema for ``str | int | None``.
+
+        Args:
+            source_type (type[str | int | None]): Annotated union type.
+            handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
+
+        Returns:
+            pydantic_core.CoreSchema: Validator CoreSchema.
+        """
+        del source_type, handler
+        return core_schema.no_info_plain_validator_function(_validate_str_or_int_optional)
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema_obj: pydantic_core.CoreSchema,
+        handler: pydantic.GetJsonSchemaHandler,
+    ) -> dict[str, JsonValue]:
+        """Build Draft 2020-12 JSON Schema for ``str | int | None``.
+
+        Args:
+            core_schema_obj (pydantic_core.CoreSchema): Core schema object.
+            handler (pydantic.GetJsonSchemaHandler): JSON schema handler.
+
+        Returns:
+            dict[str, JsonValue]: JSON Schema union of string, integer, and null.
+        """
+        del core_schema_obj, handler
+        return {"anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}]}
+
+
+def _validate_device_field(val: str | DeviceLikeProtocol | None) -> str | DeviceLikeProtocol | None:
+    """Validate a ``LogicalNode.device`` value accepting ``str``, ``DeviceLikeProtocol``, or ``None``.
+
+    Args:
+        val (str | DeviceLikeProtocol | None): Candidate device value.
+
+    Returns:
+        str | DeviceLikeProtocol | None: Validated device descriptor or string.
+
+    Raises:
+        ValueError: If ``val`` is not ``None``, ``str``, or a valid ``DeviceLikeProtocol``.
+    """
+    if val is None or isinstance(val, str):
+        return val
+    if isinstance(val, DeviceLikeProtocol):
+        if is_valid_device_protocol(val):
+            return val
+    raise ValueError(f"Invalid LogicalNode 'device' value: {val!r}")
+
+
+def _serialize_device_field(
+    val: str | DeviceLikeProtocol | None,
+    info: SerializationInfoProtocol,
+) -> str | DeviceLikeProtocol | None:
+    """Serialize ``LogicalNode.device`` cleanly in both Python and JSON modes.
+
+    Args:
+        val (str | DeviceLikeProtocol | None): Validated device value.
+        info (SerializationInfoProtocol): Pydantic serialization context.
+
+    Returns:
+        str | DeviceLikeProtocol | None: Raw value in Python mode, or string/None in JSON mode.
+    """
+    if info.mode == "json" and isinstance(val, DeviceLikeProtocol):
+        return f"{val.type}:{val.index}" if val.index is not None else val.type
+    return val
+
+
+class _DeviceFieldPydanticAnnotation:
+    """Pydantic v2 CoreSchema and JSON Schema provider for ``LogicalNode.device``."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: type[str | DeviceLikeProtocol | None],
+        handler: pydantic.GetCoreSchemaHandler,
+    ) -> pydantic_core.CoreSchema:
+        """Build CoreSchema for ``LogicalNode.device``.
+
+        Args:
+            source_type (type[str | DeviceLikeProtocol | None]): Annotated field type.
+            handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
+
+        Returns:
+            pydantic_core.CoreSchema: Validator and JSON serializer schema.
+        """
+        del source_type, handler
+        return core_schema.no_info_plain_validator_function(
+            _validate_device_field,
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                _serialize_device_field,
+                info_arg=True,
+            ),
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema_obj: pydantic_core.CoreSchema,
+        handler: pydantic.GetJsonSchemaHandler,
+    ) -> dict[str, JsonValue]:
+        """Build Draft 2020-12 JSON Schema for ``LogicalNode.device``.
+
+        Args:
+            core_schema_obj (pydantic_core.CoreSchema): Core schema object.
+            handler (pydantic.GetJsonSchemaHandler): JSON schema handler.
+
+        Returns:
+            dict[str, JsonValue]: JSON Schema union of string and null.
+        """
+        del core_schema_obj, handler
+        return {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+
 def _coerce_shape_override(val: CloneOverrideValue) -> ShapeMetadataType | Iterable[DimensionType]:
     """Narrow a ``shape_metadata`` override value into ``ShapeMetadataType | Iterable[DimensionType]``.
 
@@ -417,48 +602,86 @@ def _coerce_shape_override(val: CloneOverrideValue) -> ShapeMetadataType | Itera
     if isinstance(val, Iterable) and not isinstance(val, (str, bytes, Mapping)):
         from ml_switcheroo_ir.shapes import SymInt, SymNode
 
-        return [x for x in val if isinstance(x, (int, str, SymNode, SymInt))]
+        return [
+            x
+            for x in val
+            if isinstance(
+                x,
+                (int, str, SymNode, SymInt, SymbolicNodeProtocol, SymbolicIntWrapperProtocol),
+            )
+        ]
     raise TypeError(f"Invalid shape_metadata override: {val!r}")
 
 
-def _resolve_optional_str_override(
+def _resolve_str_or_int_override(
     overrides: Mapping[str, CloneOverrideValue],
     key: str,
-    fallback: str | None,
-) -> str | None:
-    """Resolve an optional ``str | None`` field override from ``overrides``.
+    fallback: str | int | None,
+) -> str | int | None:
+    """Resolve an optional ``str | int | None`` field override from ``overrides``.
 
     Args:
         overrides (Mapping[str, CloneOverrideValue]): Overrides mapping.
         key (str): Field name to inspect.
-        fallback (str | None): Existing node field value when omitted.
+        fallback (str | int | None): Existing node field value when omitted.
 
     Returns:
-        str | None: Resolved optional string value.
+        str | int | None: Resolved optional string or integer value.
     """
     raw = overrides.get(key, _CLONE_OMITTED)
     if isinstance(raw, _OmittedSentinel):
         return fallback
-    return None if raw is None else str(raw)
+    if raw is None:
+        return None
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    return str(raw)
+
+
+def _resolve_device_override(
+    overrides: Mapping[str, CloneOverrideValue],
+    fallback: str | DeviceLikeProtocol | None,
+) -> str | DeviceLikeProtocol | None:
+    """Resolve an optional ``str | DeviceLikeProtocol | None`` field override from ``overrides``.
+
+    Args:
+        overrides (Mapping[str, CloneOverrideValue]): Overrides mapping.
+        fallback (str | DeviceLikeProtocol | None): Existing device value when omitted.
+
+    Returns:
+        str | DeviceLikeProtocol | None: Resolved device descriptor or string.
+    """
+    raw = overrides.get("device", _CLONE_OMITTED)
+    if isinstance(raw, _OmittedSentinel):
+        return copy.deepcopy(fallback) if isinstance(fallback, DeviceLikeProtocol) else fallback
+    if raw is None or isinstance(raw, str):
+        return raw
+    if isinstance(raw, DeviceLikeProtocol):
+        return copy.deepcopy(raw)
+    return str(raw)
 
 
 def _resolve_sharding_override(
     overrides: Mapping[str, CloneOverrideValue],
-    fallback: PartitionSpec | None,
-) -> PartitionSpec | None:
-    """Resolve an optional ``PartitionSpec | None`` field override from ``overrides``.
+    fallback: PartitionSpec | str | dict[str, AttributeValue] | None,
+) -> PartitionSpec | str | dict[str, AttributeValue] | None:
+    """Resolve an optional ``sharding`` field override from ``overrides``.
 
     Args:
         overrides (Mapping[str, CloneOverrideValue]): Overrides mapping.
-        fallback (PartitionSpec | None): Existing sharding value when omitted.
+        fallback (PartitionSpec | str | dict[str, AttributeValue] | None): Existing sharding value when omitted.
 
     Returns:
-        PartitionSpec | None: Deep-copied resolved ``PartitionSpec`` or ``None``.
+        PartitionSpec | str | dict[str, AttributeValue] | None: Deep-copied resolved sharding value.
     """
     raw = overrides.get("sharding", _CLONE_OMITTED)
     if isinstance(raw, _OmittedSentinel):
         return copy.deepcopy(fallback)
-    return copy.deepcopy(raw) if isinstance(raw, PartitionSpec) else None
+    if isinstance(raw, (PartitionSpec, str)):
+        return copy.deepcopy(raw)
+    if isinstance(raw, Mapping):
+        return {str(k): _coerce_clone_extra_attr(v) for k, v in raw.items()}
+    return None
 
 
 def _resolve_dtype_override(
@@ -477,9 +700,40 @@ def _resolve_dtype_override(
     raw = overrides.get("dtype", _CLONE_OMITTED)
     if isinstance(raw, _OmittedSentinel):
         return fallback
-    if isinstance(raw, DType):
-        return raw
-    return None if raw is None else DType.from_str(str(raw))
+    if raw is None or isinstance(raw, (DType, str, DTypeLikeProtocol)):
+        return normalize_optional_dtype(raw)
+    return DType.from_str(str(raw))
+
+
+def _resolve_strides_override(
+    overrides: Mapping[str, CloneOverrideValue],
+    fallback: tuple[int, ...] | None,
+) -> tuple[int, ...] | None:
+    """Resolve an optional ``strides`` override from ``overrides``.
+
+    Args:
+        overrides (Mapping[str, CloneOverrideValue]): Overrides mapping.
+        fallback (tuple[int, ...] | None): Existing node strides when omitted.
+
+    Returns:
+        tuple[int, ...] | None: Resolved stride tuple or ``None``.
+
+    Raises:
+        TypeError: If the override is not ``None`` or a sequence of non-boolean integers.
+    """
+    raw = overrides.get("strides", _CLONE_OMITTED)
+    if isinstance(raw, _OmittedSentinel):
+        return fallback
+    if raw is None:
+        return None
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        int_items: list[int] = []
+        for x in raw:
+            if isinstance(x, bool) or not isinstance(x, int):
+                raise TypeError(f"Invalid stride element in clone override: {x!r}")
+            int_items.append(int(x))
+        return tuple(int_items)
+    raise TypeError(f"Invalid strides override: {raw!r}")
 
 
 class LogicalNodeKwargs(typing_extensions.TypedDict, total=False):
@@ -490,32 +744,35 @@ class LogicalNodeKwargs(typing_extensions.TypedDict, total=False):
         inputs (list[str] | None): Ordered list of upstream LogicalNode IDs or SSA names.
         outputs (Iterable[str] | None): Ordered list of output SSA names.
         shape_metadata (ShapeMetadataType | Iterable[DimensionType]): Primary output shape tuple.
-        source_ast_ref (str | None): Source AST traceback reference.
-        sharding (PartitionSpec | None): Distributed SPMD partition layout.
-        dtype (DType | None): Primary output tensor data type.
+        source_ast_ref (str | int | None): Source AST traceback reference or integer AST node ID.
+        sharding (PartitionSpec | str | Mapping[str, AttributeValue] | None): Distributed SPMD partition layout.
+        dtype (DType | DTypeLikeProtocol | str | None): Primary output tensor data type.
         output_specs (list[TensorSpec] | None): Explicit output tensor specifications.
         subgraphs (Mapping[str, LogicalGraph | AttributeValue] | None): Nested control-flow subgraphs.
-        device (str | None): Target execution device placement.
-        stream (str | None): Asynchronous execution stream name.
+        device (str | DeviceLikeProtocol | None): Target execution device placement.
+        stream (str | int | None): Asynchronous execution stream name or ID.
+        strides (Sequence[int] | None): Optional physical memory stride tuple.
     """
 
     attributes: Mapping[str, AttributeValue] | None
     inputs: list[str] | None
     outputs: Iterable[str] | None
     shape_metadata: ShapeMetadataType | Iterable[DimensionType]
-    source_ast_ref: str | None
-    sharding: PartitionSpec | None
-    dtype: DType | None
+    source_ast_ref: str | int | None
+    sharding: PartitionSpec | str | Mapping[str, AttributeValue] | None
+    dtype: DType | DTypeLikeProtocol | str | None
     output_specs: list[TensorSpec] | None
     subgraphs: Mapping[str, LogicalGraph | AttributeValue] | None
-    device: str | None
-    stream: str | None
+    device: str | DeviceLikeProtocol | None
+    stream: str | int | None
+    strides: Sequence[int] | None
 
 
 CloneOverrideValue: typing_extensions.TypeAlias = typing.Union[
     AttributeValue,
     Mapping[str, AttributeValue],
     list[str],
+    Sequence[int],
     Iterable[DimensionType],
     PartitionSpec,
     list[TensorSpec],
@@ -539,8 +796,107 @@ _NODE_CLONE_FIELD_KEYS: typing.Final[frozenset[str]] = frozenset(
         "subgraphs",
         "device",
         "stream",
+        "strides",
     }
 )
+
+
+def _validate_sharding_field_value(
+    val: PartitionSpec | str | Mapping[str, AttributeValue] | None,
+) -> PartitionSpec | str | dict[str, AttributeValue] | None:
+    """Validate and normalize ``LogicalNode.sharding`` field input.
+
+    Args:
+        val (PartitionSpec | str | Mapping[str, AttributeValue] | None): Candidate sharding layout.
+
+    Returns:
+        PartitionSpec | str | dict[str, AttributeValue] | None: Normalized sharding specification.
+
+    Raises:
+        TypeError: If ``val`` is not ``None``, ``PartitionSpec``, ``str``, or a string-keyed ``Mapping``.
+    """
+    if val is None or isinstance(val, (PartitionSpec, str)):
+        return val
+    if isinstance(val, Mapping):
+        if set(val.keys()) == {"axes"}:
+            return PartitionSpec.model_validate(val)
+        validated_map: dict[str, AttributeValue] = {}
+        for k, v in val.items():
+            if not isinstance(k, str):
+                raise TypeError(f"LogicalNode 'sharding' mapping key must be str, got {describe_value_type(k)}.")
+            validated_map[k] = _validate_attribute_value(v)
+        return validated_map
+    raise TypeError(f"Unsupported LogicalNode 'sharding' value: {val!r}")
+
+
+def _serialize_sharding_field(
+    val: PartitionSpec | str | dict[str, AttributeValue] | None,
+    info: SerializationInfoProtocol,
+) -> PartitionSpec | str | dict[str, AttributeValue] | JsonValue:
+    """Serialize ``LogicalNode.sharding`` cleanly in Python and JSON modes.
+
+    Args:
+        val (PartitionSpec | str | dict[str, AttributeValue] | None): Validated sharding value.
+        info (SerializationInfoProtocol): Pydantic serialization context.
+
+    Returns:
+        PartitionSpec | str | dict[str, AttributeValue] | JsonValue:
+            Raw value in Python mode, or JSON-compatible value in JSON mode.
+    """
+    if info.mode == "json":
+        if val is None or isinstance(val, str):
+            return val
+        if isinstance(val, PartitionSpec):
+            dumped: JsonValue = val.model_dump(mode="json")
+            return dumped
+        return {k: _encode_json_safe_attribute(v) for k, v in val.items()}
+    return val
+
+
+class _ShardingFieldPydanticAnnotation:
+    """Pydantic v2 CoreSchema and JSON Schema provider for ``LogicalNode.sharding``."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: type[PartitionSpec | str | dict[str, AttributeValue] | None],
+        handler: pydantic.GetCoreSchemaHandler,
+    ) -> pydantic_core.CoreSchema:
+        """Build CoreSchema for ``LogicalNode.sharding``.
+
+        Args:
+            source_type (type[PartitionSpec | str | dict[str, AttributeValue] | None]): Field type.
+            handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
+
+        Returns:
+            pydantic_core.CoreSchema: Validator and JSON serializer schema.
+        """
+        del source_type, handler
+        return core_schema.no_info_plain_validator_function(
+            _validate_sharding_field_value,
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                _serialize_sharding_field,
+                info_arg=True,
+            ),
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema_obj: pydantic_core.CoreSchema,
+        handler: pydantic.GetJsonSchemaHandler,
+    ) -> dict[str, JsonValue]:
+        """Build Draft 2020-12 JSON Schema for ``LogicalNode.sharding``.
+
+        Args:
+            core_schema_obj (pydantic_core.CoreSchema): Core schema object.
+            handler (pydantic.GetJsonSchemaHandler): JSON schema handler.
+
+        Returns:
+            dict[str, JsonValue]: JSON Schema union of object, string, and null.
+        """
+        del core_schema_obj, handler
+        return {"anyOf": [{"type": "object"}, {"type": "string"}, {"type": "null"}]}
 
 
 class LogicalNode(pydantic.BaseModel):
@@ -555,13 +911,13 @@ class LogicalNode(pydantic.BaseModel):
         inputs (list[str]): Ordered list of upstream LogicalNode IDs.
         outputs (VersionedOutputList): Ordered list of output names/SSA value identifiers produced by this node.
         shape_metadata (tuple[DimensionType, ...] | None): Tuple of dimensions or None.
-        source_ast_ref (str | None): Traceback to exact file path, line number, and cdd-python AST node ID.
-        sharding (PartitionSpec | None): Optional layout specification for distributed placement of this node's output.
+        source_ast_ref (str | int | None): Traceback to exact file path, line number, or integer AST node ID.
+        sharding (PartitionSpec | str | dict[str, AttributeValue] | None): Optional distributed placement specification.
         dtype (DType | None): Data type of the node computation or primary output.
         output_specs (list[TensorSpec]): Explicit tensor specifications for all node outputs.
         subgraphs (dict[str, LogicalGraph | AttributeValue]): Nested subgraphs for control flow and autodiff.
-        device (str | None): Target device placement string (e.g., 'cuda:0', 'cpu').
-        stream (str | None): Asynchronous execution stream name.
+        device (str | DeviceLikeProtocol | None): Target device placement string or DeviceLikeProtocol.
+        stream (str | int | None): Asynchronous execution stream name or integer ID.
     """
 
     model_config = pydantic.ConfigDict(
@@ -578,16 +934,21 @@ class LogicalNode(pydantic.BaseModel):
     inputs: list[str] = pydantic.Field(default_factory=list)
     outputs: VersionedOutputList = pydantic.Field(default_factory=VersionedOutputList)
     shape_metadata: tuple[DimensionType, ...] | None = None
-    source_ast_ref: str | None = None
-    sharding: PartitionSpec | None = None
+    source_ast_ref: typing.Annotated[str | int | None, _StrOrIntOptionalAnnotation] = None
+    sharding: typing.Annotated[
+        PartitionSpec | str | dict[str, AttributeValue] | None,
+        _ShardingFieldPydanticAnnotation,
+    ] = None
     dtype: DType | None = None
     output_specs: list[TensorSpec] = pydantic.Field(default_factory=list)
     subgraphs: dict[
         str,
         typing.Annotated[LogicalGraph | AttributeValue, _AttributeValuePydanticAnnotation],
     ] = pydantic.Field(default_factory=dict)
-    device: str | None = None
-    stream: str | None = None
+    device: typing.Annotated[str | DeviceLikeProtocol | None, _DeviceFieldPydanticAnnotation] = None
+    stream: typing.Annotated[str | int | None, _StrOrIntOptionalAnnotation] = None
+
+    _strides: tuple[int, ...] | None = pydantic.PrivateAttr(default=None)
 
     @pydantic.field_validator("shape_metadata", mode="before")
     @classmethod
@@ -603,6 +964,19 @@ class LogicalNode(pydantic.BaseModel):
             tuple[DimensionType, ...] | None: Validated tuple of dimensions or None.
         """
         return _normalize_shape_metadata(val)
+
+    @pydantic.field_validator("dtype", mode="before")
+    @classmethod
+    def _validate_dtype_field(cls, val: DType | DTypeLikeProtocol | str | None) -> DType | None:
+        """Normalize ``dtype`` field input from ``DType``, ``DTypeLikeProtocol``, ``str``, or ``None``.
+
+        Args:
+            val (DType | DTypeLikeProtocol | str | None): Raw dtype value.
+
+        Returns:
+            DType | None: Canonical ``DType`` enum member or ``None``.
+        """
+        return normalize_optional_dtype(val)
 
     @pydantic.field_validator("outputs", mode="before")
     @classmethod
@@ -646,6 +1020,7 @@ class LogicalNode(pydantic.BaseModel):
         outputs = kwargs.get("outputs")
         output_specs = kwargs.get("output_specs")
         subgraphs = kwargs.get("subgraphs")
+        norm_strides = _normalize_strides(kwargs.get("strides"))
         super().__init__(
             id=id,
             op_type=op_type,
@@ -657,12 +1032,40 @@ class LogicalNode(pydantic.BaseModel):
             shape_metadata=_normalize_shape_metadata(kwargs.get("shape_metadata")),
             source_ast_ref=kwargs.get("source_ast_ref"),
             sharding=kwargs.get("sharding"),
-            dtype=kwargs.get("dtype"),
+            dtype=normalize_optional_dtype(kwargs.get("dtype")),
             output_specs=list(output_specs) if output_specs is not None else [],
             subgraphs=dict(subgraphs) if subgraphs is not None else {},
             device=kwargs.get("device"),
             stream=kwargs.get("stream"),
         )
+        self._strides = norm_strides
+
+    @property
+    def strides(self) -> tuple[int, ...] | None:
+        """Return optional physical memory stride tuple for this node's primary output.
+
+        Returns:
+            tuple[int, ...] | None: Memory stride tuple or ``None``.
+        """
+        return self._strides
+
+    @strides.setter
+    def strides(self, value: Sequence[int] | None) -> None:
+        """Set optional physical memory stride tuple for this node's primary output.
+
+        Args:
+            value (Sequence[int] | None): Memory stride sequence or ``None``.
+        """
+        self._strides = _normalize_strides(value)
+
+    @property
+    def shape_tuple(self) -> tuple[DimensionType, ...] | None:
+        """Return primary output shape as an immutable ``tuple[DimensionType, ...]`` or ``None``.
+
+        Returns:
+            tuple[DimensionType, ...] | None: Raw dimension tuple if present, else ``None``.
+        """
+        return self.shape_metadata
 
     def set_shape_metadata(self, shape_metadata: ShapeMetadataType | Iterable[DimensionType]) -> None:
         """Set normalized shape metadata on this node.
@@ -804,13 +1207,14 @@ class LogicalNode(pydantic.BaseModel):
             "inputs": resolved_inputs,
             "outputs": resolved_outputs,
             "shape_metadata": resolved_shape,
-            "source_ast_ref": _resolve_optional_str_override(overrides, "source_ast_ref", self.source_ast_ref),
+            "source_ast_ref": _resolve_str_or_int_override(overrides, "source_ast_ref", self.source_ast_ref),
             "sharding": _resolve_sharding_override(overrides, self.sharding),
             "dtype": _resolve_dtype_override(overrides, self.dtype),
             "output_specs": resolved_specs,
             "subgraphs": cloned_subgraphs,
-            "device": _resolve_optional_str_override(overrides, "device", self.device),
-            "stream": _resolve_optional_str_override(overrides, "stream", self.stream),
+            "device": _resolve_device_override(overrides, self.device),
+            "stream": _resolve_str_or_int_override(overrides, "stream", self.stream),
+            "strides": _resolve_strides_override(overrides, self._strides),
         }
 
     def clone(
@@ -1278,7 +1682,34 @@ class NodeDict(MutableMapping[str, LogicalNode]):
                     core_schema.no_info_after_validator_function(cls, dict_schema),
                 ]
             ),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                _serialize_node_dict_pydantic,
+                info_arg=True,
+            ),
         )
+
+
+def _serialize_node_dict_pydantic(
+    val: NodeDict | Mapping[str, LogicalNode],
+    info: SerializationInfoProtocol,
+) -> NodeDict | Mapping[str, LogicalNode] | dict[str, JsonValue]:
+    """Serialize ``NodeDict`` for Pydantic Python and JSON modes.
+
+    Args:
+        val (NodeDict | Mapping[str, LogicalNode]): Node dictionary value.
+        info (SerializationInfoProtocol): Pydantic serialization context.
+
+    Returns:
+        NodeDict | Mapping[str, LogicalNode] | dict[str, JsonValue]:
+            Raw ``NodeDict`` in Python mode, or JSON-dumped node mapping in JSON mode.
+    """
+    if info.mode == "json":
+        out: dict[str, JsonValue] = {}
+        for k, v in val.items():
+            dumped_node: JsonValue = v.model_dump(mode="json")
+            out[k] = dumped_node
+        return out
+    return val
 
 
 class EdgeList(tuple["LogicalEdge", ...]):
@@ -1286,18 +1717,19 @@ class EdgeList(tuple["LogicalEdge", ...]):
 
 
 def _normalize_graph_nodes(
-    nodes: Mapping[str, LogicalNode] | NodeDict | None,
+    nodes: Mapping[str, LogicalNode] | NodeDict | Sequence[LogicalNode] | None,
 ) -> NodeDict:
-    """Normalize graph nodes argument from None or mapping into a NodeDict.
+    """Normalize graph nodes argument from None, Mapping, or Sequence[LogicalNode] into a NodeDict.
 
     Args:
-        nodes (Mapping[str, LogicalNode] | NodeDict | None): Input nodes mapping.
+        nodes (Mapping[str, LogicalNode] | NodeDict | Sequence[LogicalNode] | None):
+            Input nodes mapping or sequence of LogicalNode instances.
 
     Returns:
         NodeDict: Mapping from node IDs to LogicalNode instances.
 
     Raises:
-        TypeError: If nodes is not a Mapping or None.
+        TypeError: If ``nodes`` is not ``None``, a ``Mapping``, or a ``Sequence`` of ``LogicalNode``.
     """
     if nodes is None:
         return NodeDict()
@@ -1306,9 +1738,254 @@ def _normalize_graph_nodes(
         return nodes
     if isinstance(nodes, Mapping):
         return NodeDict(nodes)
+    if isinstance(nodes, Sequence):
+        if describe_value_type(nodes) in ("str", "bytes"):
+            raise TypeError(
+                "LogicalGraph 'nodes' must be a Mapping[str, LogicalNode], Sequence[LogicalNode], or None, "
+                f"got {describe_value_type(nodes)}."
+            )
+        seq_map: dict[str, LogicalNode] = {}
+        for item in nodes:
+            if not isinstance(item, LogicalNode):
+                raise TypeError(
+                    f"LogicalGraph 'nodes' sequence elements must be LogicalNode, got {describe_value_type(item)}."
+                )
+            seq_map[item.id] = item
+        return NodeDict(seq_map)
     raise TypeError(
-        f"LogicalGraph 'nodes' must be a Mapping[str, LogicalNode] or None, got {describe_value_type(nodes)}."
+        "LogicalGraph 'nodes' must be a Mapping[str, LogicalNode], Sequence[LogicalNode], or None, "
+        f"got {describe_value_type(nodes)}."
     )
+
+
+def _normalize_str_sequence(val: Sequence[str] | None, field_name: str) -> list[str]:
+    """Validate and normalize a ``Sequence[str] | None`` into a ``list[str]``.
+
+    Args:
+        val (Sequence[str] | None): Candidate sequence of string identifiers.
+        field_name (str): Field name for diagnostic error messages.
+
+    Returns:
+        list[str]: Normalized list of strings.
+
+    Raises:
+        TypeError: If ``val`` is a bare string/bytes or non-Sequence, or contains non-str elements.
+    """
+    if val is None:
+        return []
+    if isinstance(val, (str, bytes)) or not isinstance(val, Sequence):
+        raise TypeError(f"LogicalGraph '{field_name}' must be Sequence[str], got {describe_value_type(val)}.")
+    out: list[str] = []
+    for item in val:
+        if not isinstance(item, str):
+            raise TypeError(f"LogicalGraph '{field_name}' element must be str, got {describe_value_type(item)}.")
+        out.append(item)
+    return out
+
+
+def _validate_loop_options_field(
+    val: Mapping[str, AttributeValue] | LoopOptionsProtocol | None,
+) -> dict[str, AttributeValue] | LoopOptionsProtocol | None:
+    """Validate ``LogicalGraph.loop_options`` accepting ``Mapping``, ``LoopOptionsProtocol``, or ``None``.
+
+    Args:
+        val (Mapping[str, AttributeValue] | LoopOptionsProtocol | None): Candidate loop options.
+
+    Returns:
+        dict[str, AttributeValue] | LoopOptionsProtocol | None: Validated loop options.
+
+    Raises:
+        ValueError: If ``val`` is neither ``None``, a valid ``LoopOptionsProtocol``, nor a valid mapping.
+    """
+    if val is None:
+        return None
+    if isinstance(val, LoopOptionsProtocol) and is_valid_loop_options_protocol(val):
+        return val
+    if isinstance(val, Mapping):
+        checked: dict[str, AttributeValue] = {}
+        for k, v in val.items():
+            if not isinstance(k, str):
+                raise ValueError(f"loop_options mapping key must be str, got {describe_value_type(k)}.")
+            checked[k] = _validate_attribute_value(v)
+        return checked
+    raise ValueError(f"Invalid LogicalGraph 'loop_options' value: {val!r}")
+
+
+def _serialize_loop_options_field(
+    val: dict[str, AttributeValue] | LoopOptionsProtocol | None,
+    info: SerializationInfoProtocol,
+) -> dict[str, AttributeValue] | LoopOptionsProtocol | dict[str, JsonValue] | None:
+    """Serialize ``LogicalGraph.loop_options`` cleanly in Python and JSON modes.
+
+    Args:
+        val (dict[str, AttributeValue] | LoopOptionsProtocol | None): Validated loop options.
+        info (SerializationInfoProtocol): Pydantic serialization context.
+
+    Returns:
+        dict[str, AttributeValue] | LoopOptionsProtocol | dict[str, JsonValue] | None:
+            Raw value in Python mode, or JSON-safe dictionary/None in JSON mode.
+    """
+    if info.mode == "json":
+        if val is None:
+            return None
+        if isinstance(val, LoopOptionsProtocol):
+            return _encode_json_safe_protocol_leaf(val)
+        return {k: _encode_json_safe_attribute(v) for k, v in val.items()}
+    return val
+
+
+class _LoopOptionsFieldPydanticAnnotation:
+    """Pydantic v2 CoreSchema and JSON Schema provider for ``LogicalGraph.loop_options``."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: type[dict[str, AttributeValue] | LoopOptionsProtocol | None],
+        handler: pydantic.GetCoreSchemaHandler,
+    ) -> pydantic_core.CoreSchema:
+        """Build CoreSchema for ``LogicalGraph.loop_options``.
+
+        Args:
+            source_type (type[dict[str, AttributeValue] | LoopOptionsProtocol | None]): Field type.
+            handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
+
+        Returns:
+            pydantic_core.CoreSchema: Validator and JSON serializer schema.
+        """
+        del source_type, handler
+        return core_schema.no_info_plain_validator_function(
+            _validate_loop_options_field,
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                _serialize_loop_options_field,
+                info_arg=True,
+            ),
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema_obj: pydantic_core.CoreSchema,
+        handler: pydantic.GetJsonSchemaHandler,
+    ) -> dict[str, JsonValue]:
+        """Build Draft 2020-12 JSON Schema for ``LogicalGraph.loop_options``.
+
+        Args:
+            core_schema_obj (pydantic_core.CoreSchema): Core schema object.
+            handler (pydantic.GetJsonSchemaHandler): JSON schema handler.
+
+        Returns:
+            dict[str, JsonValue]: JSON Schema union of object and null.
+        """
+        del core_schema_obj, handler
+        return {"anyOf": [{"type": "object"}, {"type": "null"}]}
+
+
+def _validate_mesh_field(
+    val: LogicalMesh | MeshLikeProtocol | AttributeValue,
+) -> LogicalMesh | MeshLikeProtocol | AttributeValue:
+    """Validate ``LogicalGraph.mesh`` accepting ``LogicalMesh``, ``MeshLikeProtocol``, or ``AttributeValue``.
+
+    Args:
+        val (LogicalMesh | MeshLikeProtocol | AttributeValue): Candidate mesh specification.
+
+    Returns:
+        LogicalMesh | MeshLikeProtocol | AttributeValue: Validated mesh object or attribute value.
+
+    Raises:
+        ValueError: If ``val`` is an invalid ``MeshLikeProtocol`` or unsupported value.
+    """
+    if val is None or isinstance(val, LogicalMesh):
+        return val
+    if isinstance(val, MeshLikeProtocol):
+        axes = val.axis_names
+        if not isinstance(axes, (str, bytes)):
+            return val
+        raise ValueError(f"Invalid MeshLikeProtocol axis_names on LogicalGraph 'mesh': {val!r}")
+    if (
+        isinstance(val, Mapping)
+        and "shape" in val
+        and isinstance(val["shape"], Mapping)
+        and set(val.keys()) <= {"shape", "webrtc_topology"}
+    ):
+        return LogicalMesh.model_validate(val)
+    return _validate_attribute_value(val)
+
+
+def _serialize_mesh_field(
+    val: LogicalMesh | MeshLikeProtocol | AttributeValue,
+    info: SerializationInfoProtocol,
+) -> LogicalMesh | MeshLikeProtocol | AttributeValue | JsonValue:
+    """Serialize ``LogicalGraph.mesh`` cleanly in Python and JSON modes.
+
+    Args:
+        val (LogicalMesh | MeshLikeProtocol | AttributeValue): Validated mesh field value.
+        info (SerializationInfoProtocol): Pydantic serialization context.
+
+    Returns:
+        LogicalMesh | MeshLikeProtocol | AttributeValue | JsonValue:
+            Raw value in Python mode, or deterministic JSON value in JSON mode.
+    """
+    if info.mode == "json":
+        if isinstance(val, LogicalMesh):
+            dumped: JsonValue = val.model_dump(mode="json")
+            return dumped
+        if isinstance(val, MeshLikeProtocol):
+            return {"__sw_type__": "MeshLike", "axis_names": [str(a) for a in val.axis_names]}
+        return _encode_json_safe_attribute(val)
+    return val
+
+
+class _MeshFieldPydanticAnnotation:
+    """Pydantic v2 CoreSchema and JSON Schema provider for ``LogicalGraph.mesh``."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: type[LogicalMesh | MeshLikeProtocol | AttributeValue],
+        handler: pydantic.GetCoreSchemaHandler,
+    ) -> pydantic_core.CoreSchema:
+        """Build CoreSchema for ``LogicalGraph.mesh``.
+
+        Args:
+            source_type (type[LogicalMesh | MeshLikeProtocol | AttributeValue]): Field type.
+            handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
+
+        Returns:
+            pydantic_core.CoreSchema: Validator and JSON serializer schema.
+        """
+        del source_type, handler
+        return core_schema.no_info_plain_validator_function(
+            _validate_mesh_field,
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                _serialize_mesh_field,
+                info_arg=True,
+            ),
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema_obj: pydantic_core.CoreSchema,
+        handler: pydantic.GetJsonSchemaHandler,
+    ) -> dict[str, JsonValue]:
+        """Build Draft 2020-12 JSON Schema for ``LogicalGraph.mesh``.
+
+        Args:
+            core_schema_obj (pydantic_core.CoreSchema): Core schema object.
+            handler (pydantic.GetJsonSchemaHandler): JSON schema handler.
+
+        Returns:
+            dict[str, JsonValue]: JSON Schema union of object, string, array, and null.
+        """
+        del core_schema_obj, handler
+        return {
+            "anyOf": [
+                {"type": "object"},
+                {"type": "string"},
+                {"type": "array"},
+                {"type": "null"},
+            ]
+        }
 
 
 def _auto_detect_input_pseudo_nodes(
@@ -1336,19 +2013,19 @@ def _auto_detect_input_pseudo_nodes(
 
 def _infer_graph_outputs(
     nodes: Mapping[str, LogicalNode],
-    explicit_outputs: list[str] | None,
+    explicit_outputs: Sequence[str] | None,
 ) -> list[str]:
     """Resolve explicit graph outputs or infer non-Input leaf/Output nodes when omitted.
 
     Args:
         nodes (Mapping[str, LogicalNode]): Graph node dictionary.
-        explicit_outputs (list[str] | None): Explicit output list if provided.
+        explicit_outputs (Sequence[str] | None): Explicit output sequence if provided.
 
     Returns:
         list[str]: Resolved output identifiers.
     """
     if explicit_outputs is not None:
-        return list(explicit_outputs)
+        return _normalize_str_sequence(explicit_outputs, "outputs")
     consumed: set[str] = {inp for n in nodes.values() for inp in n.inputs}
     out_ids: list[str] = []
     for nid, n in nodes.items():
@@ -1365,22 +2042,28 @@ class LogicalGraphKwargs(typing_extensions.TypedDict, total=False):
     """Structured optional keyword parameters for ``LogicalGraph`` construction.
 
     Attributes:
-        inputs (list[str] | None): Ordered list of graph input variable names.
+        inputs (Sequence[str] | None): Ordered sequence of graph input variable names.
         input_specs (Mapping[str, TensorSpec] | None): Type and shape specifications for inputs.
         initializers (Mapping[str, InitializerValue] | None): Constant parameter/weight tensors.
         edges (Sequence[LogicalEdge] | None): Explicit directed edges to populate into node inputs.
         pipeline_topology (PipelineTopologyConfig | None): Distributed pipeline topology config.
         attributes (Mapping[str, AttributeValue] | None): Graph-level metadata attributes.
-        loop_options (Mapping[str, AttributeValue] | None): Optional compiler loop configuration.
+        annotations (Mapping[str, AttributeValue] | None): Compiler pass and frontend annotations.
+        metadata (Mapping[str, AttributeValue | LoopOptionsProtocol | None] | None): Auxiliary graph metadata.
+        sorted_nodes (Sequence[LogicalNode] | None): Optional precomputed topological node sequence.
+        loop_options (Mapping[str, AttributeValue] | LoopOptionsProtocol | None): Optional compiler loop configuration.
     """
 
-    inputs: list[str] | None
+    inputs: Sequence[str] | None
     input_specs: Mapping[str, TensorSpec] | None
     initializers: Mapping[str, InitializerValue] | None
     edges: Sequence[LogicalEdge] | None
     pipeline_topology: PipelineTopologyConfig | None
     attributes: Mapping[str, AttributeValue] | None
-    loop_options: Mapping[str, AttributeValue] | None
+    annotations: Mapping[str, AttributeValue] | None
+    metadata: Mapping[str, AttributeValue | LoopOptionsProtocol | None] | None
+    sorted_nodes: Sequence[LogicalNode] | None
+    loop_options: Mapping[str, AttributeValue] | LoopOptionsProtocol | None
 
 
 class LogicalGraph(pydantic.BaseModel):
@@ -1393,10 +2076,13 @@ class LogicalGraph(pydantic.BaseModel):
         input_specs (dict[str, TensorSpec]): Type and shape specifications for graph inputs.
         outputs (list[str]): Ordered list of graph output identifiers or SSA names.
         initializers (dict[str, InitializerValue]): Constant parameters and weights keyed by tensor name.
-        mesh (LogicalMesh | None): Optional logical device mesh for distributed execution.
+        mesh (LogicalMesh | MeshLikeProtocol | AttributeValue): Optional logical device mesh for distributed execution.
         pipeline_topology (PipelineTopologyConfig | None): Optional distributed pipeline topology.
         attributes (dict[str, AttributeValue]): Validated graph-level metadata attributes.
-        loop_options (dict[str, AttributeValue] | None): Optional compiler loop configuration options.
+        annotations (dict[str, AttributeValue]): Validated compiler and pass annotations.
+        metadata (dict[str, AttributeValue | LoopOptionsProtocol | None]): Auxiliary structured graph metadata.
+        sorted_nodes (list[LogicalNode] | None): Optional cached topologically sorted node list.
+        loop_options (dict[str, AttributeValue] | LoopOptionsProtocol | None): Optional compiler loop options.
     """
 
     model_config = pydantic.ConfigDict(
@@ -1411,10 +2097,25 @@ class LogicalGraph(pydantic.BaseModel):
     input_specs: dict[str, TensorSpec] = pydantic.Field(default_factory=dict)
     outputs: list[str] = pydantic.Field(default_factory=list)
     initializers: dict[str, InitializerValue] = pydantic.Field(default_factory=dict)
-    mesh: LogicalMesh | None = None
+    mesh: typing.Annotated[
+        LogicalMesh | MeshLikeProtocol | AttributeValue,
+        _MeshFieldPydanticAnnotation,
+    ] = None
     pipeline_topology: PipelineTopologyConfig | None = None
     attributes: dict[str, AttributeValue] = pydantic.Field(default_factory=dict)
-    loop_options: dict[str, AttributeValue] | None = None
+    annotations: dict[
+        str,
+        typing.Annotated[AttributeValue, _AttributeValuePydanticAnnotation],
+    ] = pydantic.Field(default_factory=dict)
+    metadata: dict[
+        str,
+        typing.Annotated[AttributeValue | LoopOptionsProtocol | None, _AttributeValuePydanticAnnotation],
+    ] = pydantic.Field(default_factory=dict)
+    sorted_nodes: list[LogicalNode] | None = None
+    loop_options: typing.Annotated[
+        dict[str, AttributeValue] | LoopOptionsProtocol | None,
+        _LoopOptionsFieldPydanticAnnotation,
+    ] = None
 
     _cached_output_map: dict[str, tuple[LogicalNode, int]] | None = pydantic.PrivateAttr(default=None)
     _cached_nodes_version: int = pydantic.PrivateAttr(default=-1)
@@ -1422,37 +2123,68 @@ class LogicalGraph(pydantic.BaseModel):
 
     @pydantic.field_validator("nodes", mode="before")
     @classmethod
-    def _validate_nodes_field(cls, val: Mapping[str, LogicalNode] | NodeDict | None) -> NodeDict:
+    def _validate_nodes_field(
+        cls,
+        val: Mapping[str, LogicalNode] | NodeDict | Sequence[LogicalNode] | None,
+    ) -> NodeDict:
         """Validate and normalize nodes into a NodeDict.
 
         Args:
-            val (Mapping[str, LogicalNode] | NodeDict | None): Input nodes mapping.
+            val (Mapping[str, LogicalNode] | NodeDict | Sequence[LogicalNode] | None):
+                Input nodes mapping or sequence.
 
         Returns:
             NodeDict: Normalized NodeDict instance.
         """
         return _normalize_graph_nodes(val)
 
+    @pydantic.field_validator("inputs", mode="before")
+    @classmethod
+    def _validate_inputs_field(cls, val: Sequence[str] | None) -> list[str]:
+        """Normalize ``inputs`` sequence (including tuples) into ``list[str]``.
+
+        Args:
+            val (Sequence[str] | None): Input sequence of graph input names.
+
+        Returns:
+            list[str]: Normalized list of input names.
+        """
+        return _normalize_str_sequence(val, "inputs")
+
+    @pydantic.field_validator("outputs", mode="before")
+    @classmethod
+    def _validate_outputs_field(cls, val: Sequence[str] | None) -> list[str]:
+        """Normalize ``outputs`` sequence (including tuples) into ``list[str]``.
+
+        Args:
+            val (Sequence[str] | None): Input sequence of graph output names.
+
+        Returns:
+            list[str]: Normalized list of output names.
+        """
+        return _normalize_str_sequence(val, "outputs")
+
     def __init__(
         self,
         name: str = "Model",
-        nodes: Mapping[str, LogicalNode] | NodeDict | None = None,
-        outputs: list[str] | None = None,
-        mesh: LogicalMesh | None = None,
+        nodes: Mapping[str, LogicalNode] | NodeDict | Sequence[LogicalNode] | None = None,
+        outputs: Sequence[str] | None = None,
+        mesh: LogicalMesh | MeshLikeProtocol | AttributeValue = None,
         **kwargs: typing_extensions.Unpack[LogicalGraphKwargs],
     ) -> None:
         """Initialize a LogicalGraph instance.
 
         Args:
             name (str): Name of the graph model or class (default: 'Model').
-            nodes (Mapping[str, LogicalNode] | NodeDict | None): Mapping of node IDs
-                to LogicalNode instances.
-            outputs (list[str] | None): List of explicit output IDs. If omitted, deduced from
-                non-Input nodes with out-degree zero (leaf nodes).
-            mesh (LogicalMesh | None): Optional logical device mesh for distributed execution.
+            nodes (Mapping[str, LogicalNode] | NodeDict | Sequence[LogicalNode] | None):
+                Mapping of node IDs to LogicalNode instances or sequence of LogicalNodes.
+            outputs (Sequence[str] | None): Sequence of explicit output IDs. If omitted, deduced
+                from non-Input nodes with out-degree zero (leaf nodes).
+            mesh (LogicalMesh | MeshLikeProtocol | AttributeValue): Optional logical device mesh.
             **kwargs (typing_extensions.Unpack[LogicalGraphKwargs]): Optional graph fields
                 (``inputs``, ``input_specs``, ``initializers``, ``edges``,
-                ``pipeline_topology``, ``attributes``, ``loop_options``).
+                ``pipeline_topology``, ``attributes``, ``annotations``, ``metadata``,
+                ``sorted_nodes``, ``loop_options``).
         """
         norm_nodes = _normalize_graph_nodes(nodes)
         raw_inputs = kwargs.get("inputs")
@@ -1460,13 +2192,25 @@ class LogicalGraph(pydantic.BaseModel):
         raw_inits = kwargs.get("initializers")
         raw_edges = kwargs.get("edges")
         raw_attrs = kwargs.get("attributes")
+        raw_annotations = kwargs.get("annotations")
+        raw_metadata = kwargs.get("metadata")
+        raw_sorted = kwargs.get("sorted_nodes")
         raw_loop = kwargs.get("loop_options")
 
-        norm_inputs = list(raw_inputs) if raw_inputs is not None else []
+        norm_inputs = _normalize_str_sequence(raw_inputs, "inputs")
         norm_specs = dict(raw_specs) if raw_specs is not None else {}
         norm_inits = dict(raw_inits) if raw_inits is not None else {}
         norm_attrs = dict(raw_attrs) if raw_attrs is not None else {}
-        norm_loop = dict(raw_loop) if raw_loop is not None else None
+        norm_annotations = dict(raw_annotations) if raw_annotations is not None else {}
+        norm_metadata = dict(raw_metadata) if raw_metadata is not None else {}
+        norm_sorted = list(raw_sorted) if raw_sorted is not None else None
+        norm_loop: dict[str, AttributeValue] | LoopOptionsProtocol | None
+        if isinstance(raw_loop, LoopOptionsProtocol):
+            norm_loop = raw_loop
+        elif isinstance(raw_loop, Mapping):
+            norm_loop = dict(raw_loop)
+        else:
+            norm_loop = raw_loop
 
         _auto_detect_input_pseudo_nodes(norm_nodes, norm_inputs, norm_specs)
 
@@ -1491,6 +2235,9 @@ class LogicalGraph(pydantic.BaseModel):
             mesh=mesh,
             pipeline_topology=kwargs.get("pipeline_topology"),
             attributes=norm_attrs,
+            annotations=norm_annotations,
+            metadata=norm_metadata,
+            sorted_nodes=norm_sorted,
             loop_options=norm_loop,
         )
         self._edge_value_names = edge_val_names
@@ -1765,6 +2512,13 @@ class LogicalGraph(pydantic.BaseModel):
         cloned_mesh = copy.deepcopy(self.mesh) if self.mesh is not None else None
         cloned_topology = copy.deepcopy(self.pipeline_topology) if self.pipeline_topology is not None else None
         cloned_attrs = copy.deepcopy(self.attributes)
+        cloned_annotations = copy.deepcopy(self.annotations)
+        cloned_metadata = copy.deepcopy(self.metadata)
+        cloned_sorted = (
+            [cloned_nodes[n.id] if n.id in cloned_nodes else n.clone() for n in self.sorted_nodes]
+            if self.sorted_nodes is not None
+            else None
+        )
         cloned_loop = copy.deepcopy(self.loop_options) if self.loop_options is not None else None
 
         new_g = LogicalGraph(
@@ -1777,6 +2531,9 @@ class LogicalGraph(pydantic.BaseModel):
             initializers=cloned_inits,
             pipeline_topology=cloned_topology,
             attributes=cloned_attrs,
+            annotations=cloned_annotations,
+            metadata=cloned_metadata,
+            sorted_nodes=cloned_sorted,
             loop_options=cloned_loop,
         )
         new_g._edge_value_names = dict(self._edge_value_names)
@@ -1863,6 +2620,8 @@ class LogicalGraph(pydantic.BaseModel):
             and self.mesh == other.mesh
             and self.pipeline_topology == other.pipeline_topology
             and self.attributes == other.attributes
+            and self.annotations == other.annotations
+            and self.metadata == other.metadata
             and self.loop_options == other.loop_options
             and self._edge_value_names == other._edge_value_names
         )
@@ -2166,3 +2925,6 @@ class GraphFrontend(BaseFrontend, ABC):
 
 LogicalNode.model_rebuild()
 LogicalGraph.model_rebuild()
+
+IRNode: typing_extensions.TypeAlias = LogicalNode
+IRGraph: typing_extensions.TypeAlias = LogicalGraph

@@ -9,6 +9,7 @@ import string
 import typing
 from collections.abc import Collection, Mapping, MutableMapping, Sequence
 
+import pydantic
 import typing_extensions
 
 from ml_switcheroo_ir.distributed import (
@@ -18,6 +19,16 @@ from ml_switcheroo_ir.distributed import (
     PartitionSpec,
     PipelineTopologyConfig,
     WebRTCSignalingTopology,
+)
+from ml_switcheroo_ir.protocols import (
+    ArrayBufferProtocol,
+    CustomRuleHandleProtocol,
+    DeviceLikeProtocol,
+    DTypeLikeProtocol,
+    LoopOptionsProtocol,
+    MeshLikeProtocol,
+    SymbolicIntWrapperProtocol,
+    SymbolicNodeProtocol,
 )
 from ml_switcheroo_ir.shapes import (
     DimensionType,
@@ -29,6 +40,7 @@ from ml_switcheroo_ir.shapes import (
     SymPiecewise,
     SymUnaryOp,
     SymVar,
+    format_symbolic_protocol_expr,
     parse_symbolic_expr,
 )
 from ml_switcheroo_ir.types import (
@@ -38,6 +50,7 @@ from ml_switcheroo_ir.types import (
     JsonValue,
     TensorShape,
     TensorSpec,
+    _encode_json_safe_protocol_leaf,
 )
 
 if typing.TYPE_CHECKING:
@@ -330,7 +343,7 @@ def _encode_dimension(dim: DimensionType) -> JsonValue:
     """Encode a single ``DimensionType`` entry losslessly for JSON serialization.
 
     Args:
-        dim (DimensionType): Dimension value (``int``, ``str``, ``SymNode``, or ``SymInt``).
+        dim (DimensionType): Dimension value (``int``, ``str``, ``SymNode``, ``SymInt``, or symbolic protocol).
 
     Returns:
         JsonValue: JSON-compatible representation preserving exact symbolic type.
@@ -339,6 +352,8 @@ def _encode_dimension(dim: DimensionType) -> JsonValue:
         return {_TAG_KEY: "SymInt", "expr": str(dim), "node": _encode_symnode(dim.node)}
     if isinstance(dim, SymNode):
         return _encode_symnode(dim)
+    if isinstance(dim, (SymbolicNodeProtocol, SymbolicIntWrapperProtocol)):
+        return format_symbolic_protocol_expr(dim)
     if isinstance(dim, int) and not isinstance(dim, bool):
         return dim
     return str(dim)
@@ -377,6 +392,26 @@ def _encode_rich_attribute_leaf(
     }
 
 
+def _encode_model_attribute_leaf(val: pydantic.BaseModel) -> JsonValue:
+    """Encode a ``pydantic.BaseModel`` leaf in ``AttributeValue`` into canonical JSON data.
+
+    Args:
+        val (pydantic.BaseModel): Pydantic model attribute value.
+
+    Returns:
+        JsonValue: Canonical dictionary or JSON dump representation.
+    """
+    from ml_switcheroo_ir.graph import LogicalGraph as _LogicalGraph
+    from ml_switcheroo_ir.graph import LogicalNode as _LogicalNode
+
+    if isinstance(val, _LogicalGraph):
+        return graph_to_dict(val)
+    if isinstance(val, _LogicalNode):
+        return _serialize_node_dict(val)
+    dumped: JsonValue = val.model_dump(mode="json")
+    return dumped
+
+
 def _encode_attribute_value(val: AttributeValue) -> JsonValue:
     """Encode an ``AttributeValue`` into pure JSON types using lossless ``__sw_type__`` envelopes.
 
@@ -390,13 +425,28 @@ def _encode_attribute_value(val: AttributeValue) -> JsonValue:
         return _encode_rich_attribute_leaf(val)
     if val is None or isinstance(val, (bool, int, float, str)):
         return val
+    if isinstance(val, pydantic.BaseModel):
+        return _encode_model_attribute_leaf(val)
+    if isinstance(
+        val,
+        (
+            DTypeLikeProtocol,
+            DeviceLikeProtocol,
+            SymbolicNodeProtocol,
+            SymbolicIntWrapperProtocol,
+            CustomRuleHandleProtocol,
+            LoopOptionsProtocol,
+            ArrayBufferProtocol,
+        ),
+    ):
+        return _encode_json_safe_protocol_leaf(val)
     if isinstance(val, Mapping):
         return {str(k): _encode_attribute_value(v) for k, v in val.items()}
     return [_encode_attribute_value(item) for item in val]
 
 
 def _encode_initializer_value(val: InitializerValue) -> JsonValue:
-    """Encode an ``InitializerValue`` into pure JSON types, preserving ``bytes`` via base64 tags.
+    """Encode an ``InitializerValue`` into pure JSON types, preserving ``bytes`` and buffers via base64 tags.
 
     Args:
         val (InitializerValue): Initializer constant payload.
@@ -408,6 +458,12 @@ def _encode_initializer_value(val: InitializerValue) -> JsonValue:
         return val
     if isinstance(val, bytes):
         return {_TAG_KEY: "bytes", "data": base64.b64encode(val).decode("ascii")}
+    if isinstance(val, ArrayBufferProtocol):
+        return {
+            _TAG_KEY: "ArrayBuffer",
+            "data": base64.b64encode(val.tobytes()).decode("ascii"),
+            "shape": list(val.shape),
+        }
     if isinstance(val, Mapping):
         return {str(k): _encode_initializer_value(v) for k, v in val.items()}
     return [_encode_initializer_value(item) for item in val]
@@ -515,6 +571,8 @@ def _coerce_attribute_value(val: RawGraphValue) -> AttributeValue:
     Returns:
         AttributeValue: Decoded ``AttributeValue``.
     """
+    if isinstance(val, (LogicalMesh, PipelineTopologyConfig)):
+        return str(val)
     if val is None or isinstance(
         val,
         (
@@ -528,6 +586,14 @@ def _coerce_attribute_value(val: RawGraphValue) -> AttributeValue:
             DType,
             TensorShape,
             TensorSpec,
+            pydantic.BaseModel,
+            DTypeLikeProtocol,
+            DeviceLikeProtocol,
+            SymbolicNodeProtocol,
+            SymbolicIntWrapperProtocol,
+            CustomRuleHandleProtocol,
+            LoopOptionsProtocol,
+            ArrayBufferProtocol,
         ),
     ):
         return val
@@ -536,11 +602,7 @@ def _coerce_attribute_value(val: RawGraphValue) -> AttributeValue:
         if decoded is not None:
             return decoded
         return {str(k): _coerce_attribute_value(v) for k, v in val.items()}
-    return (
-        str(val)
-        if isinstance(val, (LogicalMesh, PartitionSpec, PipelineTopologyConfig))
-        else [_coerce_attribute_value(item) for item in val]
-    )
+    return [_coerce_attribute_value(item) for item in val]
 
 
 def _coerce_initializer_value(val: RawGraphValue) -> InitializerValue:
@@ -577,21 +639,25 @@ def _coerce_initializer_value(val: RawGraphValue) -> InitializerValue:
     )
 
 
-def _parse_sharding_field(sharding_raw: RawGraphValue) -> PartitionSpec | None:
-    """Deserialize an optional ``PartitionSpec`` from a node dictionary.
+def _parse_sharding_field(
+    sharding_raw: RawGraphValue,
+) -> PartitionSpec | str | dict[str, AttributeValue] | None:
+    """Deserialize an optional ``sharding`` field from a node dictionary.
 
     Args:
         sharding_raw (RawGraphValue): Raw sharding value.
 
     Returns:
-        PartitionSpec | None: Parsed ``PartitionSpec`` or ``None``.
+        PartitionSpec | str | dict[str, AttributeValue] | None: Parsed sharding specification or ``None``.
     """
-    if isinstance(sharding_raw, PartitionSpec):
+    if isinstance(sharding_raw, (PartitionSpec, str)):
         return sharding_raw
     if isinstance(sharding_raw, Mapping):
-        raw_axes = sharding_raw.get("axes", ())
-        axes_seq = raw_axes if isinstance(raw_axes, Sequence) and not isinstance(raw_axes, (str, bytes)) else ()
-        return PartitionSpec(axes=tuple(_normalize_partition_axis(a) for a in axes_seq))
+        if set(sharding_raw.keys()) == {"axes"}:
+            raw_axes = sharding_raw.get("axes", ())
+            axes_seq = raw_axes if isinstance(raw_axes, Sequence) and not isinstance(raw_axes, (str, bytes)) else ()
+            return PartitionSpec(axes=tuple(_normalize_partition_axis(a) for a in axes_seq))
+        return {str(k): _coerce_attribute_value(v) for k, v in sharding_raw.items()}
     return None
 
 
@@ -681,11 +747,25 @@ def _parse_node_dict(
     output_specs_val = _parse_output_specs_field(ndata.get("output_specs"))
     subgraphs_val = _parse_subgraphs_from_node_dict(ndata, graph_cls)
     raw_ast_ref = ndata.get("source_ast_ref")
-    ast_ref_val = str(raw_ast_ref) if raw_ast_ref is not None else None
+    ast_ref_val: str | int | None = (
+        raw_ast_ref
+        if isinstance(raw_ast_ref, int) and not isinstance(raw_ast_ref, bool)
+        else (str(raw_ast_ref) if raw_ast_ref is not None else None)
+    )
     raw_device = ndata.get("device")
     device_val = str(raw_device) if raw_device is not None else None
     raw_stream = ndata.get("stream")
-    stream_val = str(raw_stream) if raw_stream is not None else None
+    stream_val: str | int | None = (
+        raw_stream
+        if isinstance(raw_stream, int) and not isinstance(raw_stream, bool)
+        else (str(raw_stream) if raw_stream is not None else None)
+    )
+    raw_strides = ndata.get("strides")
+    strides_val: list[int] | None = (
+        [int(x) for x in raw_strides if isinstance(x, int) and not isinstance(x, bool)]
+        if isinstance(raw_strides, Sequence) and not isinstance(raw_strides, (str, bytes))
+        else None
+    )
 
     if domain_val in ("ml.switcheroo.ad", "ad") and op_type_val == "ZeroTangent":
         return ZeroTangent(
@@ -702,6 +782,7 @@ def _parse_node_dict(
             subgraphs=subgraphs_val,
             device=device_val,
             stream=stream_val,
+            strides=strides_val,
         )
     if domain_val in ("ml.switcheroo.ad", "ad") and op_type_val == "NoTangent":
         return NoTangent(
@@ -718,6 +799,7 @@ def _parse_node_dict(
             subgraphs=subgraphs_val,
             device=device_val,
             stream=stream_val,
+            strides=strides_val,
         )
     return LogicalNode(
         id=node_id,
@@ -735,6 +817,7 @@ def _parse_node_dict(
         subgraphs=subgraphs_val,
         device=device_val,
         stream=stream_val,
+        strides=strides_val,
     )
 
 
@@ -767,26 +850,34 @@ def _parse_subgraphs_from_node_dict(
 
 def _parse_mesh_dict(
     mesh_data: RawGraphValue,
-) -> LogicalMesh | None:
-    """Deserialize an optional LogicalMesh dictionary.
+) -> LogicalMesh | AttributeValue:
+    """Deserialize an optional LogicalMesh dictionary or serialized mesh attribute payload.
 
     Args:
-        mesh_data (RawGraphValue): Raw mesh dictionary or None.
+        mesh_data (RawGraphValue): Raw mesh dictionary, scalar, sequence, or None.
 
     Returns:
-        LogicalMesh | None: Deserialized LogicalMesh or None.
+        LogicalMesh | AttributeValue: Deserialized LogicalMesh, AttributeValue, or None.
     """
-    if not isinstance(mesh_data, Mapping) or not mesh_data:
+    if mesh_data is None:
         return None
-    raw_webrtc = mesh_data.get("webrtc_topology")
-    webrtc_topo = WebRTCSignalingTopology.model_validate(raw_webrtc) if isinstance(raw_webrtc, Mapping) else None
-    raw_shape = mesh_data.get("shape", {})
-    shape_dict: dict[str, int] = (
-        {str(k): int(v) for k, v in raw_shape.items() if isinstance(v, (int, str)) and not isinstance(v, bool)}
-        if isinstance(raw_shape, Mapping)
-        else {}
-    )
-    return LogicalMesh(shape=shape_dict, webrtc_topology=webrtc_topo)
+    if isinstance(mesh_data, Mapping):
+        if not mesh_data:
+            return None
+        if "shape" in mesh_data and set(mesh_data.keys()) <= {"shape", "webrtc_topology"}:
+            raw_webrtc = mesh_data.get("webrtc_topology")
+            webrtc_topo = (
+                WebRTCSignalingTopology.model_validate(raw_webrtc) if isinstance(raw_webrtc, Mapping) else None
+            )
+            raw_shape = mesh_data.get("shape", {})
+            shape_dict: dict[str, int] = (
+                {str(k): int(v) for k, v in raw_shape.items() if isinstance(v, (int, str)) and not isinstance(v, bool)}
+                if isinstance(raw_shape, Mapping)
+                else {}
+            )
+            return LogicalMesh(shape=shape_dict, webrtc_topology=webrtc_topo)
+        return _coerce_attribute_value(mesh_data)
+    return _coerce_attribute_value(mesh_data)
 
 
 def _parse_input_specs_dict(
@@ -1151,6 +1242,18 @@ def _build_graph_from_parsed_sections(
     attrs_dict: dict[str, AttributeValue] = (
         {str(k): _coerce_attribute_value(v) for k, v in attrs_raw.items()} if isinstance(attrs_raw, Mapping) else {}
     )
+    annotations_raw = meta.get("annotations")
+    annotations_dict: dict[str, AttributeValue] = (
+        {str(k): _coerce_attribute_value(v) for k, v in annotations_raw.items()}
+        if isinstance(annotations_raw, Mapping)
+        else {}
+    )
+    metadata_raw = meta.get("metadata")
+    metadata_dict: dict[str, AttributeValue] = (
+        {str(k): _coerce_attribute_value(v) for k, v in metadata_raw.items()}
+        if isinstance(metadata_raw, Mapping)
+        else {}
+    )
     loop_raw = meta.get("loop_options")
     loop_dict: dict[str, AttributeValue] | None = (
         {str(k): _coerce_attribute_value(v) for k, v in loop_raw.items()} if isinstance(loop_raw, Mapping) else None
@@ -1165,6 +1268,8 @@ def _build_graph_from_parsed_sections(
         mesh=_parse_mesh_dict(meta.get("mesh")),
         pipeline_topology=pipe_topo,
         attributes=attrs_dict,
+        annotations=annotations_dict,
+        metadata=metadata_dict,
         loop_options=loop_dict,
     )
     graph._edge_value_names.update(edge_value_names)
@@ -1294,17 +1399,26 @@ def _serialize_node_dict(node: LogicalNode) -> dict[str, JsonValue]:
         else:
             sub_dict[k] = _encode_attribute_value(copy.deepcopy(v))
 
-    sharding_dict: dict[str, JsonValue] | None = None
-    if node.sharding is not None:
-        sharding_dict = {"axes": json.loads(json.dumps(node.sharding.axes))}
+    sharding_val: JsonValue = None
+    if isinstance(node.sharding, PartitionSpec):
+        sharding_val = {"axes": json.loads(json.dumps(node.sharding.axes))}
+    elif isinstance(node.sharding, str):
+        sharding_val = node.sharding
+    elif node.sharding is not None:
+        sharding_val = {k: _encode_attribute_value(v) for k, v in node.sharding.items()}
 
     shape_meta_val: list[JsonValue] | None = (
         [_encode_dimension(d) for d in node.shape_metadata] if node.shape_metadata is not None else None
     )
+    device_val: str | None = (
+        (f"{node.device.type}:{node.device.index}" if node.device.index is not None else node.device.type)
+        if isinstance(node.device, DeviceLikeProtocol)
+        else node.device
+    )
 
     return {
         "attributes": {k: _encode_attribute_value(v) for k, v in node.attributes.items()},
-        "device": node.device,
+        "device": device_val,
         "domain": node.domain,
         "dtype": node.dtype.value if node.dtype is not None else None,
         "id": node.id,
@@ -1313,9 +1427,10 @@ def _serialize_node_dict(node: LogicalNode) -> dict[str, JsonValue]:
         "output_specs": [_serialize_tensor_spec_dict(spec) for spec in node.output_specs],
         "outputs": list(node.outputs),
         "shape_metadata": shape_meta_val,
-        "sharding": sharding_dict,
+        "sharding": sharding_val,
         "source_ast_ref": node.source_ast_ref,
         "stream": node.stream,
+        "strides": list(node.strides) if node.strides is not None else None,
         "subgraphs": sub_dict,
         "version": node.version,
     }
@@ -1330,34 +1445,46 @@ def _serialize_graph_header_fields(graph: LogicalGraph) -> dict[str, JsonValue]:
     Returns:
         dict[str, JsonValue]: Mapping of top-level scalar/metadata fields (excluding nodes, edges, initializers).
     """
-    mesh_val: dict[str, JsonValue] | None = (
-        {
+    mesh_val: JsonValue
+    if isinstance(graph.mesh, LogicalMesh):
+        mesh_val = {
             "shape": {k: int(v) for k, v in graph.mesh.shape.items()},
             "webrtc_topology": (
                 dict(graph.mesh.webrtc_topology.to_dict()) if graph.mesh.webrtc_topology is not None else None
             ),
         }
-        if graph.mesh is not None
-        else None
-    )
+    elif isinstance(graph.mesh, MeshLikeProtocol):
+        mesh_val = {_TAG_KEY: "MeshLike", "axis_names": [str(a) for a in graph.mesh.axis_names]}
+    elif graph.mesh is not None:
+        mesh_val = _encode_attribute_value(graph.mesh)
+    else:
+        mesh_val = None
+
     pipe_val: dict[str, JsonValue] | None = (
         dict(graph.pipeline_topology.to_dict()) if graph.pipeline_topology is not None else None
     )
+    annotations_val: dict[str, JsonValue] = {k: _encode_attribute_value(v) for k, v in graph.annotations.items()}
     attrs_val: dict[str, JsonValue] = {k: _encode_attribute_value(v) for k, v in graph.attributes.items()}
-    loop_val: dict[str, JsonValue] | None = (
-        {k: _encode_attribute_value(v) for k, v in graph.loop_options.items()}
-        if graph.loop_options is not None
-        else None
-    )
+    metadata_val: dict[str, JsonValue] = {k: _encode_attribute_value(v) for k, v in graph.metadata.items()}
+    loop_val: dict[str, JsonValue] | None
+    if isinstance(graph.loop_options, LoopOptionsProtocol):
+        loop_val = _encode_json_safe_protocol_leaf(graph.loop_options)
+    elif graph.loop_options is not None:
+        loop_val = {k: _encode_attribute_value(v) for k, v in graph.loop_options.items()}
+    else:
+        loop_val = None
+
     input_specs_val: dict[str, JsonValue] = {
         k: _serialize_tensor_spec_dict(v) for k, v in sorted(graph.input_specs.items())
     }
     return {
+        "annotations": annotations_val,
         "attributes": attrs_val,
         "input_specs": input_specs_val,
         "inputs": list(graph.inputs),
         "loop_options": loop_val,
         "mesh": mesh_val,
+        "metadata": metadata_val,
         "name": graph.name,
         "outputs": list(graph.outputs),
         "pipeline_topology": pipe_val,
@@ -1375,6 +1502,7 @@ def graph_to_dict(graph: LogicalGraph) -> dict[str, JsonValue]:
     """
     header = _serialize_graph_header_fields(graph)
     return {
+        "annotations": header["annotations"],
         "attributes": header["attributes"],
         "edges": [_serialize_edge_dict(edge) for edge in graph.iter_edges()],
         "initializers": {k: _encode_initializer_value(v) for k, v in graph.initializers.items()},
@@ -1382,6 +1510,7 @@ def graph_to_dict(graph: LogicalGraph) -> dict[str, JsonValue]:
         "inputs": header["inputs"],
         "loop_options": header["loop_options"],
         "mesh": header["mesh"],
+        "metadata": header["metadata"],
         "name": header["name"],
         "nodes": {nid: _serialize_node_dict(node) for nid, node in graph.nodes.items()},
         "outputs": header["outputs"],
@@ -1508,6 +1637,7 @@ def _stream_write_graph(
     header = _serialize_graph_header_fields(graph)
 
     keys_order = (
+        "annotations",
         "attributes",
         "edges",
         "initializers",
@@ -1515,6 +1645,7 @@ def _stream_write_graph(
         "inputs",
         "loop_options",
         "mesh",
+        "metadata",
         "name",
         "nodes",
         "outputs",

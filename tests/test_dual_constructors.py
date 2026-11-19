@@ -76,11 +76,16 @@ def test_logical_graph_nodes_as_dict() -> None:
     assert graph.outputs == ["n2"]
 
 
-def test_logical_graph_rejects_nodes_as_list() -> None:
-    """Test LogicalGraph raises TypeError when initialized with a list of nodes."""
+def test_logical_graph_accepts_nodes_as_list_and_rejects_invalid_sequence() -> None:
+    """Test LogicalGraph accepts Sequence[LogicalNode] and rejects non-node sequences."""
     n1 = LogicalNode(id="n1", op_type="Input")
-    with pytest.raises(TypeError, match="must be a Mapping"):
-        LogicalGraph.model_validate({"name": "ListGraph", "nodes": [n1]})
+    n2 = LogicalNode(id="n2", op_type="Relu", inputs=["n1"])
+    graph = LogicalGraph.model_validate({"name": "ListGraph", "nodes": [n1, n2]})
+    assert list(graph.nodes.keys()) == ["n1", "n2"]
+    assert graph.outputs == ["n2"]
+
+    with pytest.raises(TypeError, match="sequence elements must be LogicalNode"):
+        LogicalGraph.model_validate({"name": "BadListGraph", "nodes": ["not_a_node"]})
 
 
 def test_logical_graph_explicit_edges() -> None:

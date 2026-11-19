@@ -17,10 +17,16 @@ from pathlib import Path
 import pydantic
 
 from ml_switcheroo_ir.distributed import (
+    LogicalMesh,
+    PartitionSpec,
     PipelineTopologyConfig,
     WebRTCSignalingTopology,
 )
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode
+from ml_switcheroo_ir.protocols import (
+    SymbolicIntWrapperProtocol,
+    SymbolicNodeProtocol,
+)
 from ml_switcheroo_ir.schema.ghost import SnapshotEnvelope
 from ml_switcheroo_ir.sentinels import NoTangent, ZeroTangent
 from ml_switcheroo_ir.shapes import (
@@ -32,6 +38,7 @@ from ml_switcheroo_ir.shapes import (
     SymPiecewise,
     SymUnaryOp,
     SymVar,
+    format_symbolic_protocol_expr,
 )
 from ml_switcheroo_ir.types import (
     AttributeValue,
@@ -279,13 +286,13 @@ export interface LogicalNode {{
   inputs?: string[];
   outputs?: string[];
   shape_metadata?: DimensionType[] | null;
-  source_ast_ref?: string | null;
-  sharding?: PartitionSpec | null;
+  source_ast_ref?: string | number | null;
+  sharding?: PartitionSpec | string | Record<string, AttributeValue> | null;
   dtype?: DType | null;
   output_specs?: TensorSpec[];
   subgraphs?: Record<string, LogicalGraph | AttributeValue>;
   device?: string | null;
-  stream?: string | null;
+  stream?: string | number | null;
 }}
 
 export interface ZeroTangent extends LogicalNode {{
@@ -305,9 +312,12 @@ export interface LogicalGraph {{
   input_specs?: Record<string, TensorSpec>;
   outputs?: string[];
   initializers?: Record<string, AttributeValue>;
-  mesh?: LogicalMesh | null;
+  mesh?: LogicalMesh | AttributeValue | null;
   pipeline_topology?: PipelineTopologyConfig | null;
   attributes?: Record<string, AttributeValue>;
+  annotations?: Record<string, AttributeValue>;
+  metadata?: Record<string, AttributeValue>;
+  sorted_nodes?: LogicalNode[] | null;
   loop_options?: Record<string, AttributeValue> | null;
   edges?: LogicalEdge[];
 }}
@@ -407,7 +417,11 @@ def _format_sym_node(val: DimensionType) -> str:
             cases_items.append(f"({cond_str}, {_format_sym_node(expr)})")
         cases_str = "[" + ", ".join(cases_items) + "]"
         return f"sw_ir.SymPiecewise(cases={cases_str}, default={_format_sym_node(val.default)})"
-    return repr(val)
+    return (
+        repr(format_symbolic_protocol_expr(val))
+        if isinstance(val, (SymbolicNodeProtocol, SymbolicIntWrapperProtocol))
+        else repr(val)
+    )
 
 
 def _format_shape_tuple(
@@ -466,30 +480,75 @@ def _format_rich_attr_leaf(val: DType | SymNode | SymInt | TensorShape | TensorS
     return _format_tensor_spec(val)
 
 
+def _format_model_attr_value(val: pydantic.BaseModel) -> str:
+    """Format a ``pydantic.BaseModel`` leaf in ``AttributeValue`` into Python code.
+
+    Args:
+        val (pydantic.BaseModel): Pydantic model attribute value.
+
+    Returns:
+        str: Executable Python constructor or dictionary literal expression.
+    """
+    if isinstance(val, (TensorShape, TensorSpec)):
+        return _format_rich_attr_leaf(val)
+    if isinstance(val, LogicalGraph):
+        return _format_graph_expr(val)
+    if isinstance(val, PartitionSpec):
+        return f"sw_ir.PartitionSpec(axes={val.axes!r})"
+    return repr(val.model_dump(mode="json"))
+
+
 def _format_attr_value(val: AttributeValue) -> str:
     """Format an ``AttributeValue`` recursively into an executable Python expression.
 
     Args:
         val (AttributeValue): Attribute value (primitives, bytes, DType, SymNode, SymInt,
-            TensorShape, TensorSpec, sequences, or mappings).
+            TensorShape, TensorSpec, models, protocols, sequences, or mappings).
 
     Returns:
         str: Executable Python expression reconstructing ``val`` losslessly.
     """
-    if isinstance(val, (DType, SymNode, SymInt, TensorShape, TensorSpec)):
+    from ml_switcheroo_ir.protocols import (
+        ArrayBufferProtocol,
+        CustomRuleHandleProtocol,
+        DeviceLikeProtocol,
+        DTypeLikeProtocol,
+        LoopOptionsProtocol,
+        SymbolicIntWrapperProtocol,
+        SymbolicNodeProtocol,
+    )
+    from ml_switcheroo_ir.types import _encode_json_safe_protocol_leaf
+
+    if isinstance(val, (DType, SymNode, SymInt)):
         return _format_rich_attr_leaf(val)
     if val is None or isinstance(val, (bool, int, float, str, bytes)):
         return repr(val)
+    if isinstance(val, pydantic.BaseModel):
+        return _format_model_attr_value(val)
+    if isinstance(
+        val,
+        (
+            DTypeLikeProtocol,
+            DeviceLikeProtocol,
+            SymbolicNodeProtocol,
+            SymbolicIntWrapperProtocol,
+            CustomRuleHandleProtocol,
+            LoopOptionsProtocol,
+            ArrayBufferProtocol,
+        ),
+    ):
+        return repr(_encode_json_safe_protocol_leaf(val))
     if isinstance(val, Mapping):
         entries = ", ".join(
             f"{str(k)!r}: {_format_attr_value(v)}" for k, v in sorted(val.items(), key=lambda kv: str(kv[0]))
         )
         return "{" + entries + "}"
-    if isinstance(val, tuple):
-        if len(val) <= 1:
-            return "()" if len(val) == 0 else f"({_format_attr_value(val[0])},)"
-        return "(" + ", ".join(_format_attr_value(x) for x in val) + ")"
-    return "[" + ", ".join(_format_attr_value(x) for x in val) + "]"
+    rendered_items = ", ".join(_format_attr_value(x) for x in val)
+    return (
+        ("()" if len(val) == 0 else (f"({rendered_items},)" if len(val) == 1 else f"({rendered_items})"))
+        if isinstance(val, tuple)
+        else f"[{rendered_items}]"
+    )
 
 
 def _format_initializer_value(val: InitializerValue) -> str:
@@ -501,8 +560,12 @@ def _format_initializer_value(val: InitializerValue) -> str:
     Returns:
         str: Executable Python expression reconstructing ``val``.
     """
+    from ml_switcheroo_ir.protocols import ArrayBufferProtocol
+
     if isinstance(val, (bool, int, float, str, bytes)):
         return repr(val)
+    if isinstance(val, ArrayBufferProtocol):
+        return repr(val.tobytes())
     if isinstance(val, Mapping):
         entries = ", ".join(
             f"{str(k)!r}: {_format_initializer_value(v)}" for k, v in sorted(val.items(), key=lambda kv: str(kv[0]))
@@ -538,15 +601,21 @@ def _format_mesh_expr(graph: LogicalGraph) -> str:
         graph (LogicalGraph): Graph containing optional ``mesh``.
 
     Returns:
-        str: Python expression constructing ``LogicalMesh`` or ``'None'``.
+        str: Python expression constructing ``LogicalMesh`` or mesh literal.
     """
+    from ml_switcheroo_ir.protocols import MeshLikeProtocol
+
     if graph.mesh is None:
         return "None"
-    shape_str = json.dumps(graph.mesh.shape, sort_keys=True)
-    if graph.mesh.webrtc_topology is not None:
-        webrtc_expr = f"sw_ir.WebRTCSignalingTopology.from_dict({graph.mesh.webrtc_topology.to_dict()!r})"
-        return f"sw_ir.LogicalMesh(shape={shape_str}, webrtc_topology={webrtc_expr})"
-    return f"sw_ir.LogicalMesh(shape={shape_str})"
+    if isinstance(graph.mesh, LogicalMesh):
+        shape_str = json.dumps(graph.mesh.shape, sort_keys=True)
+        if graph.mesh.webrtc_topology is not None:
+            webrtc_expr = f"sw_ir.WebRTCSignalingTopology.from_dict({graph.mesh.webrtc_topology.to_dict()!r})"
+            return f"sw_ir.LogicalMesh(shape={shape_str}, webrtc_topology={webrtc_expr})"
+        return f"sw_ir.LogicalMesh(shape={shape_str})"
+    if isinstance(graph.mesh, MeshLikeProtocol):
+        return repr([str(a) for a in graph.mesh.axis_names])
+    return _format_attr_value(graph.mesh)
 
 
 def _format_graph_expr(graph: LogicalGraph) -> str:
@@ -581,6 +650,8 @@ def _format_graph_expr(graph: LogicalGraph) -> str:
         else "None"
     )
     attrs_expr = _format_attr_value(graph.attributes)
+    annotations_expr = _format_attr_value(graph.annotations)
+    metadata_expr = _format_attr_value(graph.metadata)
     loop_expr = _format_attr_value(graph.loop_options) if graph.loop_options is not None else "None"
     edges_expr = _format_edges_expr(graph)
     edges_kw = f", edges={edges_expr}" if edges_expr is not None else ""
@@ -595,6 +666,8 @@ def _format_graph_expr(graph: LogicalGraph) -> str:
         f"mesh={mesh_expr}, "
         f"pipeline_topology={pipe_expr}, "
         f"attributes={attrs_expr}, "
+        f"annotations={annotations_expr}, "
+        f"metadata={metadata_expr}, "
         f"loop_options={loop_expr}"
         f"{edges_kw})"
     )
@@ -652,11 +725,23 @@ def _format_node_entry_lines(nid: str, node: LogicalNode) -> list[str]:
     Returns:
         list[str]: Indented Python source lines for this dictionary item.
     """
+    from ml_switcheroo_ir.protocols import DeviceLikeProtocol
+
     is_zero = isinstance(node, ZeroTangent)
     is_no = isinstance(node, NoTangent)
     ctor = "ZeroTangent" if is_zero else ("NoTangent" if is_no else "LogicalNode")
 
-    sharding_str = f"sw_ir.PartitionSpec(axes={node.sharding.axes!r})" if node.sharding is not None else "None"
+    if isinstance(node.sharding, PartitionSpec):
+        sharding_str = f"sw_ir.PartitionSpec(axes={node.sharding.axes!r})"
+    elif node.sharding is not None:
+        sharding_str = _format_attr_value(node.sharding)
+    else:
+        sharding_str = "None"
+    device_val: str | None = (
+        (f"{node.device.type}:{node.device.index}" if node.device.index is not None else node.device.type)
+        if isinstance(node.device, DeviceLikeProtocol)
+        else node.device
+    )
     dtype_str = f"sw_ir.DType.{node.dtype.name}" if node.dtype is not None else "None"
     shape_str = _format_shape_tuple(node.shape_metadata)
     out_specs_str = "[" + ", ".join(_format_tensor_spec(s) for s in node.output_specs) + "]"
@@ -682,11 +767,13 @@ def _format_node_entry_lines(nid: str, node: LogicalNode) -> list[str]:
             f"            dtype={dtype_str},",
             f"            output_specs={out_specs_str},",
             f"            subgraphs={subgraphs_str},",
-            f"            device={node.device!r},",
+            f"            device={device_val!r},",
             f"            stream={node.stream!r},",
-            "        ),",
         ]
     )
+    if node.strides is not None:
+        lines.append(f"            strides={node.strides!r},")
+    lines.append("        ),")
     return lines
 
 
@@ -700,8 +787,10 @@ def _append_topology_lines(lines: list[str], graph: LogicalGraph) -> tuple[str, 
     Returns:
         tuple[str, str]: ``(mesh_var, pipeline_var)`` variable expressions.
     """
+    from ml_switcheroo_ir.protocols import MeshLikeProtocol
+
     mesh_var = "None"
-    if graph.mesh is not None:
+    if isinstance(graph.mesh, LogicalMesh):
         shape_str = json.dumps(graph.mesh.shape, sort_keys=True)
         if graph.mesh.webrtc_topology is not None:
             webrtc_dict = graph.mesh.webrtc_topology.to_dict()
@@ -710,6 +799,10 @@ def _append_topology_lines(lines: list[str], graph: LogicalGraph) -> tuple[str, 
         else:
             lines.append(f"    mesh = sw_ir.LogicalMesh(shape={shape_str})")
         mesh_var = "mesh"
+    elif isinstance(graph.mesh, MeshLikeProtocol):
+        mesh_var = repr([str(a) for a in graph.mesh.axis_names])
+    elif graph.mesh is not None:
+        mesh_var = _format_attr_value(graph.mesh)
 
     pipeline_var = "None"
     if graph.pipeline_topology is not None:
@@ -788,6 +881,8 @@ def export_to_python(
     lines.append("    }")
 
     attrs_expr = _format_attr_value(graph.attributes)
+    annotations_expr = _format_attr_value(graph.annotations)
+    metadata_expr = _format_attr_value(graph.metadata)
     loop_expr = _format_attr_value(graph.loop_options) if graph.loop_options is not None else "None"
     edges_expr = _format_edges_expr(graph)
 
@@ -803,6 +898,8 @@ def export_to_python(
             f"        mesh={mesh_var},",
             f"        pipeline_topology={pipeline_var},",
             f"        attributes={attrs_expr},",
+            f"        annotations={annotations_expr},",
+            f"        metadata={metadata_expr},",
             f"        loop_options={loop_expr},",
         ]
     )

@@ -26,7 +26,7 @@ from ml_switcheroo_ir.cli import main as cli_main
 
 def test_package_version() -> None:
     """Test package version exposure."""
-    assert __version__ == "0.0.6"
+    assert __version__ == "0.0.7"
     assert __version__.count(".") == 2
 
 
@@ -726,7 +726,7 @@ def test_to_json_from_json() -> None:
     assert "Linear" in json_str
 
     graph2 = LogicalGraph.from_json(json_str)
-    assert graph2.nodes["x"].sharding is not None
+    assert isinstance(graph2.nodes["x"].sharding, PartitionSpec)
     assert graph2.nodes["x"].sharding.axes == ("data", None)
     assert graph2.nodes["x"].shape_metadata == (1, 2)
 

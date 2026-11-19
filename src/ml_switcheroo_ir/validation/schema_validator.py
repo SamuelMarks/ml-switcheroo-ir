@@ -797,8 +797,9 @@ class Validator:
         errors: list[ValidationError] = []
         current_scope = _collect_ssa_scope(graph, outer_scope)
 
+        logical_mesh = graph.mesh if isinstance(graph.mesh, LogicalMesh) else None
         for node in graph.nodes.values():
-            errors.extend(self.validate_node(node, graph.mesh, populate_defaults=populate_defaults))
+            errors.extend(self.validate_node(node, logical_mesh, populate_defaults=populate_defaults))
             for sub_val in node.subgraphs.values():
                 if isinstance(sub_val, LogicalGraph):
                     errors.extend(

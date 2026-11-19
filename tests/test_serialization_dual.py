@@ -122,9 +122,9 @@ def test_roundtrip_json_serialization() -> None:
     assert deserialized.nodes["y"].op_type == "MatMul"
     assert deserialized.nodes["y"].inputs == ["x"]
     assert deserialized.nodes["y"].shape_metadata == ("B", 128)
-    assert deserialized.nodes["y"].sharding is not None
+    assert isinstance(deserialized.nodes["y"].sharding, PartitionSpec)
     assert deserialized.nodes["y"].sharding.axes == ("data", ("tensor", "expert"), None)
-    assert deserialized.mesh is not None
+    assert isinstance(deserialized.mesh, LogicalMesh)
     assert deserialized.mesh.shape == {"data": 8}
     assert deserialized.outputs == ["y"]
     assert deserialized.edges == graph.edges

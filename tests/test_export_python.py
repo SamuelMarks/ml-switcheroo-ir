@@ -182,7 +182,7 @@ def test_export_to_python_distributed_topologies() -> None:
 
     reconstructed = _eval_exported_code(code, "build_distributed")
     assert reconstructed == graph
-    assert reconstructed.mesh is not None
+    assert isinstance(reconstructed.mesh, sw_ir.LogicalMesh)
     assert reconstructed.mesh.webrtc_topology is not None
     assert reconstructed.mesh.webrtc_topology.peers[0].peer_id == webrtc.peers[0].peer_id
     assert reconstructed.pipeline_topology is not None

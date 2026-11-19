@@ -32,6 +32,8 @@ from ml_switcheroo_ir.graph import (
     CyclicGraphError,
     EdgeList,
     GraphFrontend,
+    IRGraph,
+    IRNode,
     LogicalAxis,
     LogicalEdge,
     LogicalGraph,
@@ -43,6 +45,19 @@ from ml_switcheroo_ir.graph import (
     _load_zstandard,
     topological_sort,
 )
+from ml_switcheroo_ir.protocols import (
+    ArrayBufferProtocol,
+    CustomRuleHandleProtocol,
+    DeviceLikeProtocol,
+    DTypeLikeProtocol,
+    LoopOptionsProtocol,
+    MeshLikeProtocol,
+    SubgraphLikeProtocol,
+    SymbolicDimProtocol,
+    SymbolicIntWrapperProtocol,
+    SymbolicNodeProtocol,
+)
+from ml_switcheroo_ir.schema.catalogs import get_catalog_path
 from ml_switcheroo_ir.schema.framework_registries import (
     ARRAY_API_REGISTRY,
     ATEN_REGISTRY,
@@ -53,12 +68,19 @@ from ml_switcheroo_ir.schema.framework_registries import (
     ORBAX_REGISTRY,
     get_abstract_op,
 )
+from ml_switcheroo_ir.schema.ghost import (
+    ExtendedGhostRef,
+    GhostOverload,
+    GhostParam,
+)
+from ml_switcheroo_ir.schema.mlir_registry import MLIR_REGISTRY
 from ml_switcheroo_ir.sentinels import (
     NoTangent,
     ZeroTangent,
 )
 from ml_switcheroo_ir.shapes import (
     DimensionType,
+    DimensionValue,
     Polynomial,
     ShapeMismatchError,
     ShapeTracker,
@@ -93,6 +115,9 @@ from ml_switcheroo_ir.types import (
     TensorSpec,
     is_dynamic_dimension,
     is_symbolic_dimension,
+    normalize_dimension_tuple,
+    normalize_dtype,
+    normalize_optional_dtype,
 )
 from ml_switcheroo_ir.validator import (
     DiagnosticSeverity,
@@ -102,35 +127,48 @@ from ml_switcheroo_ir.validator import (
     estimate_graph_communication_volume,
 )
 
-__version__ = "0.0.6"
+__version__ = "0.0.7"
 
 __all__ = [
     "ARRAY_API_REGISTRY",
     "ATEN_REGISTRY",
     "CHEX_REGISTRY",
     "GRAIN_REGISTRY",
+    "MLIR_REGISTRY",
     "ODL_CATALOG",
     "OPTAX_REGISTRY",
     "ORBAX_REGISTRY",
+    "ArrayBufferProtocol",
     "AttributeValue",
     "AutodiffSentinelProtocol",
     "BaseFrontend",
     "CompilerBackend",
+    "CustomRuleHandleProtocol",
     "CyclicGraphError",
     "DType",
+    "DTypeLikeProtocol",
     "DependencyConfig",
+    "DeviceLikeProtocol",
     "DiagnosticSeverity",
     "DimensionType",
+    "DimensionValue",
     "EdgeList",
+    "ExtendedGhostRef",
+    "GhostOverload",
+    "GhostParam",
     "GraphFrontend",
     "GroundingDiagnostic",
     "GroundingReport",
+    "IRGraph",
+    "IRNode",
     "InitializerValue",
     "LogicalAxis",
     "LogicalEdge",
     "LogicalGraph",
     "LogicalMesh",
     "LogicalNode",
+    "LoopOptionsProtocol",
+    "MeshLikeProtocol",
     "MeshMappingConfig",
     "MicrobatchSplittingConfig",
     "NoTangent",
@@ -145,6 +183,7 @@ __all__ = [
     "ShapeMismatchError",
     "ShapeTracker",
     "StageCommunicationConfig",
+    "SubgraphLikeProtocol",
     "SymBinaryOp",
     "SymCondition",
     "SymConst",
@@ -154,6 +193,9 @@ __all__ = [
     "SymUnaryOp",
     "SymVar",
     "SymbolicConstraintTracker",
+    "SymbolicDimProtocol",
+    "SymbolicIntWrapperProtocol",
+    "SymbolicNodeProtocol",
     "SymbolicSolver",
     "TensorShape",
     "TensorSpec",
@@ -173,11 +215,15 @@ __all__ = [
     "export_to_python",
     "generate_typescript_definitions",
     "get_abstract_op",
+    "get_catalog_path",
     "get_json_schema",
     "is_dynamic_dimension",
     "is_symbolic_dimension",
     "matmul_shape",
     "normalize_axis",
+    "normalize_dimension_tuple",
+    "normalize_dtype",
+    "normalize_optional_dtype",
     "propagate_shapes_and_constants",
     "topological_sort",
 ]

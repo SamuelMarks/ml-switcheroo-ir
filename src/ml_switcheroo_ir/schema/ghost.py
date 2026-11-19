@@ -508,6 +508,46 @@ class ExtendedGhostParam(GhostParam):
         return all(c.evaluate(value) for c in self.constraints)
 
 
+class GhostOverload(pydantic.BaseModel):
+    """Structured overload signature descriptor for overloaded framework or dialect APIs.
+
+    Attributes:
+        params (list[ExtendedGhostParam | GhostParam]): Ordered overload parameter specifications.
+        return_annotation (str | None): Optional return type annotation string.
+        returns_type (str | None): Optional canonical return type string.
+        docstring (str | None): Optional overload-specific docstring.
+        has_varargs (bool): True if the overload signature accepts ``*args``.
+        accepted_kwargs (list[str] | None): Explicit accepted keyword arguments when ``**kwargs`` is present.
+    """
+
+    model_config = pydantic.ConfigDict(extra="allow")
+
+    params: list[ExtendedGhostParam | GhostParam] = pydantic.Field(
+        default_factory=list,
+        description="Ordered overload parameter specifications.",
+    )
+    return_annotation: str | None = pydantic.Field(
+        default=None,
+        description="Optional return type annotation string.",
+    )
+    returns_type: str | None = pydantic.Field(
+        default=None,
+        description="Optional canonical return type string.",
+    )
+    docstring: str | None = pydantic.Field(
+        default=None,
+        description="Optional overload-specific docstring.",
+    )
+    has_varargs: bool = pydantic.Field(
+        default=False,
+        description="True if the overload signature accepts *args.",
+    )
+    accepted_kwargs: list[str] | None = pydantic.Field(
+        default=None,
+        description="Explicit accepted keyword arguments when **kwargs is present.",
+    )
+
+
 class GhostRef(pydantic.BaseModel):
     """Serializable snapshot of a Framework API component."""
 
@@ -536,7 +576,7 @@ class GhostRef(pydantic.BaseModel):
     returns_description: str | None = pydantic.Field(default=None, description="Returns description")
     raises: list[str] | None = pydantic.Field(default_factory=list, description="Raises")
     environment_tags: list[str] | None = pydantic.Field(default_factory=list, description="Environment tags")
-    overloads: list[dict[str, JsonValue] | GhostRef] | None = pydantic.Field(
+    overloads: list[dict[str, JsonValue] | GhostOverload | GhostRef] | None = pydantic.Field(
         default_factory=list, description="Overloads"
     )
 
@@ -619,8 +659,9 @@ GhostIsaPayloadValue: typing_extensions.TypeAlias = typing.Union[
     list[GhostParam],
     list[typing.Union[ExtendedGhostParam, GhostParam]],
     list[GhostResult],
+    list[GhostOverload],
     list[GhostRef],
-    list[typing.Union[dict[str, JsonValue], GhostRef]],
+    list[typing.Union[dict[str, JsonValue], GhostOverload, GhostRef]],
 ]
 GhostModelInitValue: typing_extensions.TypeAlias = GhostIsaPayloadValue
 

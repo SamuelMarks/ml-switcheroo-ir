@@ -10,10 +10,16 @@ import pydantic_core
 import typing_extensions
 from pydantic_core import core_schema
 
+from ml_switcheroo_ir.protocols import (
+    SerializationInfoProtocol,
+    SymbolicIntWrapperProtocol,
+    SymbolicNodeProtocol,
+)
 from ml_switcheroo_ir.shapes.polynomial import Polynomial, poly_to_symnode
 
 __all__ = [
     "DimensionType",
+    "DimensionValue",
     "ShapeType",
     "SymBinaryOp",
     "SymCondition",
@@ -23,18 +29,41 @@ __all__ = [
     "SymPiecewise",
     "SymUnaryOp",
     "SymVar",
+    "format_symbolic_protocol_expr",
 ]
+
+
+def format_symbolic_protocol_expr(
+    val: SymbolicNodeProtocol | SymbolicIntWrapperProtocol,
+) -> str:
+    """Format an external symbolic dimension protocol instance deterministically without memory addresses.
+
+    Args:
+        val (SymbolicNodeProtocol | SymbolicIntWrapperProtocol): Symbolic protocol dimension.
+
+    Returns:
+        str: Deterministic symbolic expression or class identifier string.
+    """
+    target: SymbolicNodeProtocol = val.node if isinstance(val, SymbolicIntWrapperProtocol) else val
+    rendered = str(target)
+    if rendered.startswith("<") and " at 0x" in rendered:
+        return str(type(target)).split("'")[1].rsplit(".", 1)[-1]
+    return rendered
 
 
 class SymNode:
     """Base class for all symbolic expression tree nodes."""
 
     @classmethod
-    def to_node(cls, val: int | float | str | SymNode | SymInt | None) -> SymNode:
-        """Convert an int, str, SymNode, or SymInt into a SymNode.
+    def to_node(
+        cls,
+        val: (int | float | str | SymNode | SymInt | SymbolicNodeProtocol | SymbolicIntWrapperProtocol | None),
+    ) -> SymNode:
+        """Convert an int, str, SymNode, SymInt, or symbolic protocol into a SymNode.
 
         Args:
-            val (int | float | str | SymNode | SymInt | None): Value to convert.
+            val (int | float | str | SymNode | SymInt | SymbolicNodeProtocol | SymbolicIntWrapperProtocol | None):
+                Value to convert.
 
         Returns:
             SymNode: Structured symbolic expression node.
@@ -54,6 +83,14 @@ class SymNode:
             from ml_switcheroo_ir.shapes.parser import parse_symbolic_expr
 
             return parse_symbolic_expr(val)
+        if isinstance(val, SymbolicIntWrapperProtocol) and isinstance(val.node, SymbolicNodeProtocol):
+            from ml_switcheroo_ir.shapes.parser import parse_symbolic_expr
+
+            return parse_symbolic_expr(format_symbolic_protocol_expr(val))
+        if isinstance(val, SymbolicNodeProtocol):
+            from ml_switcheroo_ir.shapes.parser import parse_symbolic_expr
+
+            return parse_symbolic_expr(format_symbolic_protocol_expr(val))
         raise TypeError(f"Cannot convert {type(val)} to SymNode")
 
     def simplify(self) -> SymNode:
@@ -1517,6 +1554,110 @@ class SymInt:
         raise TypeError(f"Cannot convert dynamic SymInt '{self.expr}' to concrete int.")
 
 
-DimensionType: typing_extensions.TypeAlias = typing.Union[int, str, SymNode, SymInt]
+def _validate_pydantic_dimension(val: DimensionType) -> DimensionType:
+    """Validate a candidate ``DimensionType`` value for Pydantic model fields.
+
+    Args:
+        val (DimensionType): Candidate dimension value.
+
+    Returns:
+        DimensionType: Validated dimension value.
+
+    Raises:
+        ValueError: If ``val`` is a boolean or not a valid dimension type.
+    """
+    if isinstance(val, bool):
+        raise ValueError(f"Boolean value {val!r} is not a valid DimensionType.")
+    if isinstance(val, (int, str, SymNode, SymInt)):
+        return val
+    if isinstance(val, SymbolicIntWrapperProtocol):
+        if isinstance(val.node, SymbolicNodeProtocol):
+            return val
+        raise ValueError(f"SymbolicIntWrapperProtocol.node must satisfy SymbolicNodeProtocol, got {val.node!r}.")
+    if isinstance(val, SymbolicNodeProtocol):
+        return val
+    raise ValueError(f"Invalid DimensionType value: {val!r}.")
+
+
+def _serialize_pydantic_dimension(
+    val: DimensionType,
+    info: SerializationInfoProtocol,
+) -> DimensionType:
+    """Serialize ``DimensionType`` cleanly in both Python and JSON Pydantic modes.
+
+    Args:
+        val (DimensionType): Validated dimension value.
+        info (SerializationInfoProtocol): Pydantic serialization context.
+
+    Returns:
+        DimensionType: Raw value in Python mode, or primitive int/str in JSON mode.
+    """
+    if info.mode == "json":
+        if isinstance(val, (int, str)):
+            return val
+        if isinstance(val, (SymNode, SymInt)):
+            return str(val)
+        return format_symbolic_protocol_expr(val)
+    return val
+
+
+class _DimensionTypePydanticAnnotation:
+    """Pydantic v2 CoreSchema and Draft 2020-12 JSON Schema annotation for ``DimensionType``."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls,
+        source_type: type[DimensionType],
+        handler: pydantic.GetCoreSchemaHandler,
+    ) -> pydantic_core.CoreSchema:
+        """Build Pydantic CoreSchema for ``DimensionType`` supporting structural protocols.
+
+        Args:
+            source_type (type[DimensionType]): Annotated dimension type alias.
+            handler (pydantic.GetCoreSchemaHandler): Pydantic core schema handler.
+
+        Returns:
+            pydantic_core.CoreSchema: Validator and JSON serializer schema.
+        """
+        del source_type, handler
+        return core_schema.no_info_plain_validator_function(
+            _validate_pydantic_dimension,
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                _serialize_pydantic_dimension,
+                info_arg=True,
+            ),
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema_obj: pydantic_core.CoreSchema,
+        handler: pydantic.GetJsonSchemaHandler,
+    ) -> dict[str, pydantic.JsonValue]:
+        """Generate Draft 2020-12 JSON Schema for ``DimensionType``.
+
+        Args:
+            core_schema_obj (pydantic_core.CoreSchema): Core schema object.
+            handler (pydantic.GetJsonSchemaHandler): JSON schema handler.
+
+        Returns:
+            dict[str, pydantic.JsonValue]: JSON Schema union of integer and string.
+        """
+        del core_schema_obj, handler
+        return {"anyOf": [{"type": "integer"}, {"type": "string"}]}
+
+
+DimensionType: typing_extensions.TypeAlias = typing.Annotated[
+    typing.Union[
+        int,
+        str,
+        SymNode,
+        SymInt,
+        SymbolicNodeProtocol,
+        SymbolicIntWrapperProtocol,
+    ],
+    _DimensionTypePydanticAnnotation,
+]
+DimensionValue: typing_extensions.TypeAlias = typing.Union[DimensionType, None]
 ShapeType: typing_extensions.TypeAlias = Sequence[DimensionType]
 SymCondition: typing_extensions.TypeAlias = typing.Union[Callable[[dict[str, int]], bool], SymNode, bool, str]

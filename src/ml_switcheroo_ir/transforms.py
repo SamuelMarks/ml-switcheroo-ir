@@ -6,18 +6,21 @@ Common Subexpression Elimination (CSE), and Unified Shape Propagation & Constant
 
 from __future__ import annotations
 
+import copy
 import typing
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 
 import typing_extensions
 
+from ml_switcheroo_ir.distributed import PartitionSpec
 from ml_switcheroo_ir.graph import (
     LogicalEdge,
     LogicalGraph,
     LogicalNode,
     topological_sort,
 )
+from ml_switcheroo_ir.protocols import DeviceLikeProtocol
 from ml_switcheroo_ir.schema.custom_ops import (
     COLLECTIVE_OPS_REGISTRY,
     STATE_OPS_REGISTRY,
@@ -51,7 +54,7 @@ NodeCseSignatureKey: typing_extensions.TypeAlias = tuple[
     HashableAttrKey,
     tuple[tuple[str, tuple[DimensionType, ...]], ...],
     typing.Optional[str],
-    typing.Optional[str],
+    typing.Union[str, int, None],
     HashableAttrKey,
 ]
 ConstScalar: typing_extensions.TypeAlias = typing.Union[int, float, bool]
@@ -139,7 +142,9 @@ def _clone_graph_envelope(
         edges=edges,
         pipeline_topology=graph.pipeline_topology,
         attributes=dict(graph.attributes),
-        loop_options=dict(graph.loop_options) if graph.loop_options is not None else None,
+        annotations=dict(graph.annotations),
+        metadata=dict(graph.metadata),
+        loop_options=copy.deepcopy(graph.loop_options) if graph.loop_options is not None else None,
     )
 
 
@@ -488,7 +493,18 @@ def _build_node_cse_signature(
     canonical_inputs = tuple(sorted(updated_inputs)) if node.op_type in COMMUTATIVE_OPS else tuple(updated_inputs)
     attr_key = tuple(sorted((k, _serialize_attr_for_key(v)) for k, v in node.attributes.items()))
     shape_key = tuple(node.shape_metadata) if isinstance(node.shape_metadata, (list, tuple)) else None
-    sharding_key = _serialize_attr_for_key(node.sharding.model_dump()) if node.sharding is not None else None
+    sharding_key: HashableAttrKey
+    if isinstance(node.sharding, PartitionSpec):
+        sharding_key = _serialize_attr_for_key(node.sharding.model_dump())
+    elif node.sharding is not None:
+        sharding_key = _serialize_attr_for_key(node.sharding)
+    else:
+        sharding_key = None
+    device_key: str | None = (
+        (f"{node.device.type}:{node.device.index}" if node.device.index is not None else node.device.type)
+        if isinstance(node.device, DeviceLikeProtocol)
+        else node.device
+    )
     out_specs_key = tuple((spec.dtype.value, tuple(spec.shape)) for spec in node.output_specs)
     subgraph_key = _serialize_attr_for_key(transformed_subgraphs)
     return (
@@ -501,7 +517,7 @@ def _build_node_cse_signature(
         node.dtype.value if node.dtype is not None else None,
         sharding_key,
         out_specs_key,
-        node.device,
+        device_key,
         node.stream,
         subgraph_key,
     )
