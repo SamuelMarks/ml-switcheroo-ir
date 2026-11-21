@@ -6,6 +6,7 @@ import base64
 import builtins
 import typing
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 
 import pydantic
@@ -38,6 +39,25 @@ from ml_switcheroo_ir.shapes import (
 
 __all__ = [
     "ArrayBufferProtocol",
+    "AttrBool",
+    "AttrBytes",
+    "AttrCompositeTerm",
+    "AttrDType",
+    "AttrDomainTerm",
+    "AttrFloat",
+    "AttrInt",
+    "AttrMap",
+    "AttrModel",
+    "AttrNone",
+    "AttrProtocolLeaf",
+    "AttrScalarTerm",
+    "AttrSeq",
+    "AttrShape",
+    "AttrStr",
+    "AttrSymInt",
+    "AttrSymNode",
+    "AttrTensorSpec",
+    "AttrTerm",
     "AttributeValue",
     "AutodiffSentinelProtocol",
     "CustomRuleHandleProtocol",
@@ -50,6 +70,7 @@ __all__ = [
     "JsonValue",
     "LoopOptionsProtocol",
     "MeshLikeProtocol",
+    "ProtocolAttributeLeaf",
     "ShapeMetadataType",
     "SubgraphLikeProtocol",
     "SymbolicDimProtocol",
@@ -59,11 +80,13 @@ __all__ = [
     "TensorSpec",
     "_validate_dimension_tuple",
     "describe_value_type",
+    "embed_attribute_value",
     "is_dynamic_dimension",
     "is_symbolic_dimension",
     "normalize_dimension_tuple",
     "normalize_dtype",
     "normalize_optional_dtype",
+    "project_attribute_value",
 ]
 
 JsonScalar: typing_extensions.TypeAlias = typing.Union[str, int, float, bool, None]
@@ -1274,3 +1297,398 @@ AttributeValue: typing_extensions.TypeAlias = typing.Annotated[
     ],
     _AttributeValuePydanticAnnotation,
 ]
+
+ProtocolAttributeLeaf: typing_extensions.TypeAlias = typing.Union[
+    DTypeLikeProtocol,
+    DeviceLikeProtocol,
+    SymbolicNodeProtocol,
+    SymbolicIntWrapperProtocol,
+    CustomRuleHandleProtocol,
+    LoopOptionsProtocol,
+    ArrayBufferProtocol,
+]
+
+
+@dataclass(frozen=True)
+class AttrNone:
+    """Closed ``AttrTerm`` constructor representing ``None``.
+
+    Attributes:
+        value (None): Literal ``None`` payload.
+    """
+
+    value: None = None
+
+
+@dataclass(frozen=True)
+class AttrBool:
+    """Closed ``AttrTerm`` constructor representing a boolean scalar (distinct from ``int``).
+
+    Attributes:
+        value (bool): Boolean payload.
+    """
+
+    value: bool
+
+
+@dataclass(frozen=True)
+class AttrInt:
+    """Closed ``AttrTerm`` constructor representing a non-boolean integer scalar.
+
+    Attributes:
+        value (int): Non-boolean signed integer payload.
+    """
+
+    value: int
+
+
+@dataclass(frozen=True)
+class AttrFloat:
+    """Closed ``AttrTerm`` constructor representing an IEEE-754 float scalar.
+
+    Attributes:
+        value (float): Floating-point payload.
+    """
+
+    value: float
+
+
+@dataclass(frozen=True)
+class AttrStr:
+    """Closed ``AttrTerm`` constructor representing a UTF-8 string scalar (distinct from ``DType``).
+
+    Attributes:
+        value (str): String payload.
+    """
+
+    value: str
+
+
+@dataclass(frozen=True)
+class AttrBytes:
+    """Closed ``AttrTerm`` constructor representing raw ``bytes``.
+
+    Attributes:
+        value (bytes): Raw byte string payload.
+    """
+
+    value: bytes
+
+
+@dataclass(frozen=True)
+class AttrDType:
+    """Closed ``AttrTerm`` constructor representing a canonical ``DType`` enum member.
+
+    Attributes:
+        value (DType): Element data type payload.
+    """
+
+    value: DType
+
+
+@dataclass(frozen=True)
+class AttrShape:
+    """Closed ``AttrTerm`` constructor representing a ``TensorShape``.
+
+    Attributes:
+        value (TensorShape): TensorShape payload.
+    """
+
+    value: TensorShape
+
+
+@dataclass(frozen=True)
+class AttrTensorSpec:
+    """Closed ``AttrTerm`` constructor representing a ``TensorSpec``.
+
+    Attributes:
+        value (TensorSpec): TensorSpec payload.
+    """
+
+    value: TensorSpec
+
+
+@dataclass(frozen=True)
+class AttrSymNode:
+    """Closed ``AttrTerm`` constructor representing a ``SymNode`` expression tree.
+
+    Attributes:
+        value (SymNode): Symbolic AST node payload.
+    """
+
+    value: SymNode
+
+
+@dataclass(frozen=True)
+class AttrSymInt:
+    """Closed ``AttrTerm`` constructor representing a ``SymInt`` dimension wrapper.
+
+    Attributes:
+        value (SymInt): SymInt wrapper payload.
+    """
+
+    value: SymInt
+
+
+@dataclass(frozen=True)
+class AttrModel:
+    """Closed ``AttrTerm`` constructor representing a ``pydantic.BaseModel`` (e.g. ``LogicalGraph``, ``PartitionSpec``).
+
+    Attributes:
+        value (pydantic.BaseModel): Validated Pydantic model payload.
+    """
+
+    value: pydantic.BaseModel
+
+
+@dataclass(frozen=True)
+class AttrProtocolLeaf:
+    """Closed ``AttrTerm`` constructor representing an external Tier-1 structural protocol leaf.
+
+    Attributes:
+        value (ProtocolAttributeLeaf): External protocol-satisfying value.
+    """
+
+    value: ProtocolAttributeLeaf
+
+
+@dataclass(frozen=True)
+class AttrSeq:
+    """Closed ``AttrTerm`` constructor representing a homogeneous or heterogeneous sequence.
+
+    Attributes:
+        items (tuple[AttrTerm, ...]): Recursively projected child terms.
+        is_tuple (bool): True when the original sequence was a ``tuple`` rather than a ``list``.
+    """
+
+    items: tuple[AttrTerm, ...]
+    is_tuple: bool = False
+
+
+@dataclass(frozen=True)
+class AttrMap:
+    """Closed ``AttrTerm`` constructor representing a string-keyed mapping.
+
+    Attributes:
+        entries (tuple[tuple[str, AttrTerm], ...]): Deterministic ``(key, term)`` pairs.
+    """
+
+    entries: tuple[tuple[str, AttrTerm], ...]
+
+
+AttrScalarTerm: typing_extensions.TypeAlias = typing.Union[
+    AttrNone,
+    AttrBool,
+    AttrInt,
+    AttrFloat,
+    AttrStr,
+    AttrBytes,
+]
+AttrDomainTerm: typing_extensions.TypeAlias = typing.Union[
+    AttrDType,
+    AttrShape,
+    AttrTensorSpec,
+    AttrSymNode,
+    AttrSymInt,
+    AttrModel,
+    AttrProtocolLeaf,
+]
+AttrCompositeTerm: typing_extensions.TypeAlias = typing.Union[AttrSeq, AttrMap]
+AttrTerm: typing_extensions.TypeAlias = typing.Union[
+    AttrScalarTerm,
+    AttrDomainTerm,
+    AttrCompositeTerm,
+]
+
+
+def _project_scalar_or_domain_leaf(
+    val: AttributeValue,
+) -> AttrScalarTerm | AttrDomainTerm | None:
+    """Project non-container ``AttributeValue`` leaves into ``AttrScalarTerm | AttrDomainTerm``.
+
+    Orders checks carefully (``bool`` before ``int``, ``DType`` before ``str``/``DTypeLikeProtocol``,
+    ``TensorShape``/``TensorSpec`` before ``BaseModel``, ``SymInt``/``SymNode`` before protocols).
+
+    Args:
+        val (AttributeValue): Candidate attribute value.
+
+    Returns:
+        AttrScalarTerm | AttrDomainTerm | None: Projected leaf term, or ``None`` if container.
+    """
+    res: AttrScalarTerm | AttrDomainTerm | None
+    if val is None:
+        res = AttrNone()
+    elif isinstance(val, bool):
+        res = AttrBool(val)
+    elif isinstance(val, int):
+        res = AttrInt(val)
+    elif isinstance(val, float):
+        res = AttrFloat(val)
+    elif isinstance(val, DType):
+        res = AttrDType(val)
+    elif isinstance(val, str):
+        res = AttrStr(val)
+    elif isinstance(val, bytes):
+        res = AttrBytes(val)
+    else:
+        res = _project_domain_object_leaf(val)
+    return res
+
+
+def _project_domain_object_leaf(
+    val: AttributeValue,
+) -> AttrDomainTerm | None:
+    """Project rich domain/model/protocol ``AttributeValue`` leaves into ``AttrDomainTerm``.
+
+    Args:
+        val (AttributeValue): Non-primitive candidate attribute value.
+
+    Returns:
+        AttrDomainTerm | None: Projected domain term, or ``None`` if sequence/mapping container.
+    """
+    res: AttrDomainTerm | None = None
+    if isinstance(val, TensorShape):
+        res = AttrShape(val)
+    elif isinstance(val, TensorSpec):
+        res = AttrTensorSpec(val)
+    elif isinstance(val, SymInt):
+        res = AttrSymInt(val)
+    elif isinstance(val, SymNode):
+        res = AttrSymNode(val)
+    elif isinstance(val, pydantic.BaseModel):
+        res = AttrModel(val)
+    elif isinstance(
+        val,
+        (
+            DTypeLikeProtocol,
+            DeviceLikeProtocol,
+            SymbolicNodeProtocol,
+            SymbolicIntWrapperProtocol,
+            CustomRuleHandleProtocol,
+            LoopOptionsProtocol,
+            ArrayBufferProtocol,
+        ),
+    ):
+        res = AttrProtocolLeaf(val)
+    return res
+
+
+def project_attribute_value(val: AttributeValue) -> AttrTerm:
+    """Total projection of any ``AttributeValue`` into its closed ``AttrTerm`` normal-form ADT.
+
+    Centralizes ``bool <: int``, ``DType <: str``, ``TensorShape <: BaseModel``, and
+    ``SymNode <: SymbolicNodeProtocol`` precedence in one single place.
+
+    Args:
+        val (AttributeValue): Validated IR attribute value.
+
+    Returns:
+        AttrTerm: Disjoint tagged ``AttrTerm`` node.
+    """
+    leaf = _project_scalar_or_domain_leaf(val)
+    if leaf is not None:
+        return leaf
+    if isinstance(val, Mapping):
+        return AttrMap(tuple((str(k), project_attribute_value(v)) for k, v in val.items()))
+    seq_items = tuple(project_attribute_value(item) for item in val) if isinstance(val, Sequence) else ()
+    return AttrSeq(items=seq_items, is_tuple=isinstance(val, tuple))
+
+
+def _embed_scalar_term(term: AttrScalarTerm) -> AttributeValue:
+    """Exhaustively embed an ``AttrScalarTerm`` back into ``AttributeValue``.
+
+    Args:
+        term (AttrScalarTerm): Closed scalar term.
+
+    Returns:
+        AttributeValue: Embedded primitive value.
+    """
+    out: AttributeValue
+    if isinstance(term, AttrNone):
+        out = None
+    elif isinstance(term, AttrBool):
+        out = term.value
+    elif isinstance(term, AttrInt):
+        out = term.value
+    elif isinstance(term, AttrFloat):
+        out = term.value
+    elif isinstance(term, AttrStr):
+        out = term.value
+    elif isinstance(term, AttrBytes):
+        out = term.value
+    else:
+        typing_extensions.assert_never(term)
+    return out
+
+
+def _embed_domain_term(term: AttrDomainTerm) -> AttributeValue:
+    """Exhaustively embed an ``AttrDomainTerm`` back into ``AttributeValue``.
+
+    Args:
+        term (AttrDomainTerm): Closed domain/model/protocol term.
+
+    Returns:
+        AttributeValue: Embedded rich domain value.
+    """
+    out: AttributeValue
+    if isinstance(term, AttrDType):
+        out = term.value
+    elif isinstance(term, AttrShape):
+        out = term.value
+    elif isinstance(term, AttrTensorSpec):
+        out = term.value
+    elif isinstance(term, AttrSymNode):
+        out = term.value
+    elif isinstance(term, AttrSymInt):
+        out = term.value
+    elif isinstance(term, AttrModel):
+        out = term.value
+    elif isinstance(term, AttrProtocolLeaf):
+        out = term.value
+    else:
+        typing_extensions.assert_never(term)
+    return out
+
+
+def _embed_composite_term(term: AttrCompositeTerm) -> AttributeValue:
+    """Exhaustively embed an ``AttrCompositeTerm`` back into ``AttributeValue``.
+
+    Args:
+        term (AttrCompositeTerm): Closed sequence or mapping term.
+
+    Returns:
+        AttributeValue: Embedded tuple, list, or dict value.
+    """
+    out: AttributeValue
+    if isinstance(term, AttrSeq):
+        children = [embed_attribute_value(item) for item in term.items]
+        out = tuple(children) if term.is_tuple else children
+    elif isinstance(term, AttrMap):
+        out = {k: embed_attribute_value(v) for k, v in term.entries}
+    else:
+        typing_extensions.assert_never(term)
+    return out
+
+
+def embed_attribute_value(term: AttrTerm) -> AttributeValue:
+    """Exhaustively embed a closed ``AttrTerm`` normal-form value back into ``AttributeValue``.
+
+    Args:
+        term (AttrTerm): Closed normal-form attribute term.
+
+    Returns:
+        AttributeValue: Reconstructed runtime ``AttributeValue``.
+    """
+    out: AttributeValue
+    if isinstance(term, (AttrNone, AttrBool, AttrInt, AttrFloat, AttrStr, AttrBytes)):
+        out = _embed_scalar_term(term)
+    elif isinstance(
+        term,
+        (AttrDType, AttrShape, AttrTensorSpec, AttrSymNode, AttrSymInt, AttrModel, AttrProtocolLeaf),
+    ):
+        out = _embed_domain_term(term)
+    elif isinstance(term, (AttrSeq, AttrMap)):
+        out = _embed_composite_term(term)
+    else:
+        typing_extensions.assert_never(term)
+    return out

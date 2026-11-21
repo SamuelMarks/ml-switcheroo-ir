@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pydantic
+import typing_extensions
 
 from ml_switcheroo_ir.distributed import (
     LogicalMesh,
@@ -33,23 +34,57 @@ from ml_switcheroo_ir.shapes import (
     DimensionType,
     SymBinaryOp,
     SymConst,
+    SymExpr,
     SymInt,
     SymNode,
     SymPiecewise,
     SymUnaryOp,
     SymVar,
     format_symbolic_protocol_expr,
+    is_sym_expr,
 )
+from ml_switcheroo_ir.typeclasses import PythonExprEmit
 from ml_switcheroo_ir.types import (
+    AttrBool,
+    AttrBytes,
+    AttrCompositeTerm,
+    AttrDomainTerm,
+    AttrDType,
+    AttrFloat,
     AttributeValue,
+    AttrInt,
+    AttrMap,
+    AttrModel,
+    AttrNone,
+    AttrProtocolLeaf,
+    AttrScalarTerm,
+    AttrSeq,
+    AttrShape,
+    AttrStr,
+    AttrSymInt,
+    AttrSymNode,
+    AttrTensorSpec,
+    AttrTerm,
     DType,
     InitializerValue,
     JsonValue,
     TensorShape,
     TensorSpec,
+    _encode_json_safe_protocol_leaf,
+    project_attribute_value,
 )
 
 __all__ = [
+    "ATTRIBUTE_VALUE_PYTHON_EMIT",
+    "DIMENSION_PYTHON_EMIT",
+    "DTYPE_PYTHON_EMIT",
+    "LOGICAL_GRAPH_PYTHON_EMIT",
+    "LOGICAL_MESH_PYTHON_EMIT",
+    "LOGICAL_NODE_PYTHON_EMIT",
+    "PARTITION_SPEC_PYTHON_EMIT",
+    "SYM_EXPR_PYTHON_EMIT",
+    "TENSOR_SHAPE_PYTHON_EMIT",
+    "TENSOR_SPEC_PYTHON_EMIT",
     "export_schemas",
     "export_to_python",
     "generate_typescript_definitions",
@@ -393,30 +428,54 @@ export interface SnapshotEnvelope {{
 """
 
 
-def _format_sym_node(val: DimensionType) -> str:
+def _format_sym_expr_python(expr: SymExpr, prefix: str = "sw_ir.") -> str:
+    """Exhaustively emit Format-B Python constructor code for a closed ``SymExpr``.
+
+    Args:
+        expr (SymExpr): Closed symbolic expression node.
+        prefix (str): Module qualification prefix (defaults to ``'sw_ir.'``).
+
+    Returns:
+        str: Executable Python constructor expression string.
+    """
+    code: str
+    if isinstance(expr, SymVar):
+        code = f"{prefix}SymVar({expr.name!r})"
+    elif isinstance(expr, SymConst):
+        code = f"{prefix}SymConst({expr.value!r})"
+    elif isinstance(expr, SymBinaryOp):
+        code = (
+            f"{prefix}SymBinaryOp({expr.op!r}, "
+            f"{_format_sym_node(expr.left, prefix)}, {_format_sym_node(expr.right, prefix)})"
+        )
+    elif isinstance(expr, SymUnaryOp):
+        code = f"{prefix}SymUnaryOp({expr.op!r}, {_format_sym_node(expr.operand, prefix)})"
+    elif isinstance(expr, SymPiecewise):
+        cases_items: list[str] = []
+        for cond, branch in expr.cases:
+            cond_str = _format_sym_node(cond, prefix) if isinstance(cond, SymNode) else repr(cond)
+            cases_items.append(f"({cond_str}, {_format_sym_node(branch, prefix)})")
+        cases_str = "[" + ", ".join(cases_items) + "]"
+        code = f"{prefix}SymPiecewise(cases={cases_str}, default={_format_sym_node(expr.default, prefix)})"
+    else:
+        typing_extensions.assert_never(expr)
+    return code
+
+
+def _format_sym_node(val: DimensionType, prefix: str = "sw_ir.") -> str:
     """Format a DimensionType or SymNode into clean Python code representation.
 
     Args:
         val (DimensionType): Dimension or symbolic node.
+        prefix (str): Module qualification prefix (defaults to ``'sw_ir.'``).
 
     Returns:
         str: Executable Python expression string.
     """
-    if isinstance(val, (SymVar, SymConst)):
-        return f"sw_ir.SymVar({val.name!r})" if isinstance(val, SymVar) else f"sw_ir.SymConst({val.value!r})"
-    if isinstance(val, SymBinaryOp):
-        return f"sw_ir.SymBinaryOp({val.op!r}, {_format_sym_node(val.left)}, {_format_sym_node(val.right)})"
-    if isinstance(val, SymUnaryOp):
-        return f"sw_ir.SymUnaryOp({val.op!r}, {_format_sym_node(val.operand)})"
+    if is_sym_expr(val):
+        return _format_sym_expr_python(val, prefix)
     if isinstance(val, SymInt):
-        return f"sw_ir.SymInt({_format_sym_node(val.node)})"
-    if isinstance(val, SymPiecewise):
-        cases_items: list[str] = []
-        for cond, expr in val.cases:
-            cond_str = _format_sym_node(cond) if isinstance(cond, SymNode) else repr(cond)
-            cases_items.append(f"({cond_str}, {_format_sym_node(expr)})")
-        cases_str = "[" + ", ".join(cases_items) + "]"
-        return f"sw_ir.SymPiecewise(cases={cases_str}, default={_format_sym_node(val.default)})"
+        return f"{prefix}SymInt({_format_sym_node(val.node, prefix)})"
     return (
         repr(format_symbolic_protocol_expr(val))
         if isinstance(val, (SymbolicNodeProtocol, SymbolicIntWrapperProtocol))
@@ -426,11 +485,13 @@ def _format_sym_node(val: DimensionType) -> str:
 
 def _format_shape_tuple(
     shape: Sequence[DimensionType] | TensorShape | None,
+    prefix: str = "sw_ir.",
 ) -> str:
     """Format shape metadata or dimension tuple into Python representation.
 
     Args:
         shape (Sequence[DimensionType] | TensorShape | None): Shape tuple, list, or None.
+        prefix (str): Module qualification prefix.
 
     Returns:
         str: Formatted Python tuple expression or 'None'.
@@ -441,114 +502,170 @@ def _format_shape_tuple(
     if len(dims) == 0:
         return "()"
     if len(dims) == 1:
-        return f"({_format_sym_node(dims[0])},)"
-    items = ", ".join(_format_sym_node(d) for d in dims)
+        return f"({_format_sym_node(dims[0], prefix)},)"
+    items = ", ".join(_format_sym_node(d, prefix) for d in dims)
     return f"({items})"
 
 
-def _format_tensor_spec(spec: TensorSpec) -> str:
+def _format_tensor_spec(spec: TensorSpec, prefix: str = "sw_ir.") -> str:
     """Format a TensorSpec instance into Python constructor code.
 
     Args:
         spec (TensorSpec): TensorSpec instance.
+        prefix (str): Module qualification prefix.
 
     Returns:
         str: Python code constructing TensorSpec.
     """
-    dtype_str = f"sw_ir.DType.{spec.dtype.name}"
-    shape_str = _format_shape_tuple(spec.shape)
+    dtype_str = f"{prefix}DType.{spec.dtype.name}"
+    shape_str = _format_shape_tuple(spec.shape, prefix)
     if spec.sparsity is not None:
-        return f"sw_ir.TensorSpec(shape={shape_str}, dtype={dtype_str}, sparsity={spec.sparsity!r})"
-    return f"sw_ir.TensorSpec(shape={shape_str}, dtype={dtype_str})"
+        return f"{prefix}TensorSpec(shape={shape_str}, dtype={dtype_str}, sparsity={spec.sparsity!r})"
+    return f"{prefix}TensorSpec(shape={shape_str}, dtype={dtype_str})"
 
 
-def _format_rich_attr_leaf(val: DType | SymNode | SymInt | TensorShape | TensorSpec) -> str:
-    """Format a rich non-primitive leaf ``AttributeValue`` into Python code.
-
-    Args:
-        val (DType | SymNode | SymInt | TensorShape | TensorSpec): Rich attribute leaf.
-
-    Returns:
-        str: Formatted Python constructor expression.
-    """
-    if isinstance(val, DType):
-        return f"sw_ir.DType.{val.name}"
-    if isinstance(val, (SymNode, SymInt)):
-        return _format_sym_node(val)
-    if isinstance(val, TensorShape):
-        return f"sw_ir.TensorShape({_format_shape_tuple(val.dims)})"
-    return _format_tensor_spec(val)
-
-
-def _format_model_attr_value(val: pydantic.BaseModel) -> str:
+def _format_model_attr_value(val: pydantic.BaseModel, prefix: str = "sw_ir.") -> str:
     """Format a ``pydantic.BaseModel`` leaf in ``AttributeValue`` into Python code.
 
     Args:
-        val (pydantic.BaseModel): Pydantic model attribute value.
+        val (pydantic.BaseModel): Pydantic model attribute value (excluding ``TensorShape`` and ``TensorSpec``).
+        prefix (str): Module qualification prefix.
 
     Returns:
         str: Executable Python constructor or dictionary literal expression.
     """
-    if isinstance(val, (TensorShape, TensorSpec)):
-        return _format_rich_attr_leaf(val)
     if isinstance(val, LogicalGraph):
-        return _format_graph_expr(val)
+        return _format_graph_expr(val, prefix)
     if isinstance(val, PartitionSpec):
-        return f"sw_ir.PartitionSpec(axes={val.axes!r})"
+        return f"{prefix}PartitionSpec(axes={val.axes!r})"
     return repr(val.model_dump(mode="json"))
 
 
-def _format_attr_value(val: AttributeValue) -> str:
-    """Format an ``AttributeValue`` recursively into an executable Python expression.
+def _emit_scalar_attr_term_python(term: AttrScalarTerm) -> str:
+    """Exhaustively format an ``AttrScalarTerm`` into a Python literal expression.
+
+    Args:
+        term (AttrScalarTerm): Closed scalar attribute term.
+
+    Returns:
+        str: Valid Python literal string.
+    """
+    code: str
+    if isinstance(term, AttrNone):
+        code = "None"
+    elif isinstance(term, AttrBool):
+        code = repr(term.value)
+    elif isinstance(term, AttrInt):
+        code = repr(term.value)
+    elif isinstance(term, AttrFloat):
+        code = repr(term.value)
+    elif isinstance(term, AttrStr):
+        code = repr(term.value)
+    elif isinstance(term, AttrBytes):
+        code = repr(term.value)
+    else:
+        typing_extensions.assert_never(term)
+    return code
+
+
+def _emit_domain_attr_term_python(term: AttrDomainTerm, prefix: str) -> str:
+    """Exhaustively format an ``AttrDomainTerm`` into a Format-B Python constructor expression.
+
+    Args:
+        term (AttrDomainTerm): Closed domain/model/protocol attribute term.
+        prefix (str): Module alias prefix (e.g. ``'sw_ir.'``).
+
+    Returns:
+        str: Executable Python constructor expression.
+    """
+    code: str
+    if isinstance(term, AttrDType):
+        code = f"{prefix}DType.{term.value.name}"
+    elif isinstance(term, AttrShape):
+        code = f"{prefix}TensorShape({_format_shape_tuple(term.value.dims, prefix)})"
+    elif isinstance(term, AttrTensorSpec):
+        code = _format_tensor_spec(term.value, prefix)
+    elif isinstance(term, AttrSymNode):
+        code = _format_sym_node(term.value, prefix)
+    elif isinstance(term, AttrSymInt):
+        code = _format_sym_node(term.value, prefix)
+    elif isinstance(term, AttrModel):
+        code = _format_model_attr_value(term.value, prefix)
+    elif isinstance(term, AttrProtocolLeaf):
+        code = repr(_encode_json_safe_protocol_leaf(term.value))
+    else:
+        typing_extensions.assert_never(term)
+    return code
+
+
+def _emit_composite_attr_term_python(term: AttrCompositeTerm, prefix: str) -> str:
+    """Exhaustively format an ``AttrCompositeTerm`` into a Python tuple, list, or dict expression.
+
+    Args:
+        term (AttrCompositeTerm): Closed sequence or mapping term.
+        prefix (str): Module alias prefix.
+
+    Returns:
+        str: Executable Python container literal expression.
+    """
+    code: str
+    if isinstance(term, AttrSeq):
+        rendered_items = ", ".join(_emit_attr_term_python(item, prefix) for item in term.items)
+        if term.is_tuple:
+            if len(term.items) == 0:
+                code = "()"
+            elif len(term.items) == 1:
+                code = f"({rendered_items},)"
+            else:
+                code = f"({rendered_items})"
+        else:
+            code = f"[{rendered_items}]"
+    elif isinstance(term, AttrMap):
+        sorted_entries = sorted(term.entries, key=lambda kv: kv[0])
+        entries = ", ".join(f"{k!r}: {_emit_attr_term_python(v, prefix)}" for k, v in sorted_entries)
+        code = "{" + entries + "}"
+    else:
+        typing_extensions.assert_never(term)
+    return code
+
+
+def _emit_attr_term_python(term: AttrTerm, prefix: str = "sw_ir.") -> str:
+    """Exhaustively format a closed ``AttrTerm`` into Python code with ``assert_never``.
+
+    Args:
+        term (AttrTerm): Closed normal-form attribute term.
+        prefix (str): Module alias prefix.
+
+    Returns:
+        str: Executable Python expression string.
+    """
+    code: str
+    if isinstance(term, (AttrNone, AttrBool, AttrInt, AttrFloat, AttrStr, AttrBytes)):
+        code = _emit_scalar_attr_term_python(term)
+    elif isinstance(
+        term,
+        (AttrDType, AttrShape, AttrTensorSpec, AttrSymNode, AttrSymInt, AttrModel, AttrProtocolLeaf),
+    ):
+        code = _emit_domain_attr_term_python(term, prefix)
+    elif isinstance(term, (AttrSeq, AttrMap)):
+        code = _emit_composite_attr_term_python(term, prefix)
+    else:
+        typing_extensions.assert_never(term)
+    return code
+
+
+def _format_attr_value(val: AttributeValue, prefix: str = "sw_ir.") -> str:
+    """Format an ``AttributeValue`` recursively into an executable Python expression via ``AttrTerm``.
 
     Args:
         val (AttributeValue): Attribute value (primitives, bytes, DType, SymNode, SymInt,
             TensorShape, TensorSpec, models, protocols, sequences, or mappings).
+        prefix (str): Module qualification prefix (defaults to ``'sw_ir.'``).
 
     Returns:
         str: Executable Python expression reconstructing ``val`` losslessly.
     """
-    from ml_switcheroo_ir.protocols import (
-        ArrayBufferProtocol,
-        CustomRuleHandleProtocol,
-        DeviceLikeProtocol,
-        DTypeLikeProtocol,
-        LoopOptionsProtocol,
-        SymbolicIntWrapperProtocol,
-        SymbolicNodeProtocol,
-    )
-    from ml_switcheroo_ir.types import _encode_json_safe_protocol_leaf
-
-    if isinstance(val, (DType, SymNode, SymInt)):
-        return _format_rich_attr_leaf(val)
-    if val is None or isinstance(val, (bool, int, float, str, bytes)):
-        return repr(val)
-    if isinstance(val, pydantic.BaseModel):
-        return _format_model_attr_value(val)
-    if isinstance(
-        val,
-        (
-            DTypeLikeProtocol,
-            DeviceLikeProtocol,
-            SymbolicNodeProtocol,
-            SymbolicIntWrapperProtocol,
-            CustomRuleHandleProtocol,
-            LoopOptionsProtocol,
-            ArrayBufferProtocol,
-        ),
-    ):
-        return repr(_encode_json_safe_protocol_leaf(val))
-    if isinstance(val, Mapping):
-        entries = ", ".join(
-            f"{str(k)!r}: {_format_attr_value(v)}" for k, v in sorted(val.items(), key=lambda kv: str(kv[0]))
-        )
-        return "{" + entries + "}"
-    rendered_items = ", ".join(_format_attr_value(x) for x in val)
-    return (
-        ("()" if len(val) == 0 else (f"({rendered_items},)" if len(val) == 1 else f"({rendered_items})"))
-        if isinstance(val, tuple)
-        else f"[{rendered_items}]"
-    )
+    return _emit_attr_term_python(project_attribute_value(val), prefix)
 
 
 def _format_initializer_value(val: InitializerValue) -> str:
@@ -594,11 +711,32 @@ def _sanitize_python_identifier(name: str, fallback: str = "build_graph") -> str
     return cleaned
 
 
-def _format_mesh_expr(graph: LogicalGraph) -> str:
-    """Format ``graph.mesh`` into an inline Python constructor expression.
+def _emit_logical_mesh_python(mesh: LogicalMesh, prefix: str) -> str:
+    """Emit Python constructor expression for ``LogicalMesh``.
+
+    Args:
+        mesh (LogicalMesh): Logical device mesh.
+        prefix (str): Module qualification prefix.
+
+    Returns:
+        str: Executable Python ``LogicalMesh(...)`` expression.
+    """
+    shape_str = json.dumps(mesh.shape, sort_keys=True)
+    if mesh.webrtc_topology is not None:
+        webrtc_dict = mesh.webrtc_topology.to_dict()
+        return (
+            f"{prefix}LogicalMesh(shape={shape_str}, "
+            f"webrtc_topology={prefix}WebRTCSignalingTopology.from_dict({webrtc_dict!r}))"
+        )
+    return f"{prefix}LogicalMesh(shape={shape_str})"
+
+
+def _format_mesh_expr(graph: LogicalGraph, prefix: str = "sw_ir.") -> str:
+    """Format ``graph.mesh`` into an inline Python constructor expression via ``LOGICAL_MESH_PYTHON_EMIT``.
 
     Args:
         graph (LogicalGraph): Graph containing optional ``mesh``.
+        prefix (str): Module qualification prefix (defaults to ``'sw_ir.'``).
 
     Returns:
         str: Python expression constructing ``LogicalMesh`` or mesh literal.
@@ -608,55 +746,60 @@ def _format_mesh_expr(graph: LogicalGraph) -> str:
     if graph.mesh is None:
         return "None"
     if isinstance(graph.mesh, LogicalMesh):
-        shape_str = json.dumps(graph.mesh.shape, sort_keys=True)
-        if graph.mesh.webrtc_topology is not None:
-            webrtc_expr = f"sw_ir.WebRTCSignalingTopology.from_dict({graph.mesh.webrtc_topology.to_dict()!r})"
-            return f"sw_ir.LogicalMesh(shape={shape_str}, webrtc_topology={webrtc_expr})"
-        return f"sw_ir.LogicalMesh(shape={shape_str})"
+        return LOGICAL_MESH_PYTHON_EMIT.emit_python(graph.mesh, prefix)
     if isinstance(graph.mesh, MeshLikeProtocol):
         return repr([str(a) for a in graph.mesh.axis_names])
-    return _format_attr_value(graph.mesh)
+    return ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(graph.mesh, prefix)
 
 
-def _format_graph_expr(graph: LogicalGraph) -> str:
-    """Format a nested ``LogicalGraph`` into an inline ``sw_ir.LogicalGraph(...)`` constructor expression.
+def _format_graph_expr(graph: LogicalGraph, prefix: str = "sw_ir.") -> str:
+    """Format a ``LogicalGraph`` into an inline ``LogicalGraph(...)`` constructor expression.
 
     Emits pure Python constructors for all nested nodes, rich attributes, DTypes,
     symbolic dimensions, topologies, and subgraphs without ``to_dict()!r`` enum repr leaks.
 
     Args:
-        graph (LogicalGraph): Nested subgraph to render.
+        graph (LogicalGraph): Graph or nested subgraph to render.
+        prefix (str): Module qualification prefix (defaults to ``'sw_ir.'``).
 
     Returns:
-        str: Valid Python expression constructing the nested ``LogicalGraph``.
+        str: Valid Python expression constructing the ``LogicalGraph``.
     """
-    nodes_entries: list[str] = []
-    for nid, node in graph.nodes.items():
-        node_lines = _format_node_entry_lines(nid, node)
-        nodes_entries.append(_NL.join(node_lines).strip().rstrip(","))
+    nodes_entries = [
+        f"{nid!r}: {LOGICAL_NODE_PYTHON_EMIT.emit_python(node, prefix)}" for nid, node in graph.nodes.items()
+    ]
     nodes_expr = "{" + ", ".join(nodes_entries) + "}"
     specs_expr = (
-        "{" + ", ".join(f"{k!r}: {_format_tensor_spec(spec)}" for k, spec in sorted(graph.input_specs.items())) + "}"
+        "{"
+        + ", ".join(
+            f"{k!r}: {TENSOR_SPEC_PYTHON_EMIT.emit_python(spec, prefix)}"
+            for k, spec in sorted(graph.input_specs.items())
+        )
+        + "}"
     )
     inits_expr = (
         "{"
         + ", ".join(f"{k!r}: {_format_initializer_value(val)}" for k, val in sorted(graph.initializers.items()))
         + "}"
     )
-    mesh_expr = _format_mesh_expr(graph)
+    mesh_expr = _format_mesh_expr(graph, prefix)
     pipe_expr = (
-        f"sw_ir.PipelineTopologyConfig.from_dict({graph.pipeline_topology.to_dict()!r})"
+        f"{prefix}PipelineTopologyConfig.from_dict({graph.pipeline_topology.to_dict()!r})"
         if graph.pipeline_topology is not None
         else "None"
     )
-    attrs_expr = _format_attr_value(graph.attributes)
-    annotations_expr = _format_attr_value(graph.annotations)
-    metadata_expr = _format_attr_value(graph.metadata)
-    loop_expr = _format_attr_value(graph.loop_options) if graph.loop_options is not None else "None"
-    edges_expr = _format_edges_expr(graph)
+    attrs_expr = ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(graph.attributes, prefix)
+    annotations_expr = ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(graph.annotations, prefix)
+    metadata_expr = ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(graph.metadata, prefix)
+    loop_expr = (
+        ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(graph.loop_options, prefix)
+        if graph.loop_options is not None
+        else "None"
+    )
+    edges_expr = _format_edges_expr(graph, prefix)
     edges_kw = f", edges={edges_expr}" if edges_expr is not None else ""
     return (
-        f"sw_ir.LogicalGraph("
+        f"{prefix}LogicalGraph("
         f"name={graph.name!r}, "
         f"nodes={nodes_expr}, "
         f"inputs={list(graph.inputs)!r}, "
@@ -673,30 +816,32 @@ def _format_graph_expr(graph: LogicalGraph) -> str:
     )
 
 
-def _format_edges_expr(graph: LogicalGraph) -> str | None:
+def _format_edges_expr(graph: LogicalGraph, prefix: str = "sw_ir.") -> str | None:
     """Format explicit ``edges`` constructor list when edge ``value_name`` metadata is present.
 
     Args:
         graph (LogicalGraph): Graph to inspect.
+        prefix (str): Module qualification prefix (defaults to ``'sw_ir.'``).
 
     Returns:
-        str | None: Python list literal of ``sw_ir.LogicalEdge(...)`` calls, or ``None`` if unneeded.
+        str | None: Python list literal of ``LogicalEdge(...)`` calls, or ``None`` if unneeded.
     """
     if not graph._edge_value_names:
         return None
     edge_items = [
-        f"sw_ir.LogicalEdge(source={e.source!r}, target={e.target!r}, "
+        f"{prefix}LogicalEdge(source={e.source!r}, target={e.target!r}, "
         f"source_idx={e.source_idx!r}, target_idx={e.target_idx!r}, value_name={e.value_name!r})"
         for e in graph.iter_edges()
     ]
     return "[" + ", ".join(edge_items) + "]"
 
 
-def _format_subgraphs_expr(subgraphs: Mapping[str, LogicalGraph | AttributeValue]) -> str:
+def _format_subgraphs_expr(subgraphs: Mapping[str, LogicalGraph | AttributeValue], prefix: str = "sw_ir.") -> str:
     """Format a node's ``subgraphs`` dictionary into a Python dict literal expression.
 
     Args:
         subgraphs (Mapping[str, LogicalGraph | AttributeValue]): Node subgraphs mapping.
+        prefix (str): Module qualification prefix (defaults to ``'sw_ir.'``).
 
     Returns:
         str: Formatted Python dictionary expression.
@@ -705,25 +850,24 @@ def _format_subgraphs_expr(subgraphs: Mapping[str, LogicalGraph | AttributeValue
         return "{}"
     entries: list[str] = []
     for k, v in sorted(subgraphs.items()):
-        val_expr = _format_graph_expr(v) if isinstance(v, LogicalGraph) else _format_attr_value(v)
+        val_expr = (
+            LOGICAL_GRAPH_PYTHON_EMIT.emit_python(v, prefix)
+            if isinstance(v, LogicalGraph)
+            else ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(v, prefix)
+        )
         entries.append(f"{k!r}: {val_expr}")
     return "{" + ", ".join(entries) + "}"
 
 
-def _format_node_entry_lines(nid: str, node: LogicalNode) -> list[str]:
-    """Generate indented source lines for a single ``nodes`` entry in ``export_to_python``.
-
-    Preserves all fields (``version``, ``attributes``, ``inputs``, ``outputs``,
-    ``shape_metadata``, ``source_ast_ref``, ``sharding``, ``dtype``, ``output_specs``,
-    ``subgraphs``, ``device``, ``stream``) across ``LogicalNode``, ``ZeroTangent``,
-    and ``NoTangent``.
+def _format_node_ctor_lines(node: LogicalNode, prefix: str = "sw_ir.") -> list[str]:
+    """Build unindented constructor lines for ``LogicalNode``, ``ZeroTangent``, or ``NoTangent``.
 
     Args:
-        nid (str): Node key in ``graph.nodes``.
-        node (LogicalNode): Node instance to format.
+        node (LogicalNode): Node or autodiff sentinel to render.
+        prefix (str): Module qualification prefix (defaults to ``'sw_ir.'``).
 
     Returns:
-        list[str]: Indented Python source lines for this dictionary item.
+        list[str]: Multi-line constructor expression lines ``["LogicalNode(", "    id=...", ..., ")"]``.
     """
     from ml_switcheroo_ir.protocols import DeviceLikeProtocol
 
@@ -732,9 +876,9 @@ def _format_node_entry_lines(nid: str, node: LogicalNode) -> list[str]:
     ctor = "ZeroTangent" if is_zero else ("NoTangent" if is_no else "LogicalNode")
 
     if isinstance(node.sharding, PartitionSpec):
-        sharding_str = f"sw_ir.PartitionSpec(axes={node.sharding.axes!r})"
+        sharding_str = PARTITION_SPEC_PYTHON_EMIT.emit_python(node.sharding, prefix)
     elif node.sharding is not None:
-        sharding_str = _format_attr_value(node.sharding)
+        sharding_str = ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(node.sharding, prefix)
     else:
         sharding_str = "None"
     device_val: str | None = (
@@ -742,39 +886,59 @@ def _format_node_entry_lines(nid: str, node: LogicalNode) -> list[str]:
         if isinstance(node.device, DeviceLikeProtocol)
         else node.device
     )
-    dtype_str = f"sw_ir.DType.{node.dtype.name}" if node.dtype is not None else "None"
-    shape_str = _format_shape_tuple(node.shape_metadata)
-    out_specs_str = "[" + ", ".join(_format_tensor_spec(s) for s in node.output_specs) + "]"
-    attrs_str = _format_attr_value(node.attributes)
-    subgraphs_str = _format_subgraphs_expr(node.subgraphs)
+    dtype_str = DTYPE_PYTHON_EMIT.emit_python(node.dtype, prefix) if node.dtype is not None else "None"
+    shape_str = _format_shape_tuple(node.shape_metadata, prefix)
+    out_specs_str = "[" + ", ".join(TENSOR_SPEC_PYTHON_EMIT.emit_python(s, prefix) for s in node.output_specs) + "]"
+    attrs_str = ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(node.attributes, prefix)
+    subgraphs_str = _format_subgraphs_expr(node.subgraphs, prefix)
 
     lines: list[str] = [
-        f"        {nid!r}: sw_ir.{ctor}(",
-        f"            id={node.id!r},",
+        f"{prefix}{ctor}(",
+        f"    id={node.id!r},",
     ]
     if not (is_zero or is_no):
-        lines.append(f"            op_type={node.op_type!r},")
-        lines.append(f"            domain={node.domain!r},")
+        lines.append(f"    op_type={node.op_type!r},")
+        lines.append(f"    domain={node.domain!r},")
     lines.extend(
         [
-            f"            version={node.version!r},",
-            f"            attributes={attrs_str},",
-            f"            inputs={list(node.inputs)!r},",
-            f"            outputs={list(node.outputs)!r},",
-            f"            shape_metadata={shape_str},",
-            f"            source_ast_ref={node.source_ast_ref!r},",
-            f"            sharding={sharding_str},",
-            f"            dtype={dtype_str},",
-            f"            output_specs={out_specs_str},",
-            f"            subgraphs={subgraphs_str},",
-            f"            device={device_val!r},",
-            f"            stream={node.stream!r},",
+            f"    version={node.version!r},",
+            f"    attributes={attrs_str},",
+            f"    inputs={list(node.inputs)!r},",
+            f"    outputs={list(node.outputs)!r},",
+            f"    shape_metadata={shape_str},",
+            f"    source_ast_ref={node.source_ast_ref!r},",
+            f"    sharding={sharding_str},",
+            f"    dtype={dtype_str},",
+            f"    output_specs={out_specs_str},",
+            f"    subgraphs={subgraphs_str},",
+            f"    device={device_val!r},",
+            f"    stream={node.stream!r},",
         ]
     )
     if node.strides is not None:
-        lines.append(f"            strides={node.strides!r},")
-    lines.append("        ),")
+        lines.append(f"    strides={node.strides!r},")
+    lines.append(")")
     return lines
+
+
+def _format_node_entry_lines(nid: str, node: LogicalNode, prefix: str = "sw_ir.") -> list[str]:
+    """Generate indented source lines for a single ``nodes`` entry in ``export_to_python``.
+
+    Args:
+        nid (str): Node key in ``graph.nodes``.
+        node (LogicalNode): Node instance to format.
+        prefix (str): Module qualification prefix (defaults to ``'sw_ir.'``).
+
+    Returns:
+        list[str]: Indented Python source lines for this dictionary item.
+    """
+    node_expr = LOGICAL_NODE_PYTHON_EMIT.emit_python(node, prefix)
+    ctor_lines = node_expr.splitlines()
+    out = [f"        {nid!r}: {ctor_lines[0]}"]
+    for middle in ctor_lines[1:-1]:
+        out.append(f"        {middle}")
+    out.append(f"        {ctor_lines[-1]},")
+    return out
 
 
 def _append_topology_lines(lines: list[str], graph: LogicalGraph) -> tuple[str, str]:
@@ -872,7 +1036,7 @@ def export_to_python(
 
     lines.append("    input_specs: dict[str, sw_ir.TensorSpec] = {")
     for k, spec in sorted(graph.input_specs.items()):
-        lines.append(f"        {k!r}: {_format_tensor_spec(spec)},")
+        lines.append(f"        {k!r}: {TENSOR_SPEC_PYTHON_EMIT.emit_python(spec, 'sw_ir.')},")
     lines.append("    }")
 
     lines.append("    initializers: dict[str, sw_ir.InitializerValue] = {")
@@ -880,11 +1044,15 @@ def export_to_python(
         lines.append(f"        {k!r}: {_format_initializer_value(val)},")
     lines.append("    }")
 
-    attrs_expr = _format_attr_value(graph.attributes)
-    annotations_expr = _format_attr_value(graph.annotations)
-    metadata_expr = _format_attr_value(graph.metadata)
-    loop_expr = _format_attr_value(graph.loop_options) if graph.loop_options is not None else "None"
-    edges_expr = _format_edges_expr(graph)
+    attrs_expr = ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(graph.attributes, "sw_ir.")
+    annotations_expr = ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(graph.annotations, "sw_ir.")
+    metadata_expr = ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(graph.metadata, "sw_ir.")
+    loop_expr = (
+        ATTRIBUTE_VALUE_PYTHON_EMIT.emit_python(graph.loop_options, "sw_ir.")
+        if graph.loop_options is not None
+        else "None"
+    )
+    edges_expr = _format_edges_expr(graph, "sw_ir.")
 
     lines.extend(
         [
@@ -965,3 +1133,61 @@ def export_schemas(
         exported["TypeScript"] = ts_file
 
     return exported
+
+
+def _emit_logical_node_python(node: LogicalNode, prefix: str) -> str:
+    """Emit single-expression Python constructor for ``LogicalNode`` (including sentinels).
+
+    Args:
+        node (LogicalNode): IR node or autodiff sentinel.
+        prefix (str): Module qualification prefix.
+
+    Returns:
+        str: Executable Python node constructor expression.
+    """
+    return _NL.join(_format_node_ctor_lines(node, prefix))
+
+
+def _emit_logical_graph_python(graph: LogicalGraph, prefix: str) -> str:
+    """Emit inline Python ``LogicalGraph(...)`` constructor expression.
+
+    Args:
+        graph (LogicalGraph): Computation graph.
+        prefix (str): Module qualification prefix.
+
+    Returns:
+        str: Executable Python ``LogicalGraph(...)`` expression.
+    """
+    return _format_graph_expr(graph, prefix)
+
+
+DTYPE_PYTHON_EMIT: PythonExprEmit[DType] = PythonExprEmit(
+    emit_python=lambda dt, prefix: f"{prefix}DType.{dt.name}",
+)
+SYM_EXPR_PYTHON_EMIT: PythonExprEmit[SymExpr] = PythonExprEmit(
+    emit_python=_format_sym_expr_python,
+)
+DIMENSION_PYTHON_EMIT: PythonExprEmit[DimensionType] = PythonExprEmit(
+    emit_python=_format_sym_node,
+)
+TENSOR_SHAPE_PYTHON_EMIT: PythonExprEmit[TensorShape] = PythonExprEmit(
+    emit_python=lambda sh, prefix: f"{prefix}TensorShape({_format_shape_tuple(sh.dims, prefix)})",
+)
+TENSOR_SPEC_PYTHON_EMIT: PythonExprEmit[TensorSpec] = PythonExprEmit(
+    emit_python=_format_tensor_spec,
+)
+PARTITION_SPEC_PYTHON_EMIT: PythonExprEmit[PartitionSpec] = PythonExprEmit(
+    emit_python=lambda ps, prefix: f"{prefix}PartitionSpec(axes={ps.axes!r})",
+)
+LOGICAL_MESH_PYTHON_EMIT: PythonExprEmit[LogicalMesh] = PythonExprEmit(
+    emit_python=_emit_logical_mesh_python,
+)
+ATTRIBUTE_VALUE_PYTHON_EMIT: PythonExprEmit[AttributeValue] = PythonExprEmit(
+    emit_python=_format_attr_value,
+)
+LOGICAL_NODE_PYTHON_EMIT: PythonExprEmit[LogicalNode] = PythonExprEmit(
+    emit_python=_emit_logical_node_python,
+)
+LOGICAL_GRAPH_PYTHON_EMIT: PythonExprEmit[LogicalGraph] = PythonExprEmit(
+    emit_python=_emit_logical_graph_python,
+)

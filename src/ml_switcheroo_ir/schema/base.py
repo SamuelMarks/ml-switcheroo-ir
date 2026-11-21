@@ -8,11 +8,14 @@ import json
 import threading
 import typing
 from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
 import pydantic
+import typing_extensions
 
+from ml_switcheroo_ir.identifiers import DialectDomain
 from ml_switcheroo_ir.schema.ghost import (
     RdnaPrimitiveSpec,
     SassPrimitiveSpec,
@@ -57,6 +60,98 @@ class AttributeType(str, Enum):
     GRAPH = "Graph"
     DTYPE = "DType"
     ANY = "Any"
+
+
+_ScalarAttrType: typing_extensions.TypeAlias = typing.Literal[
+    AttributeType.INT,
+    AttributeType.FLOAT,
+    AttributeType.STR,
+    AttributeType.BOOL,
+    AttributeType.DTYPE,
+]
+_CollectionAttrType: typing_extensions.TypeAlias = typing.Literal[
+    AttributeType.DICT,
+    AttributeType.LIST_INT,
+    AttributeType.LIST_FLOAT,
+    AttributeType.LIST_STR,
+    AttributeType.LIST,
+]
+_ObjectAttrType: typing_extensions.TypeAlias = typing.Literal[
+    AttributeType.TENSOR,
+    AttributeType.GRAPH,
+    AttributeType.ANY,
+]
+
+
+def _describe_object_attr_type(attr_type: _ObjectAttrType) -> str:
+    """Exhaustively describe object/polymorphic ``AttributeType`` variants.
+
+    Args:
+        attr_type (_ObjectAttrType): Object or wildcard attribute enum variant.
+
+    Returns:
+        str: Human-readable canonical type description.
+    """
+    label: str
+    if attr_type is AttributeType.TENSOR:
+        label = "tensor literal or TensorSpec (Tensor)"
+    elif attr_type is AttributeType.GRAPH:
+        label = "nested LogicalGraph region (Graph)"
+    elif attr_type is AttributeType.ANY:
+        label = "polymorphic AttributeValue (Any)"
+    else:
+        typing_extensions.assert_never(attr_type)
+    return label
+
+
+def _describe_non_scalar_attr_type(attr_type: _CollectionAttrType | _ObjectAttrType) -> str:
+    """Cascade collection ``AttributeType`` variants and delegate remaining object variants.
+
+    Args:
+        attr_type (_CollectionAttrType | _ObjectAttrType): Non-scalar attribute enum variant.
+
+    Returns:
+        str: Human-readable canonical type description.
+    """
+    label: str
+    if attr_type is AttributeType.DICT:
+        label = "string-keyed attribute mapping (dict)"
+    elif attr_type is AttributeType.LIST_INT:
+        label = "homogeneous integer sequence (List[int])"
+    elif attr_type is AttributeType.LIST_FLOAT:
+        label = "homogeneous float sequence (List[float])"
+    elif attr_type is AttributeType.LIST_STR:
+        label = "homogeneous string sequence (List[str])"
+    elif attr_type is AttributeType.LIST:
+        label = "untyped sequence (list)"
+    else:
+        label = _describe_object_attr_type(attr_type)
+    return label
+
+
+def describe_attribute_type(attr_type: AttributeType) -> str:
+    """Exhaustively describe any ``AttributeType`` member with compile-time ``assert_never`` safety.
+
+    Args:
+        attr_type (AttributeType): Canonical operator attribute type enum member.
+
+    Returns:
+        str: Human-readable canonical type description.
+    """
+    label: str
+    if attr_type is AttributeType.INT:
+        label = "64-bit signed integer (int)"
+    elif attr_type is AttributeType.FLOAT:
+        label = "IEEE-754 floating-point scalar (float)"
+    elif attr_type is AttributeType.STR:
+        label = "UTF-8 string (str)"
+    elif attr_type is AttributeType.BOOL:
+        label = "boolean flag (bool)"
+    elif attr_type is AttributeType.DTYPE:
+        label = "element data type (DType)"
+    else:
+        label = _describe_non_scalar_attr_type(attr_type)
+    return label
 
 
 _ATTRIBUTE_TYPE_SYNONYMS: dict[str, AttributeType] = {
@@ -926,3 +1021,25 @@ def override_registry(
         finally:
             registry.clear()
             registry.update(saved)
+
+
+_SchemaWitnessT = typing.TypeVar("_SchemaWitnessT", covariant=True)
+
+
+@dataclass(frozen=True)
+class DialectCatalogWitness(typing.Generic[_SchemaWitnessT]):
+    """Explicit typeclass witness dictionary unifying heterogeneous operator catalog registries.
+
+    Attributes:
+        registry_name (str): Canonical Python symbol name of the catalog registry.
+        domains (tuple[DialectDomain, ...]): Dialect namespaces routed to this catalog.
+        lookup (Callable[[str], _SchemaWitnessT | None]): Total operator lookup function returning ``None`` on miss.
+        list_ops (Callable[[], tuple[str, ...]]): Deterministic sorted operator key listing thunk.
+        snapshot_glob (str | None): Ground-truth snapshot glob pattern for ``verify_grounding.py``, if file-backed.
+    """
+
+    registry_name: str
+    domains: tuple[DialectDomain, ...]
+    lookup: Callable[[str], _SchemaWitnessT | None]
+    list_ops: Callable[[], tuple[str, ...]]
+    snapshot_glob: str | None = None

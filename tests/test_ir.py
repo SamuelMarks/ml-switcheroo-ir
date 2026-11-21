@@ -26,7 +26,7 @@ from ml_switcheroo_ir.cli import main as cli_main
 
 def test_package_version() -> None:
     """Test package version exposure."""
-    assert __version__ == "0.0.7"
+    assert __version__ == "0.0.8"
     assert __version__.count(".") == 2
 
 

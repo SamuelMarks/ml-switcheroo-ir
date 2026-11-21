@@ -5,12 +5,14 @@ from __future__ import annotations
 import ast
 import json
 import os
+import typing
 from collections.abc import Sequence
 
 import pydantic
 
 from ml_switcheroo_ir.schema.ghost import ExtendedGhostRef, GhostParam
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY
+from ml_switcheroo_ir.typeclasses.algebra import BOOL_ANY_MONOID, Monoid, Semigroup
 from ml_switcheroo_ir.types import JsonValue
 
 _NL = chr(10)
@@ -59,6 +61,53 @@ class FileComplianceResult(pydantic.BaseModel):
     fw_score: tuple[int, int] = (0, 4)
 
 
+def _max_score_pair(lhs: tuple[int, int], rhs: tuple[int, int]) -> tuple[int, int]:
+    """Select the higher ``(met, total)`` compliance score tuple (associative max).
+
+    Args:
+        lhs (tuple[int, int]): Left score pair.
+        rhs (tuple[int, int]): Right score pair.
+
+    Returns:
+        tuple[int, int]: Score pair with larger ``met`` count (tie-broken by ``total``).
+    """
+    return lhs if lhs >= rhs else rhs
+
+
+def _combine_file_compliance(
+    lhs: FileComplianceResult,
+    rhs: FileComplianceResult,
+) -> FileComplianceResult:
+    """Associatively merge two ``FileComplianceResult`` records.
+
+    Args:
+        lhs (FileComplianceResult): Left file compliance result.
+        rhs (FileComplianceResult): Right file compliance result.
+
+    Returns:
+        FileComplianceResult: Combined compliance result.
+    """
+    return FileComplianceResult(
+        is_ir=BOOL_ANY_MONOID.combine(lhs.is_ir, rhs.is_ir),
+        is_fw=BOOL_ANY_MONOID.combine(lhs.is_fw, rhs.is_fw),
+        implemented_ops=lhs.implemented_ops | rhs.implemented_ops,
+        ir_score=_max_score_pair(lhs.ir_score, rhs.ir_score),
+        fw_score=_max_score_pair(lhs.fw_score, rhs.fw_score),
+    )
+
+
+FILE_COMPLIANCE_MONOID: typing.Final[Monoid[FileComplianceResult]] = Monoid(
+    empty=lambda: FileComplianceResult(
+        is_ir=False,
+        is_fw=False,
+        implemented_ops=set(),
+        ir_score=(0, 5),
+        fw_score=(0, 4),
+    ),
+    semigroup=Semigroup(combine=_combine_file_compliance),
+)
+
+
 class ComplianceReport(pydantic.BaseModel):
     """Typed side-effect-free compliance report across one or more target paths.
 
@@ -97,6 +146,7 @@ class ComplianceReport(pydantic.BaseModel):
 
 __all__ = [
     "ComplianceReport",
+    "FILE_COMPLIANCE_MONOID",
     "FileComplianceResult",
     "analyze_python_file",
     "collect_files",
@@ -528,42 +578,29 @@ def _aggregate_compliance_results(
         tuple[bool, tuple[int, int], bool, tuple[int, int], set[str], bool]:
             ``(found_ir, ir_score, found_fw, fw_score, dialect_ops, found_dialect)``.
     """
-    best_ir_score = (0, 5)
-    best_fw_score = (0, 4)
-    found_any_ir = False
-    found_any_fw = False
-    aggregated_dialect_ops: set[str] = set()
-    found_any_dialect_targets = False
     explicit_files = {os.path.abspath(t) for t in targets if os.path.isfile(t)}
+    per_file_results: list[FileComplianceResult] = []
+    found_any_dialect_targets = False
 
     for filepath in files:
         if filepath.endswith(".json"):
             ops = parse_json_file(filepath, dialect_ops)
-            aggregated_dialect_ops.update(ops)
+            per_file_results.append(FileComplianceResult(implemented_ops=set(ops)))
             found_any_dialect_targets = found_any_dialect_targets or bool(ops)
             continue
 
         res = analyze_python_file(filepath, dialect_ops)
-        if res.is_ir:
-            found_any_ir = True
-            if res.ir_score[0] > best_ir_score[0]:
-                best_ir_score = res.ir_score
-        if res.is_fw:
-            found_any_fw = True
-            if res.fw_score[0] > best_fw_score[0]:
-                best_fw_score = res.fw_score
-        if res.implemented_ops:
-            aggregated_dialect_ops.update(res.implemented_ops)
-            found_any_dialect_targets = True
-        if not res.is_ir and not res.is_fw and filepath in explicit_files:
+        per_file_results.append(res)
+        if res.implemented_ops or (not res.is_ir and not res.is_fw and filepath in explicit_files):
             found_any_dialect_targets = True
 
+    combined = FILE_COMPLIANCE_MONOID.mconcat(per_file_results)
     return (
-        found_any_ir,
-        best_ir_score,
-        found_any_fw,
-        best_fw_score,
-        aggregated_dialect_ops,
+        combined.is_ir,
+        combined.ir_score,
+        combined.is_fw,
+        combined.fw_score,
+        combined.implemented_ops,
         found_any_dialect_targets,
     )
 

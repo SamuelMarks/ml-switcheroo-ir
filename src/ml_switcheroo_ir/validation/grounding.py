@@ -18,6 +18,7 @@ import ml_switcheroo_ir.snapshots as _snapshots
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode
 from ml_switcheroo_ir.schema.ghost import ExtendedGhostRef
 from ml_switcheroo_ir.schema.onnx_registry import OpSchema
+from ml_switcheroo_ir.typeclasses.algebra import Monoid, tuple_monoid
 from ml_switcheroo_ir.validation.core import (
     KNOWN_SYNONYMS,
     ValidationError,
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DiagnosticSeverity",
+    "GROUNDING_DIAGNOSTICS_MONOID",
     "GroundingAuditReport",
     "GroundingDiagnostic",
     "GroundingEngineProtocol",
@@ -164,12 +166,24 @@ class GroundingDiagnostic(pydantic.BaseModel):
 
     @property
     def level(self) -> ValidationLevel:
-        """Map ``DiagnosticSeverity`` to ``ValidationLevel``.
+        """Map ``DiagnosticSeverity`` exhaustively to ``ValidationLevel``.
 
         Returns:
             ValidationLevel: Corresponding validation severity level.
         """
-        return ValidationLevel.ERROR if self.severity == DiagnosticSeverity.ERROR else ValidationLevel.WARNING
+        mapped: ValidationLevel
+        if self.severity is DiagnosticSeverity.ERROR:
+            mapped = ValidationLevel.ERROR
+        elif self.severity is DiagnosticSeverity.WARNING:
+            mapped = ValidationLevel.WARNING
+        elif self.severity is DiagnosticSeverity.INFO:
+            mapped = ValidationLevel.WARNING
+        else:
+            typing_extensions.assert_never(self.severity)
+        return mapped
+
+
+GROUNDING_DIAGNOSTICS_MONOID: typing.Final[Monoid[tuple[GroundingDiagnostic | ValidationError, ...]]] = tuple_monoid()
 
 
 class GroundingReport(pydantic.BaseModel):

@@ -85,3 +85,10 @@ In addition to `ai.onnx`, `stablehlo`, `aten`, and `array_api`, `ml-switcheroo-i
 *   **`grain` (`GRAIN_REGISTRY`)**: Deterministic data pipeline operations (`MapDataset`, `IterDataset`, `DataLoader`, `batch`, `map`).
 *   **`orbax` / `orbax.checkpoint` (`ORBAX_REGISTRY`)**: Checkpoint management primitives (`PyTreeCheckpointer`, `StandardCheckpointer`, `CheckpointManager`, `AsyncCheckpointer`, `SaveArgs`).
 *   **`optax` (`OPTAX_REGISTRY`)**: Gradient transformation, schedule, and loss primitives (`adam`, `adamw`, `sgd`, `cosine_decay_schedule`, `softmax_cross_entropy`).
+
+## 6. Unified Catalog Witnesses & Bidirectional Layout Isomorphisms (`v0.0.8`)
+
+All 21 operator catalogs (`ONNX_REGISTRY`, `STABLEHLO_REGISTRY`, `MLIR_REGISTRY`, `CUSTOM_OPS_REGISTRY`, `COLLECTIVE_OPS_REGISTRY`, `QUANTIZATION_OPS_REGISTRY`, `STATE_OPS_REGISTRY`, `ARRAY_API_REGISTRY`, `ATEN_REGISTRY`, `CHEX_REGISTRY`, `GRAIN_REGISTRY`, `ORBAX_REGISTRY`, `OPTAX_REGISTRY`, `ODL_CATALOG`, `RDNA_REGISTRY`, `SASS_REGISTRY`, `WGSL_REGISTRY`, `PTX_REGISTRY`, `METAL_REGISTRY`, `WASM_REGISTRY`, and `WEBGL_REGISTRY`) are exposed uniformly via `ALL_DIALECT_CATALOG_WITNESSES: tuple[DialectCatalogWitness[OpSchema], ...]`.
+
+Cross-dialect parameter and weight layout conversions in `ParameterTranslationEngine` also expose total `Result`-returning methods (`translate_parameter_result`, `translate_attributes_result`) and lawful `PartialIso` witnesses (`conv_layout_iso` supporting `OIHW <-> HWIO <-> NCHW <-> NHWC`, and `qkv_split_merge_iso` supporting MHA/GQA QKV weight splitting and merging).
+

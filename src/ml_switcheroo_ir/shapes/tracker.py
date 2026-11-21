@@ -11,16 +11,20 @@ from ml_switcheroo_ir.protocols import (
     SymbolicNodeProtocol,
 )
 from ml_switcheroo_ir.shapes.ast import (
+    SYM_EXPR_REWRITE,
     DimensionType,
     SymBinaryOp,
     SymCondition,
     SymConst,
+    SymExpr,
     SymInt,
     SymNode,
     SymPiecewise,
     SymUnaryOp,
     SymVar,
     format_symbolic_protocol_expr,
+    is_sym_expr,
+    sym_expr_simplify,
 )
 from ml_switcheroo_ir.shapes.parser import parse_symbolic_expr
 from ml_switcheroo_ir.shapes.polynomial import MonomialType, Polynomial
@@ -76,29 +80,50 @@ def _eval_poly_with_knowns(poly: Polynomial, knowns: dict[str, int]) -> Polynomi
     return Polynomial(new_terms)
 
 
-def _substitute_piecewise(node: SymPiecewise, solved: dict[str, int]) -> SymNode:
-    """Substitute ``solved`` variable bindings into a ``SymPiecewise`` node and simplify.
+def substitute_sym_expr(expr: SymExpr, solved: dict[str, int]) -> SymExpr:
+    """Substitute ``solved`` bindings across a closed ``SymExpr`` via ``SYM_EXPR_REWRITE.bottom_up``.
 
     Args:
-        node (SymPiecewise): Piecewise symbolic node.
-        solved (dict[str, int]): Solved variable-to-integer dictionary.
+        expr (SymExpr): Closed symbolic expression node.
+        solved (dict[str, int]): Mapping of solved variable names to concrete integers.
 
     Returns:
-        SymNode: Simplified substituted piecewise node or folded branch.
+        SymExpr: Substituted and simplified closed ``SymExpr``.
     """
-    new_cases: list[tuple[SymCondition, SymNode]] = []
-    for cond, expr in node.cases:
-        sub_expr = _substitute_symnode(expr, solved)
-        sub_cond: SymCondition = cond
-        if isinstance(cond, SymNode):
-            sub_cond = _substitute_symnode(cond, solved)
-        elif isinstance(cond, str):
-            parsed_cond = _safe_parse_dim_node(cond)
-            if parsed_cond is not None:
-                sub_cond = _substitute_symnode(parsed_cond, solved)
-        new_cases.append((sub_cond, sub_expr))
-    sub_def = _substitute_symnode(node.default, solved)
-    return SymPiecewise(cases=new_cases, default=sub_def).simplify()
+    if not solved:
+        return expr
+
+    def _step(curr: SymExpr) -> SymExpr:
+        """Rewrite a single ``SymExpr`` node after its children have been rewritten.
+
+        Args:
+            curr (SymExpr): Current symbolic expression node.
+
+        Returns:
+            SymExpr: Substituted and locally simplified ``SymExpr``.
+        """
+        out: SymExpr
+        if isinstance(curr, SymConst):
+            out = curr
+        elif isinstance(curr, SymVar):
+            out = SymConst(solved[curr.name]) if curr.name in solved else curr
+        elif isinstance(curr, (SymBinaryOp, SymUnaryOp)):
+            out = sym_expr_simplify(curr)
+        elif isinstance(curr, SymPiecewise):
+            rewritten_cases: list[tuple[SymCondition, SymNode]] = []
+            for cond, branch in curr.cases:
+                sub_cond: SymCondition = cond
+                if isinstance(cond, str):
+                    parsed_cond = _safe_parse_dim_node(cond)
+                    if parsed_cond is not None:
+                        sub_cond = _substitute_symnode(parsed_cond, solved)
+                rewritten_cases.append((sub_cond, branch))
+            out = sym_expr_simplify(SymPiecewise(cases=rewritten_cases, default=curr.default))
+        else:
+            typing_extensions.assert_never(curr)
+        return out
+
+    return SYM_EXPR_REWRITE.bottom_up(expr, _step)
 
 
 def _substitute_symnode(node: SymNode, solved: dict[str, int]) -> SymNode:
@@ -111,20 +136,8 @@ def _substitute_symnode(node: SymNode, solved: dict[str, int]) -> SymNode:
     Returns:
         SymNode: Substituted and simplified ``SymNode``.
     """
-    if not solved or isinstance(node, SymConst):
-        return node
-    if isinstance(node, SymVar):
-        return SymConst(solved[node.name]) if node.name in solved else node
-    if isinstance(node, SymBinaryOp):
-        return SymBinaryOp(
-            node.op,
-            _substitute_symnode(node.left, solved),
-            _substitute_symnode(node.right, solved),
-        ).simplify()
-    if isinstance(node, SymUnaryOp):
-        return SymUnaryOp(node.op, _substitute_symnode(node.operand, solved)).simplify()
-    if isinstance(node, SymPiecewise):
-        return _substitute_piecewise(node, solved)
+    if is_sym_expr(node):
+        return substitute_sym_expr(node, solved)
     return node
 
 

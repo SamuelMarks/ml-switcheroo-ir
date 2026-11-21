@@ -87,7 +87,8 @@ By decoupling ingestion from code generation through a canonical, strictly valid
 
 ## Key Features
 
-- **Minimal External Dependencies:** Relies strictly on `pydantic` and `zstandard` at runtime (with `black` optional via `ml-switcheroo-ir[format]`) for maximum portability across air-gapped or resource-constrained environments.
+- **Minimal External Dependencies & Tier-1 Structural Protocols:** Relies strictly on `pydantic` and `zstandard` at runtime (with `black` optional via `ml-switcheroo-ir[format]`), exposing `@typing.runtime_checkable` structural `Protocol` contracts (`DTypeLikeProtocol`, `DeviceLikeProtocol`, `SymbolicNodeProtocol`, `SymbolicIntWrapperProtocol` / `SymbolicDimProtocol`, `CustomRuleHandleProtocol`, `LoopOptionsProtocol`, `MeshLikeProtocol`, `ArrayBufferProtocol`, `SubgraphLikeProtocol` in `ml_switcheroo_ir.protocols`) alongside `IRGraph` / `IRNode` aliases, `LogicalNode.strides`, and `LogicalGraph` `annotations`, `metadata`, and `sorted_nodes`.
+- **Algebraic Typeclass Witnesses, Closed ADTs & Proof-Carrying IR (`v0.0.8`):** Explicit frozen typeclass witness dictionaries (`Eq`, `Ord`, `HashableWitness`, `Semigroup`, `Monoid`, `Semiring`, `Ring`, `BoundedLattice`, `Codec`, `JsonCodec`, `Pretty`, `PythonExprEmit`, `EndoRewrite`, `RecursiveFold` in `ml_switcheroo_ir.typeclasses`), closed ADTs (`SymExpr`, `AttrTerm`, `Result[E, A] = Ok | Err`, Applicative `Validation[E, A] = Valid | Invalid`) enforced with `typing_extensions.assert_never`, zero-cost domain identifiers (`NodeId`, `SsaValueName`, `DialectDomain`, `OpName`, `NonBoolInt`, `PortRef` in `ml_switcheroo_ir.identifiers`), and clone-isolated phantom phase witnesses (`ProvenGraph[AcyclicSortedPhase | SchemaValidPhase | ShardingValidPhase | GroundedPhase]` in `ml_switcheroo_ir.proofs`).
 - **Dual-Mode Graph Topology:** Unified graph representation supporting both implicit input wiring (`LogicalNode.inputs`) and immutable first-class directed edges (`LogicalGraph.edges: tuple[LogicalEdge, ...]`). Nodes are stored in a `NodeDict` keyed by `node.id` and can be accessed via dictionary lookup (`graph["node_id"]`), integer index (`graph.nodes[0]`), or `graph.iter_nodes()` / `graph.nodes_list`.
 - **Multi-Output & SSA Value Support:** Accurate modeling of nodes that emit multiple SSA outputs (e.g., `Split`, `BatchNorm`, `custom_call`, or multi-result MLIR operations) via `LogicalNode.outputs` and `graph.get_output_producer()`.
 - **Nested Subgraphs & Autodiff Sentinels:** Recursive hierarchical subgraphs in `LogicalNode.subgraphs` supporting control-flow constructs (`Loop`, `If`), custom autodiff (`bwd`, `jvp`), checkpointed computational regions, and first-class cotangent sentinels (`ZeroTangent`, `NoTangent` in domain `ml.switcheroo.ad`).
@@ -313,6 +314,32 @@ keras_weight = engine.translate_weight_name(
     target_framework="keras3",
 )
 assert keras_weight == "kernel"
+```
+
+### 7. Total `Result` / Applicative `Validation` & Proof-Carrying `ProvenGraph`
+
+```python
+from ml_switcheroo_ir import (
+    CANONICAL_OPTIMIZE_PIPELINE,
+    Ok,
+    Valid,
+    prove_acyclic_sorted,
+)
+from ml_switcheroo_ir.validator import Validator
+
+# 1. Total lossless JSON Codec round-tripping without exceptions
+decoded_res = LogicalGraph.from_json_result(graph.to_json())
+assert isinstance(decoded_res, Ok)
+
+# 2. Mint clone-isolated phantom phase witnesses
+acyclic_res = prove_acyclic_sorted(decoded_res.value)
+assert isinstance(acyclic_res, Ok)
+
+applicative_check = Validator().validate_graph_applicative(acyclic_res.value.graph)
+assert isinstance(applicative_check, Valid)
+
+# 3. Run the fixpoint algebraic optimization pipeline (Shape/Const Prop + CSE + DCE)
+optimized = CANONICAL_OPTIMIZE_PIPELINE.apply(applicative_check.value.graph)
 ```
 
 ---

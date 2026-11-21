@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 import pydantic
 import typing_extensions
 
+from ml_switcheroo_ir.identifiers import is_non_bool_int
 from ml_switcheroo_ir.types import JsonValue
 
 PartitionAxisAtom: typing_extensions.TypeAlias = typing.Union[str, int, None]
@@ -166,9 +167,9 @@ class LogicalMesh(pydantic.BaseModel):
             raise ValueError("LogicalMesh 'shape' must be a non-empty mapping of axis names to positive sizes.")
         validated: dict[str, int] = {}
         for axis_name, size in raw_shape.items():
-            if not axis_name or isinstance(size, bool) or not isinstance(size, int) or size < 1:
+            if not axis_name or not is_non_bool_int(size) or size < 1:
                 raise ValueError(f"LogicalMesh axis {axis_name!r} must have positive integer size >= 1, got {size!r}.")
-            validated[str(axis_name)] = size
+            validated[str(axis_name)] = int(size)
         return validated
 
     def __init__(

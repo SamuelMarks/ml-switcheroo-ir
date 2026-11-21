@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import typing
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 
 import typing_extensions
 
 if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.types import AttributeValue, TensorSpec
 
+from ml_switcheroo_ir.identifiers import NonBoolInt, NonNegativeInt, OpName, is_non_bool_int
 from ml_switcheroo_ir.shapes.ast import (
     DimensionType,
     ShapeType,
@@ -23,22 +25,33 @@ from ml_switcheroo_ir.shapes.tracker import (
     ShapeMismatchError,
     SymbolicConstraintTracker,
 )
+from ml_switcheroo_ir.typeclasses.algebra import Eq, Semiring
+from ml_switcheroo_ir.typeclasses.outcome import Err, Ok, Result
 
 __all__ = [
+    "DIMENSION_EQ",
+    "DIMENSION_SEMIRING",
     "SHAPE_TRANSFER_REGISTRY",
+    "SHAPE_TRANSFER_WITNESSES",
     "ShapeNodeProtocol",
     "ShapeTracker",
     "ShapeTransferContext",
+    "ShapeTransferWitness",
     "SupportsDirectShapeProtocol",
     "SupportsShapeMetadataProtocol",
     "SupportsShapeNodesProtocol",
     "TelemetryValueType",
     "broadcast_dimension",
+    "broadcast_dimension_result",
     "broadcast_shapes",
+    "broadcast_shapes_result",
     "infer_node_shapes",
     "infer_op_output_shape",
+    "infer_op_output_shape_result",
     "matmul_shape",
+    "matmul_shape_result",
     "normalize_axis",
+    "normalize_axis_result",
     "resolve_symbolic_bounds",
 ]
 
@@ -270,7 +283,7 @@ def normalize_axis(
     Raises:
         TypeError: If ``rank``, ``axis``, or any axis element is a boolean or non-integer type.
     """
-    if isinstance(rank, bool) or not isinstance(rank, int):
+    if not is_non_bool_int(rank):
         raise TypeError(f"Invalid type for rank: {type(rank)}")
 
     def _normalize_single(a: int) -> int:
@@ -684,8 +697,47 @@ def _transfer_unsqueeze(ctx: ShapeTransferContext) -> tuple[DimensionType, ...] 
     return tuple(s)
 
 
+def _dim_add(lhs: DimensionType, rhs: DimensionType) -> DimensionType:
+    """Add two concrete or symbolic dimensions under ``DIMENSION_SEMIRING``.
+
+    Args:
+        lhs (DimensionType): Left dimension operand.
+        rhs (DimensionType): Right dimension operand.
+
+    Returns:
+        DimensionType: Concrete integer sum or simplified symbolic ``SymNode``.
+    """
+    if is_non_bool_int(lhs) and is_non_bool_int(rhs):
+        return int(lhs) + int(rhs)
+    return SymBinaryOp("+", SymNode.to_node(lhs), SymNode.to_node(rhs)).simplify()
+
+
+def _dim_mul(lhs: DimensionType, rhs: DimensionType) -> DimensionType:
+    """Multiply two concrete or symbolic dimensions under ``DIMENSION_SEMIRING``.
+
+    Args:
+        lhs (DimensionType): Left dimension operand.
+        rhs (DimensionType): Right dimension operand.
+
+    Returns:
+        DimensionType: Concrete integer product or simplified symbolic ``SymNode``.
+    """
+    if is_non_bool_int(lhs) and is_non_bool_int(rhs):
+        return int(lhs) * int(rhs)
+    return SymBinaryOp("*", SymNode.to_node(lhs), SymNode.to_node(rhs)).simplify()
+
+
+DIMENSION_EQ: typing.Final[Eq[DimensionType]] = Eq(eq=SymbolicSolver.is_consistent)
+DIMENSION_SEMIRING: typing.Final[Semiring[DimensionType]] = Semiring(
+    zero=lambda: 0,
+    one=lambda: 1,
+    add=_dim_add,
+    mul=_dim_mul,
+)
+
+
 def _product_dimensions(dims: Sequence[DimensionType]) -> DimensionType:
-    """Compute cumulative symbolic or integer product across a sequence of dimensions.
+    """Compute the algebraic product of a sequence of dimensions via ``DIMENSION_SEMIRING``.
 
     Args:
         dims (Sequence[DimensionType]): Dimension sequence.
@@ -693,13 +745,7 @@ def _product_dimensions(dims: Sequence[DimensionType]) -> DimensionType:
     Returns:
         DimensionType: Product dimension.
     """
-    total: DimensionType = 1
-    for d in dims:
-        if isinstance(d, int) and not isinstance(d, bool) and isinstance(total, int):
-            total *= d
-        else:
-            total = SymBinaryOp("*", SymNode.to_node(total), SymNode.to_node(d)).simplify()
-    return total
+    return DIMENSION_SEMIRING.product_all(dims)
 
 
 def _transfer_flatten(ctx: ShapeTransferContext) -> tuple[DimensionType, ...] | None:
@@ -740,15 +786,10 @@ def _transfer_concat(ctx: ShapeTransferContext) -> tuple[DimensionType, ...] | N
     axis = int(axis_val) if isinstance(axis_val, (int, str)) and not isinstance(axis_val, bool) else 0
     norm_axis = normalize_axis(axis, rank)
 
-    concat_dim: DimensionType = 0
     for s in shapes:
         if len(s) != rank:
             raise ValueError(f"Concat rank mismatch in node '{ctx.node_id}': expected rank {rank}, got {len(s)}.")
-        d = s[norm_axis]
-        if isinstance(d, int) and not isinstance(d, bool) and isinstance(concat_dim, int):
-            concat_dim += d
-        else:
-            concat_dim = SymBinaryOp("+", SymNode.to_node(concat_dim), SymNode.to_node(d)).simplify()
+    concat_dim = DIMENSION_SEMIRING.sum_all(s[norm_axis] for s in shapes)
     out_s = list(shapes[0])
     out_s[norm_axis] = concat_dim
     return tuple(out_s)
@@ -823,11 +864,11 @@ def _sliced_axis_length(dim_len: DimensionType, st: int, en: int, sp: int) -> Di
         return max(0, (st_norm - en_norm + abs_sp - 1) // abs_sp)
 
     sym_dim = SymNode.to_node(dim_len)
-    st_sym = SymBinaryOp("+", sym_dim, SymConst(st)).simplify() if st < 0 else SymConst(st)
-    en_sym = SymBinaryOp("+", sym_dim, SymConst(en)).simplify() if en < 0 else SymConst(en)
+    st_sym = SymNode.to_node(DIMENSION_SEMIRING.add(sym_dim, st)) if st < 0 else SymConst(st)
+    en_sym = SymNode.to_node(DIMENSION_SEMIRING.add(sym_dim, en)) if en < 0 else SymConst(en)
     abs_sp = sp if sp > 0 else -sp
     span = SymBinaryOp("-", en_sym, st_sym) if sp > 0 else SymBinaryOp("-", st_sym, en_sym)
-    diff_node = SymBinaryOp("+", span, SymConst(abs_sp - 1)).simplify()
+    diff_node = SymNode.to_node(DIMENSION_SEMIRING.add(span, abs_sp - 1))
     res_sym = SymBinaryOp("//", diff_node, SymConst(abs_sp)).simplify()
     return max(0, res_sym.value) if isinstance(res_sym, SymConst) else res_sym
 
@@ -1087,34 +1128,77 @@ _BINARY_TRANSFER_OPS: tuple[str, ...] = (
     "arith.divf",
 )
 
+
+@dataclass(frozen=True)
+class ShapeTransferWitness:
+    """Declarative typeclass witness for operator output shape transfer semantics.
+
+    Attributes:
+        op_names (tuple[OpName, ...]): Canonical and dialect operator mnemonics handled by this witness.
+        min_arity (NonNegativeInt): Minimum positional operand arity expected.
+        transfer_fn (ShapeTransferFn): Underlying transfer rule ``ShapeTransferContext -> shape | None``.
+    """
+
+    op_names: tuple[OpName, ...]
+    min_arity: NonNegativeInt
+    transfer_fn: ShapeTransferFn
+
+    def infer_result(
+        self,
+        ctx: ShapeTransferContext,
+    ) -> Result[ShapeMismatchError | ValueError | TypeError, tuple[DimensionType, ...] | None]:
+        """Total execution of ``transfer_fn`` capturing ``ShapeMismatchError``, ``ValueError``, or ``TypeError``.
+
+        Args:
+            ctx (ShapeTransferContext): Shape transfer evaluation context.
+
+        Returns:
+            Result[ShapeMismatchError | ValueError | TypeError, tuple[DimensionType, ...] | None]:
+                ``Ok`` inferred shape (or ``None``) or ``Err`` shape failure.
+        """
+        try:
+            return Ok(self.transfer_fn(ctx))
+        except (ShapeMismatchError, ValueError, TypeError) as exc:
+            return Err(exc)
+
+
+def _witness(ops: Sequence[str], min_arity: int, fn: ShapeTransferFn) -> ShapeTransferWitness:
+    """Build a ``ShapeTransferWitness`` from string mnemonics and non-negative arity.
+
+    Args:
+        ops (Sequence[str]): Operator mnemonic strings.
+        min_arity (int): Minimum positional input count.
+        fn (ShapeTransferFn): Transfer rule function.
+
+    Returns:
+        ShapeTransferWitness: Frozen witness record.
+    """
+    return ShapeTransferWitness(
+        op_names=tuple(OpName(op) for op in ops),
+        min_arity=NonNegativeInt(NonBoolInt(min_arity)),
+        transfer_fn=fn,
+    )
+
+
+SHAPE_TRANSFER_WITNESSES: tuple[ShapeTransferWitness, ...] = (
+    _witness(_UNARY_TRANSFER_OPS, 1, _transfer_unary),
+    _witness(_BINARY_TRANSFER_OPS, 2, _transfer_binary),
+    _witness(("MatMul", "BatchMatMul", "matmul", "batch_matmul"), 2, _transfer_matmul),
+    _witness(("Gemm", "gemm"), 2, _transfer_gemm),
+    _witness(("Squeeze", "squeeze"), 1, _transfer_squeeze),
+    _witness(("Unsqueeze", "unsqueeze"), 1, _transfer_unsqueeze),
+    _witness(("Flatten", "flatten"), 1, _transfer_flatten),
+    _witness(("Concat", "concat"), 1, _transfer_concat),
+    _witness(("Split", "split"), 1, _transfer_split),
+    _witness(("Slice", "slice"), 1, _transfer_slice),
+    _witness(("Shape",), 1, _transfer_shape),
+    _witness(("Reshape", "reshape"), 1, _transfer_reshape),
+    _witness(("Transpose", "transpose"), 1, _transfer_transpose),
+    _witness(("BroadcastInDim", "broadcast_in_dim"), 1, _transfer_broadcast_in_dim),
+)
+
 SHAPE_TRANSFER_REGISTRY: dict[str, ShapeTransferFn] = {
-    **{op: _transfer_unary for op in _UNARY_TRANSFER_OPS},
-    **{op: _transfer_binary for op in _BINARY_TRANSFER_OPS},
-    "MatMul": _transfer_matmul,
-    "BatchMatMul": _transfer_matmul,
-    "matmul": _transfer_matmul,
-    "batch_matmul": _transfer_matmul,
-    "Gemm": _transfer_gemm,
-    "gemm": _transfer_gemm,
-    "Squeeze": _transfer_squeeze,
-    "squeeze": _transfer_squeeze,
-    "Unsqueeze": _transfer_unsqueeze,
-    "unsqueeze": _transfer_unsqueeze,
-    "Flatten": _transfer_flatten,
-    "flatten": _transfer_flatten,
-    "Concat": _transfer_concat,
-    "concat": _transfer_concat,
-    "Split": _transfer_split,
-    "split": _transfer_split,
-    "Slice": _transfer_slice,
-    "slice": _transfer_slice,
-    "Shape": _transfer_shape,
-    "Reshape": _transfer_reshape,
-    "reshape": _transfer_reshape,
-    "Transpose": _transfer_transpose,
-    "transpose": _transfer_transpose,
-    "BroadcastInDim": _transfer_broadcast_in_dim,
-    "broadcast_in_dim": _transfer_broadcast_in_dim,
+    str(op): witness.transfer_fn for witness in SHAPE_TRANSFER_WITNESSES for op in witness.op_names
 }
 
 
@@ -1151,3 +1235,125 @@ def infer_op_output_shape(
         tracker=tracker if tracker is not None else SymbolicConstraintTracker(),
     )
     return rule(ctx)
+
+
+def normalize_axis_result(
+    axis: int | Sequence[int],
+    rank: int,
+) -> Result[TypeError | ValueError, int | tuple[int, ...]]:
+    """Total variant of ``normalize_axis`` returning ``Result`` instead of raising.
+
+    Args:
+        axis (int | Sequence[int]): Candidate axis or sequence of axes.
+        rank (int): Tensor rank.
+
+    Returns:
+        Result[TypeError | ValueError, int | tuple[int, ...]]: Normalized axis/axes or ``Err``.
+    """
+    try:
+        if isinstance(axis, int) and not isinstance(axis, bool):
+            return Ok(normalize_axis(axis, rank))
+        if isinstance(axis, bool):
+            return Err(TypeError("Boolean is not a valid axis"))
+        return Ok(normalize_axis(axis, rank))
+    except (TypeError, ValueError) as exc:
+        return Err(exc)
+
+
+def broadcast_dimension_result(
+    dim_a: DimensionType,
+    dim_b: DimensionType,
+    tracker: SymbolicConstraintTracker | None = None,
+) -> Result[ShapeMismatchError | TypeError, DimensionType]:
+    """Total variant of ``broadcast_dimension`` returning ``Result`` instead of raising.
+
+    Args:
+        dim_a (DimensionType): First dimension.
+        dim_b (DimensionType): Second dimension.
+        tracker (SymbolicConstraintTracker | None): Optional symbolic constraint tracker.
+
+    Returns:
+        Result[ShapeMismatchError | TypeError, DimensionType]: Broadcasted dimension or ``Err``.
+    """
+    try:
+        return Ok(broadcast_dimension(dim_a, dim_b, tracker=tracker))
+    except (ShapeMismatchError, TypeError) as exc:
+        return Err(exc)
+
+
+def broadcast_shapes_result(
+    shape_a: ShapeType,
+    shape_b: ShapeType,
+    tracker: SymbolicConstraintTracker | None = None,
+) -> Result[ShapeMismatchError | TypeError, tuple[DimensionType, ...]]:
+    """Total variant of ``broadcast_shapes`` returning ``Result`` instead of raising.
+
+    Args:
+        shape_a (ShapeType): First tensor shape.
+        shape_b (ShapeType): Second tensor shape.
+        tracker (SymbolicConstraintTracker | None): Optional symbolic constraint tracker.
+
+    Returns:
+        Result[ShapeMismatchError | TypeError, tuple[DimensionType, ...]]: Broadcasted shape or ``Err``.
+    """
+    try:
+        return Ok(broadcast_shapes(shape_a, shape_b, tracker=tracker))
+    except (ShapeMismatchError, TypeError) as exc:
+        return Err(exc)
+
+
+def matmul_shape_result(
+    shape_a: ShapeType,
+    shape_b: ShapeType,
+) -> Result[ShapeMismatchError | TypeError, tuple[DimensionType, ...]]:
+    """Total variant of ``matmul_shape`` returning ``Result`` instead of raising.
+
+    Args:
+        shape_a (ShapeType): Left matrix/batched-matrix shape.
+        shape_b (ShapeType): Right matrix/batched-matrix shape.
+
+    Returns:
+        Result[ShapeMismatchError | TypeError, tuple[DimensionType, ...]]: Contracted output shape or ``Err``.
+    """
+    try:
+        return Ok(matmul_shape(shape_a, shape_b))
+    except (ShapeMismatchError, TypeError) as exc:
+        return Err(exc)
+
+
+def infer_op_output_shape_result(
+    op_type: str,
+    input_shapes: Sequence[tuple[DimensionType, ...] | None],
+    attributes: Mapping[str, AttributeValue] | None = None,
+    *,
+    node_id: str = "",
+    num_outputs: int = 1,
+    tracker: SymbolicConstraintTracker | None = None,
+) -> Result[ShapeMismatchError | ValueError | TypeError, tuple[DimensionType, ...] | None]:
+    """Total variant of ``infer_op_output_shape`` returning ``Result`` instead of raising.
+
+    Args:
+        op_type (str): Operator mnemonic.
+        input_shapes (Sequence[tuple[DimensionType, ...] | None]): Input tensor shapes.
+        attributes (Mapping[str, AttributeValue] | None): Operator attributes.
+        node_id (str): Node identifier for diagnostics.
+        num_outputs (int): Declared output count.
+        tracker (SymbolicConstraintTracker | None): Optional symbolic constraint tracker.
+
+    Returns:
+        Result[ShapeMismatchError | ValueError | TypeError, tuple[DimensionType, ...] | None]:
+            ``Ok`` inferred shape (or ``None``) or ``Err``.
+    """
+    try:
+        return Ok(
+            infer_op_output_shape(
+                op_type,
+                input_shapes,
+                attributes,
+                node_id=node_id,
+                num_outputs=num_outputs,
+                tracker=tracker,
+            )
+        )
+    except (ShapeMismatchError, ValueError, TypeError) as exc:
+        return Err(exc)

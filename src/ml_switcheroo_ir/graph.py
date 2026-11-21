@@ -11,6 +11,7 @@ import typing
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from ml_switcheroo_ir.distributed import (
     PartitionSpec,
     PipelineTopologyConfig,
 )
+from ml_switcheroo_ir.identifiers import PortRef, is_non_bool_int
 from ml_switcheroo_ir.protocols import (
     DeviceLikeProtocol,
     DTypeLikeProtocol,
@@ -51,10 +53,12 @@ from ml_switcheroo_ir.serialization import (
     _stream_parse_graph,
     _stream_parse_nodes_section,
     _stream_write_graph,
+    graph_from_json_result,
     graph_to_dict,
     zstandard,
 )
 from ml_switcheroo_ir.shapes import DimensionType
+from ml_switcheroo_ir.typeclasses import CodecError, Result
 from ml_switcheroo_ir.types import (
     AttributeValue,
     DType,
@@ -1241,7 +1245,7 @@ class LogicalNode(pydantic.BaseModel):
         raw_dom = kwargs.get("domain")
         cloned_domain = str(raw_dom) if isinstance(raw_dom, str) else self.domain
         raw_ver = kwargs.get("version")
-        cloned_version = int(raw_ver) if isinstance(raw_ver, int) and not isinstance(raw_ver, bool) else self.version
+        cloned_version = int(raw_ver) if is_non_bool_int(raw_ver) else self.version
         node_kwargs = self._build_cloned_node_kwargs(kwargs)
         cls = type(self)
         return cls(
@@ -2272,10 +2276,9 @@ class LogicalGraph(pydantic.BaseModel):
         res = active_map.get(output_name)
         if res is not None:
             return res
-        if ":" in output_name:
-            node_part, idx_part = output_name.rsplit(":", 1)
-            if node_part in self.nodes and idx_part.lstrip("-").isdigit():
-                return self.nodes[node_part], int(idx_part)
+        parsed_port = PortRef.parse(output_name)
+        if parsed_port.port_index is not None and str(parsed_port.producer) in self.nodes:
+            return self.nodes[str(parsed_port.producer)], int(parsed_port.port_index)
         return None
 
     def get_producing_output_index(self, output_name: str) -> tuple[LogicalNode, int] | None:
@@ -2743,6 +2746,18 @@ class LogicalGraph(pydantic.BaseModel):
         return _build_graph_from_parsed_sections(cls, nodes, data)
 
     @classmethod
+    def from_json_result(cls, payload: str | bytes) -> Result[CodecError, LogicalGraph]:
+        """Total JSON string/bytes deserializer returning ``Result[CodecError, LogicalGraph]``.
+
+        Args:
+            payload (str | bytes): Raw UTF-8 JSON text or bytes.
+
+        Returns:
+            Result[CodecError, LogicalGraph]: ``Ok(LogicalGraph)`` or ``Err(CodecError)``.
+        """
+        return graph_from_json_result(payload)
+
+    @classmethod
     def from_file(
         cls,
         path: str | Path,
@@ -2928,3 +2943,37 @@ LogicalGraph.model_rebuild()
 
 IRNode: typing_extensions.TypeAlias = LogicalNode
 IRGraph: typing_extensions.TypeAlias = LogicalGraph
+
+_ProofPhaseT = typing.TypeVar("_ProofPhaseT")
+
+
+class AcyclicSortedPhase:
+    """Phantom phase tag witnessing strict DAG acyclicity and topological node ordering."""
+
+
+class SchemaValidPhase:
+    """Phantom phase tag witnessing zero ERROR-level schema/dialect/hardware diagnostics."""
+
+
+class ShardingValidPhase:
+    """Phantom phase tag witnessing valid SPMD PartitionSpec propagation and pipeline stages."""
+
+
+class GroundedPhase:
+    """Phantom phase tag witnessing 100% anti-hallucination snapshot grounding."""
+
+
+@dataclass(frozen=True)
+class ProvenGraph(typing.Generic[_ProofPhaseT]):
+    """Immutable proof-carrying graph snapshot parameterized by phantom witness ``_ProofPhaseT``.
+
+    Clones the input ``LogicalGraph`` at proof-minting time so subsequent caller mutations
+    to the original ``LogicalGraph`` cannot invalidate the proven invariant.
+
+    Attributes:
+        graph (LogicalGraph): Deep-cloned snapshot of the verified computation graph.
+        ordered_nodes (tuple[LogicalNode, ...]): Deterministic node sequence captured at verification.
+    """
+
+    graph: LogicalGraph
+    ordered_nodes: tuple[LogicalNode, ...]

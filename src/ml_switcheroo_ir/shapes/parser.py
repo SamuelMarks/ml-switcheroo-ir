@@ -2,22 +2,49 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ml_switcheroo_ir.shapes.ast import (
     DimensionType,
     SymBinaryOp,
     SymConst,
+    SymExpr,
     SymNode,
     SymPiecewise,
     SymUnaryOp,
     SymVar,
 )
+from ml_switcheroo_ir.shapes.polynomial import POLYNOMIAL_SEMIRING, Polynomial
+from ml_switcheroo_ir.typeclasses.outcome import Err, Ok, Result
 
 __all__ = [
     "SymbolicExpressionParser",
+    "SymbolicParseError",
     "SymbolicSolver",
     "parse_symbolic_expr",
+    "parse_symbolic_expr_result",
     "tokenize_symbolic_expr",
+    "tokenize_symbolic_expr_result",
 ]
+
+
+@dataclass(frozen=True)
+class SymbolicParseError(ValueError):
+    """Structured error value for total symbolic expression lexing and parsing.
+
+    Attributes:
+        expression (str): Original source string being parsed.
+        position (int | None): Optional 0-based character or token index where parsing failed.
+        detail (str): Human-readable failure description.
+    """
+
+    expression: str
+    position: int | None
+    detail: str
+
+    def __post_init__(self) -> None:
+        """Initialize the base ``ValueError`` message string."""
+        super().__init__(self.detail)
 
 
 class SymbolicExpressionParser:
@@ -124,11 +151,11 @@ class SymbolicExpressionParser:
                 tokens.append(tok)
         return tokens
 
-    def parse_comparison(self) -> SymNode:
+    def parse_comparison(self) -> SymExpr:
         """Parse comparison expressions.
 
         Returns:
-            SymNode: Comparison binary expression node or additive expression.
+            SymExpr: Comparison binary expression node or additive expression.
         """
         node = self.parse_expr()
         if self.idx < len(self.tokens) and self.tokens[self.idx] in (
@@ -145,11 +172,11 @@ class SymbolicExpressionParser:
             node = SymBinaryOp(op, node, right)
         return node
 
-    def parse_expr(self) -> SymNode:
+    def parse_expr(self) -> SymExpr:
         """Parse additive binary expressions.
 
         Returns:
-            SymNode: Root parsed expression node.
+            SymExpr: Root parsed expression node.
         """
         node = self.parse_term()
         while self.idx < len(self.tokens) and self.tokens[self.idx] in ("+", "-"):
@@ -159,11 +186,11 @@ class SymbolicExpressionParser:
             node = SymBinaryOp(op, node, right)
         return node
 
-    def parse_term(self) -> SymNode:
+    def parse_term(self) -> SymExpr:
         """Parse multiplicative binary expressions.
 
         Returns:
-            SymNode: Root parsed term node.
+            SymExpr: Root parsed term node.
         """
         node = self.parse_factor()
         while self.idx < len(self.tokens) and self.tokens[self.idx] in (
@@ -177,14 +204,14 @@ class SymbolicExpressionParser:
             node = SymBinaryOp(op, node, right)
         return node
 
-    def _parse_call_args(self, func_name: str) -> list[SymNode]:
+    def _parse_call_args(self, func_name: str) -> list[SymExpr]:
         """Consume parenthesized comma-separated arguments for ``func_name``.
 
         Args:
             func_name (str): Invoked function identifier.
 
         Returns:
-            list[SymNode]: Parsed argument AST nodes.
+            list[SymExpr]: Parsed argument AST nodes.
 
         Raises:
             ValueError: If argument list is empty or missing closing ``')'``.
@@ -192,7 +219,7 @@ class SymbolicExpressionParser:
         self.idx += 1  # consume '('
         if self.idx < len(self.tokens) and self.tokens[self.idx] == ")":
             raise ValueError(f"Function '{func_name}' requires at least one argument.")
-        args: list[SymNode] = [self.parse_comparison()]
+        args: list[SymExpr] = [self.parse_comparison()]
         while self.idx < len(self.tokens) and self.tokens[self.idx] == ",":
             self.idx += 1
             args.append(self.parse_comparison())
@@ -201,14 +228,14 @@ class SymbolicExpressionParser:
         self.idx += 1
         return args
 
-    def _parse_func_call(self, func_name: str) -> SymNode:
+    def _parse_func_call(self, func_name: str) -> SymExpr:
         """Parse ``abs(x)``, ``min(a, b, ...)``, or ``max(a, b, ...)`` into ``SymUnaryOp`` or ``SymPiecewise``.
 
         Args:
             func_name (str): Name of the function (``'abs'``, ``'min'``, or ``'max'``).
 
         Returns:
-            SymNode: Lowered ``SymUnaryOp`` or ``SymPiecewise`` node.
+            SymExpr: Lowered ``SymUnaryOp`` or ``SymPiecewise`` node.
 
         Raises:
             ValueError: If ``func_name`` is unsupported, unclosed, or called with invalid arity.
@@ -223,7 +250,7 @@ class SymbolicExpressionParser:
         if len(args) < 2:
             raise ValueError(f"Function '{func_name}' expects at least 2 arguments, got {len(args)}.")
         cmp_op = "<=" if func_name == "min" else ">="
-        acc = args[0]
+        acc: SymExpr = args[0]
         for next_arg in args[1:]:
             acc = SymPiecewise(
                 cases=[(SymBinaryOp(cmp_op, acc, next_arg), acc)],
@@ -231,14 +258,14 @@ class SymbolicExpressionParser:
             )
         return acc
 
-    def _maybe_parse_exponent(self, base_node: SymNode) -> SymNode:
+    def _maybe_parse_exponent(self, base_node: SymExpr) -> SymExpr:
         """Parse optional right-associative ``**`` exponentiation suffix on ``base_node``.
 
         Args:
-            base_node (SymNode): Base expression node.
+            base_node (SymExpr): Base expression node.
 
         Returns:
-            SymNode: Exponentiated node if followed by ``**``, else ``base_node``.
+            SymExpr: Exponentiated node if followed by ``**``, else ``base_node``.
         """
         if self.idx < len(self.tokens) and self.tokens[self.idx] == "**":
             self.idx += 1
@@ -246,14 +273,14 @@ class SymbolicExpressionParser:
             return SymBinaryOp("**", base_node, exponent)
         return base_node
 
-    def _parse_atom(self, tok: str) -> SymNode:
+    def _parse_atom(self, tok: str) -> SymExpr:
         """Parse an atomic literal, identifier, or function call starting with ``tok``.
 
         Args:
             tok (str): Leading token already consumed at ``self.idx - 1``.
 
         Returns:
-            SymNode: Parsed atomic expression node.
+            SymExpr: Parsed atomic expression node.
 
         Raises:
             ValueError: If ``tok`` is not a valid integer literal or identifier.
@@ -266,11 +293,11 @@ class SymbolicExpressionParser:
             return SymVar(tok)
         raise ValueError(f"Unexpected token {tok!r} in symbolic expression.")
 
-    def parse_factor(self) -> SymNode:
+    def parse_factor(self) -> SymExpr:
         """Parse factor, power expression, function call, parenthesized expression, or unary operator.
 
         Returns:
-            SymNode: Root parsed factor node.
+            SymExpr: Root parsed factor node.
 
         Raises:
             ValueError: If expression ends prematurely, has unclosed parentheses, or contains invalid syntax.
@@ -309,14 +336,14 @@ def tokenize_symbolic_expr(expr_str: str) -> list[str]:
     return SymbolicExpressionParser.tokenize(expr_str)
 
 
-def parse_symbolic_expr(expr_str: str) -> SymNode:
-    """Parse an algebraic string expression into a structured ``SymNode``.
+def parse_symbolic_expr(expr_str: str) -> SymExpr:
+    """Parse an algebraic string expression into a closed ``SymExpr``.
 
     Args:
         expr_str (str): String expression to parse.
 
     Returns:
-        SymNode: Structured symbolic expression node.
+        SymExpr: Structured closed symbolic expression node.
 
     Raises:
         ValueError: If ``expr_str`` is empty, contains unrecognized characters, or is syntactically malformed.
@@ -330,6 +357,38 @@ def parse_symbolic_expr(expr_str: str) -> SymNode:
     if parser.idx != len(tokens):
         raise ValueError(f"Unexpected trailing token {tokens[parser.idx]!r} in symbolic expression {expr_str!r}.")
     return node
+
+
+def tokenize_symbolic_expr_result(expr_str: str) -> Result[SymbolicParseError, tuple[str, ...]]:
+    """Total tokenizer returning ``Ok(tokens)`` or ``Err(SymbolicParseError)`` without raising.
+
+    Args:
+        expr_str (str): Raw symbolic expression string.
+
+    Returns:
+        Result[SymbolicParseError, tuple[str, ...]]: Token tuple or structured ``SymbolicParseError``.
+    """
+    try:
+        tokens = tuple(tokenize_symbolic_expr(expr_str))
+    except ValueError as exc:
+        return Err(SymbolicParseError(expression=expr_str, position=None, detail=str(exc)))
+    return Ok(tokens)
+
+
+def parse_symbolic_expr_result(expr_str: str) -> Result[SymbolicParseError, SymExpr]:
+    """Total symbolic expression parser returning ``Result[SymbolicParseError, SymExpr]``.
+
+    Args:
+        expr_str (str): Raw symbolic dimension expression string.
+
+    Returns:
+        Result[SymbolicParseError, SymExpr]: Parsed closed ``SymExpr`` or ``Err(SymbolicParseError)``.
+    """
+    try:
+        parsed = parse_symbolic_expr(expr_str)
+    except ValueError as exc:
+        return Err(SymbolicParseError(expression=expr_str, position=None, detail=str(exc)))
+    return Ok(parsed)
 
 
 class SymbolicSolver:
@@ -370,4 +429,74 @@ class SymbolicSolver:
 
         s1 = n1.simplify()
         s2 = n2.simplify()
-        return s1 == s2 or str(s1) == str(s2)
+        if s1 == s2 or str(s1) == str(s2):
+            return True
+        return SymbolicSolver._to_generalized_polynomial(s1) == SymbolicSolver._to_generalized_polynomial(s2)
+
+    @staticmethod
+    def _binary_generalized_polynomial(node: SymBinaryOp) -> Polynomial:
+        """Lower a ``SymBinaryOp`` into the generalized polynomial ring over canonicalized atoms.
+
+        Args:
+            node (SymBinaryOp): Binary symbolic expression node.
+
+        Returns:
+            Polynomial: Canonical generalized polynomial.
+        """
+        lp = SymbolicSolver._to_generalized_polynomial(node.left)
+        rp = SymbolicSolver._to_generalized_polynomial(node.right)
+        ring_ops = {
+            "+": lp.add,
+            "-": lp.sub,
+            "*": lp.mul,
+        }
+        ring_fn = ring_ops.get(node.op)
+        if ring_fn is not None:
+            return ring_fn(rp)
+        if node.op == "**" and rp.is_const() and rp.get_const() >= 0:
+            return POLYNOMIAL_SEMIRING.pow_nat(lp, rp.get_const())
+        if node.op in ("max", "min"):
+            ordered = sorted((lp.canonical_str(), rp.canonical_str()))
+            return Polynomial.from_var(f"@{node.op}({ordered[0]},{ordered[1]})")
+        return Polynomial.from_var(f"@bin({node.op},{lp.canonical_str()},{rp.canonical_str()})")
+
+    @staticmethod
+    def _unary_generalized_polynomial(node: SymUnaryOp) -> Polynomial:
+        """Lower a ``SymUnaryOp`` into the generalized polynomial ring over canonicalized atoms.
+
+        Args:
+            node (SymUnaryOp): Unary symbolic expression node.
+
+        Returns:
+            Polynomial: Canonical generalized polynomial.
+        """
+        inner_poly = SymbolicSolver._to_generalized_polynomial(node.operand)
+        if node.op in ("-", "+"):
+            return inner_poly.neg() if node.op == "-" else inner_poly
+        if node.op == "abs" and inner_poly.is_const():
+            return Polynomial.from_const(abs(inner_poly.get_const()))
+        return Polynomial.from_var(f"@{node.op}({inner_poly.canonical_str()})")
+
+    @staticmethod
+    def _to_generalized_polynomial(node: SymNode) -> Polynomial:
+        """Lower any ``SymNode`` into the polynomial ring over canonicalized non-ring atoms.
+
+        Treats ``+``, ``-``, ``*``, non-negative integer ``**``, and ``SymConst`` algebraically via
+        ``Polynomial``, while canonicalizing non-ring subtrees (such as ``abs(...)``, ``max(...)``,
+        ``//``, or ``SymPiecewise``) into deterministic indeterminate names.
+
+        Args:
+            node (SymNode): Simplified symbolic AST node.
+
+        Returns:
+            Polynomial: Canonical generalized polynomial over atomic subexpressions.
+        """
+        if isinstance(node, SymConst):
+            return Polynomial.from_const(node.value)
+        if isinstance(node, SymVar):
+            return Polynomial.from_var(node.name)
+        if isinstance(node, SymUnaryOp):
+            return SymbolicSolver._unary_generalized_polynomial(node)
+        if isinstance(node, SymBinaryOp):
+            return SymbolicSolver._binary_generalized_polynomial(node)
+        return Polynomial.from_var(f"@atom({node})")

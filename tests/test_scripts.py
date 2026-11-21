@@ -3245,3 +3245,66 @@ def test_verify_isa_structural_tables_and_ptx_attrs(tmp_path: Path) -> None:
         clear=True,
     ):
         assert any("ungrounded_attr" in e for e in verify_ptx_grounding(ptx_attr_dir))
+
+
+def test_lint_typing_assert_never_vs_bare_assert() -> None:
+    """Verify lint_typing.py allows typing_extensions.assert_never in src/ while rejecting bare assert."""
+    from scripts.lint_typing import check_source
+
+    valid_src = (
+        "import typing_extensions\n"
+        "def exhaustive(x: int | str) -> str:\n"
+        "    if isinstance(x, int):\n"
+        "        return str(x)\n"
+        "    elif isinstance(x, str):\n"
+        "        return x\n"
+        "    else:\n"
+        "        typing_extensions.assert_never(x)\n"
+    )
+    assert check_source(valid_src, Path("src/ml_switcheroo_ir/sample.py")) == []
+
+    invalid_src = "def bad(x: int) -> int:\n    assert x > 0\n    return x\n"
+    violations = check_source(invalid_src, Path("src/ml_switcheroo_ir/sample.py"))
+    assert len(violations) == 1
+    assert "Forbidden bare 'assert'" in violations[0]
+
+
+def test_verify_catalog_witnesses_grounding_branches(tmp_path: Path) -> None:
+    """Exercise all structural and strict-glob branches in verify_catalog_witnesses_grounding.
+
+    Args:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    from ml_switcheroo_ir.identifiers import DialectDomain
+    from ml_switcheroo_ir.schema import ALL_DIALECT_CATALOG_WITNESSES, DialectCatalogWitness
+    from ml_switcheroo_ir.schema.onnx_registry import OpSchema
+    from scripts.verify_grounding import verify_catalog_witnesses_grounding
+
+    assert verify_catalog_witnesses_grounding() == []
+
+    with patch("scripts.verify_grounding.ALL_DIALECT_CATALOG_WITNESSES", ALL_DIALECT_CATALOG_WITNESSES[:2]):
+        errs_len = verify_catalog_witnesses_grounding()
+        assert any("Expected 21 DialectCatalogWitness entries" in e for e in errs_len)
+
+    broken = [
+        DialectCatalogWitness[OpSchema](
+            registry_name="DUP_REG",
+            domains=(),
+            lookup=lambda _k: None,
+            list_ops=lambda: (),
+            snapshot_glob="missing_glob_*.json",
+        ),
+        DialectCatalogWitness[OpSchema](
+            registry_name="DUP_REG",
+            domains=(DialectDomain("dup"),),
+            lookup=lambda _k: None,
+            list_ops=lambda: ("GhostOp",),
+            snapshot_glob=None,
+        ),
+    ]
+    errs = verify_catalog_witnesses_grounding(tmp_path, strict=True, witnesses=broken)
+    assert any("Duplicate DialectCatalogWitness" in e for e in errs)
+    assert any("has empty domains" in e for e in errs)
+    assert any("listed 0 ops" in e for e in errs)
+    assert any("lookup failed for listed op 'GhostOp'" in e for e in errs)
+    assert any("missing_glob_*.json" in e for e in errs)

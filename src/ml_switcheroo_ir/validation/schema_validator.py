@@ -3,27 +3,30 @@
 from __future__ import annotations
 
 import typing
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+
+import typing_extensions
 
 if typing.TYPE_CHECKING:
     from ml_switcheroo_ir.validation.grounding import GroundingValidator
 
-from ml_switcheroo_ir.graph import CyclicGraphError, LogicalGraph, LogicalMesh, LogicalNode, topological_sort
-from ml_switcheroo_ir.schema.base import AttributeType, normalize_attribute_type
+from ml_switcheroo_ir.graph import (
+    CyclicGraphError,
+    LogicalGraph,
+    LogicalMesh,
+    LogicalNode,
+    ProvenGraph,
+    SchemaValidPhase,
+    topological_sort,
+)
+from ml_switcheroo_ir.identifiers import is_non_bool_int
+from ml_switcheroo_ir.schema import ALL_DIALECT_CATALOG_WITNESSES
+from ml_switcheroo_ir.schema.base import AttributeType, DialectCatalogWitness, normalize_attribute_type
 from ml_switcheroo_ir.schema.custom_ops import (
     COLLECTIVE_OPS_REGISTRY,
     CUSTOM_OPS_REGISTRY,
     QUANTIZATION_OPS_REGISTRY,
     STATE_OPS_REGISTRY,
-)
-from ml_switcheroo_ir.schema.framework_registries import (
-    ARRAY_API_REGISTRY,
-    ATEN_REGISTRY,
-    CHEX_REGISTRY,
-    GRAIN_REGISTRY,
-    ODL_CATALOG,
-    OPTAX_REGISTRY,
-    ORBAX_REGISTRY,
 )
 from ml_switcheroo_ir.schema.ghost import (
     RDNA_INSTRUCTION_PRIMITIVES,
@@ -33,26 +36,22 @@ from ml_switcheroo_ir.schema.ghost import (
     SassPrimitiveSpec,
     WgslPrimitiveSpec,
 )
-from ml_switcheroo_ir.schema.low_level_registries import (
-    METAL_REGISTRY,
-    PTX_REGISTRY,
-    WASM_REGISTRY,
-    WEBGL_REGISTRY,
-    WGSL_REGISTRY,
-)
 from ml_switcheroo_ir.schema.mlir_registry import (
     MLIR_REGISTRY,
     resolve_mlir_op_schema,
 )
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
-from ml_switcheroo_ir.schema.rdna_registry import RDNA_REGISTRY
-from ml_switcheroo_ir.schema.sass_registry import SASS_REGISTRY
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
+from ml_switcheroo_ir.typeclasses.outcome import Invalid, Valid, Validation
 from ml_switcheroo_ir.types import AttributeValue, DType, TensorSpec, describe_value_type
 from ml_switcheroo_ir.validation.core import (
     CORE_MLIR_DIALECTS,
     ValidationError,
     ValidationLevel,
+    ValidationRule,
+    combine_rules,
+    errors_from_validation,
+    rule_from_errors_fn,
 )
 from ml_switcheroo_ir.validation.distributed import (
     CommunicationVolumeReport,
@@ -63,6 +62,7 @@ from ml_switcheroo_ir.validation.distributed import (
     validate_sharding_propagation_graph,
 )
 from ml_switcheroo_ir.validation.hardware import (
+    HARDWARE_SEMANTICS_BY_DOMAIN,
     validate_isa_instruction_node,
     validate_sass_scoreboarding_sequence,
     validate_vopd_pairing,
@@ -71,66 +71,8 @@ from ml_switcheroo_ir.validation.quantization import validate_quantization_node
 
 __all__ = [
     "Validator",
+    "check_attribute_type_value",
 ]
-
-_RDNA_ALLOWED_ATTRS: set[str] = {
-    "wavefront_size",
-    "register_classes",
-    "vgpr_operands",
-    "dst_vgpr",
-    "src_vgprs",
-    "dst",
-    "vopd_slot",
-    "vopd_target",
-    "modifiers",
-    "literal",
-    "imm",
-    "imm32",
-}
-
-_SASS_ALLOWED_ATTRS: set[str] = {
-    "barrier_predicate",
-    "warp_sync",
-    "memory_space",
-    "stall",
-    "stall_count",
-    "yield",
-    "yield_flag",
-    "read_barrier",
-    "write_barrier",
-    "wait_barrier_mask",
-    "barrier_mask",
-    "execution_latency",
-    "modifiers",
-    "control_codes",
-    "register_classes",
-    "src_regs",
-    "srcs",
-    "dst_reg",
-    "dst",
-}
-
-_WGSL_ALLOWED_ATTRS: set[str] = {
-    "workgroup_size",
-    "address_space",
-    "qualifier",
-    "struct_alignment",
-    "alignment",
-    "array_stride",
-    "builtin",
-    "is_mutating",
-}
-
-_ISA_ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
-    "amd_rdna": _RDNA_ALLOWED_ATTRS,
-    "rdna": _RDNA_ALLOWED_ATTRS,
-    "nvidia_sass": _SASS_ALLOWED_ATTRS,
-    "sass": _SASS_ALLOWED_ATTRS,
-    "webgpu_wgsl": _WGSL_ALLOWED_ATTRS,
-    "wgsl": _WGSL_ALLOWED_ATTRS,
-    "nvidia_ptx": {"vector_widths", "min_sm", "address_space"},
-    "ptx": {"vector_widths", "min_sm", "address_space"},
-}
 
 
 def _is_valid_dtype_attr(value: AttributeValue) -> bool:
@@ -181,25 +123,105 @@ def _is_valid_graph_attr(value: AttributeValue | LogicalGraph) -> bool:
     return isinstance(value, Mapping) and "nodes" in value and isinstance(value["nodes"], Mapping)
 
 
-_ATTRIBUTE_TYPE_CHECKERS: dict[AttributeType, Callable[[AttributeValue], bool]] = {
-    AttributeType.INT: lambda v: isinstance(v, int) and not isinstance(v, bool),
-    AttributeType.FLOAT: lambda v: isinstance(v, (float, int)) and not isinstance(v, bool),
-    AttributeType.STR: lambda v: isinstance(v, str),
-    AttributeType.BOOL: lambda v: isinstance(v, bool),
-    AttributeType.DICT: lambda v: isinstance(v, Mapping),
-    AttributeType.LIST_INT: lambda v: (
-        isinstance(v, (list, tuple)) and all(isinstance(x, int) and not isinstance(x, bool) for x in v)
-    ),
-    AttributeType.LIST_FLOAT: lambda v: (
-        isinstance(v, (list, tuple)) and all(isinstance(x, (float, int)) and not isinstance(x, bool) for x in v)
-    ),
-    AttributeType.LIST_STR: lambda v: isinstance(v, (list, tuple)) and all(isinstance(x, str) for x in v),
-    AttributeType.LIST: lambda v: isinstance(v, (list, tuple)),
-    AttributeType.TENSOR: _is_valid_tensor_attr,
-    AttributeType.GRAPH: _is_valid_graph_attr,
-    AttributeType.DTYPE: _is_valid_dtype_attr,
-    AttributeType.ANY: lambda _v: True,
-}
+_ScalarSchemaAttr: typing_extensions.TypeAlias = typing.Literal[
+    AttributeType.INT,
+    AttributeType.FLOAT,
+    AttributeType.STR,
+    AttributeType.BOOL,
+    AttributeType.DTYPE,
+]
+_CollectionSchemaAttr: typing_extensions.TypeAlias = typing.Literal[
+    AttributeType.DICT,
+    AttributeType.LIST_INT,
+    AttributeType.LIST_FLOAT,
+    AttributeType.LIST_STR,
+    AttributeType.LIST,
+]
+_ObjectSchemaAttr: typing_extensions.TypeAlias = typing.Literal[
+    AttributeType.TENSOR,
+    AttributeType.GRAPH,
+    AttributeType.ANY,
+]
+
+
+def _check_object_attr_type(attr_type: _ObjectSchemaAttr, value: AttributeValue) -> bool:
+    """Exhaustively validate object/polymorphic ``AttributeType`` members against ``value``.
+
+    Args:
+        attr_type (_ObjectSchemaAttr): Object or wildcard attribute enum variant.
+        value (AttributeValue): Candidate attribute value.
+
+    Returns:
+        bool: True iff ``value`` satisfies ``attr_type``.
+    """
+    ok: bool
+    if attr_type is AttributeType.TENSOR:
+        ok = _is_valid_tensor_attr(value)
+    elif attr_type is AttributeType.GRAPH:
+        ok = _is_valid_graph_attr(value)
+    elif attr_type is AttributeType.ANY:
+        ok = True
+    else:
+        typing_extensions.assert_never(attr_type)
+    return ok
+
+
+def _check_non_scalar_attr_type(
+    attr_type: _CollectionSchemaAttr | _ObjectSchemaAttr,
+    value: AttributeValue,
+) -> bool:
+    """Cascade collection ``AttributeType`` members and delegate remaining object variants.
+
+    Args:
+        attr_type (_CollectionSchemaAttr | _ObjectSchemaAttr): Non-scalar attribute enum variant.
+        value (AttributeValue): Candidate attribute value.
+
+    Returns:
+        bool: True iff ``value`` satisfies ``attr_type``.
+    """
+    ok: bool
+    if attr_type is AttributeType.DICT:
+        ok = isinstance(value, Mapping)
+    elif attr_type is AttributeType.LIST_INT:
+        ok = isinstance(value, (list, tuple)) and all(is_non_bool_int(x) for x in value)
+    elif attr_type is AttributeType.LIST_FLOAT:
+        ok = isinstance(value, (list, tuple)) and all(
+            isinstance(x, (float, int)) and not isinstance(x, bool) for x in value
+        )
+    elif attr_type is AttributeType.LIST_STR:
+        ok = isinstance(value, (list, tuple)) and all(isinstance(x, str) for x in value)
+    elif attr_type is AttributeType.LIST:
+        ok = isinstance(value, (list, tuple))
+    else:
+        ok = _check_object_attr_type(attr_type, value)
+    return ok
+
+
+def check_attribute_type_value(attr_type: AttributeType, value: AttributeValue) -> bool:
+    """Exhaustively check whether ``value`` conforms to ``attr_type`` with ``assert_never`` safety.
+
+    Args:
+        attr_type (AttributeType): Canonical operator attribute schema type.
+        value (AttributeValue): Candidate node attribute value.
+
+    Returns:
+        bool: True iff ``value`` conforms to ``attr_type``.
+    """
+    ok: bool
+    if attr_type is AttributeType.INT:
+        ok = is_non_bool_int(value)
+    elif attr_type is AttributeType.FLOAT:
+        ok = isinstance(value, (float, int)) and not isinstance(value, bool)
+    elif attr_type is AttributeType.STR:
+        ok = isinstance(value, str)
+    elif attr_type is AttributeType.BOOL:
+        ok = isinstance(value, bool)
+    elif attr_type is AttributeType.DTYPE:
+        ok = _is_valid_dtype_attr(value)
+    else:
+        ok = _check_non_scalar_attr_type(attr_type, value)
+    return ok
+
 
 _VARIADIC_OPERAND_OPS: frozenset[str] = frozenset(
     {
@@ -284,6 +306,14 @@ def _collect_ssa_scope(graph: LogicalGraph, outer_scope: set[str] | None = None)
     return scope
 
 
+_SECONDARY_CATALOG_BY_DOMAIN: typing.Final[dict[str, DialectCatalogWitness[OpSchema]]] = {
+    str(dom): witness
+    for witness in ALL_DIALECT_CATALOG_WITNESSES
+    if witness.registry_name != "ONNX_REGISTRY"
+    for dom in witness.domains
+}
+
+
 class Validator:
     """Validates LogicalGraph and LogicalNode instances against schemas without mutating inputs by default."""
 
@@ -325,16 +355,16 @@ class Validator:
         self.level = ValidationLevel.STRICT if strict else level
         self.grounding_validator = grounding_validator
 
-    def _get_domain_registry(self, domain: str) -> Mapping[str, OpSchema] | None:
-        """Resolve the secondary operator registry corresponding to a dialect domain.
+    def _resolve_secondary_lookup(self, domain: str) -> typing.Callable[[str], OpSchema | None] | None:
+        """Resolve the secondary operator lookup callable corresponding to a dialect domain.
 
         Args:
             domain (str): Operator domain identifier.
 
         Returns:
-            Mapping[str, OpSchema] | None: Matching secondary registry or None.
+            typing.Callable[[str], OpSchema | None] | None: Schema lookup function or ``None``.
         """
-        domain_map: dict[str, Mapping[str, OpSchema]] = {
+        override_map: dict[str, Mapping[str, OpSchema]] = {
             "ml.switcheroo.custom": self.custom_registry,
             "stablehlo": self.stablehlo_registry,
             "mlir": self.mlir_registry,
@@ -351,31 +381,12 @@ class Validator:
             "ml.switcheroo.quantization": self.quantization_registry,
             "state": self.state_registry,
             "ml.switcheroo.state": self.state_registry,
-            "amd_rdna": RDNA_REGISTRY,
-            "rdna": RDNA_REGISTRY,
-            "nvidia_sass": SASS_REGISTRY,
-            "sass": SASS_REGISTRY,
-            "nvidia_ptx": PTX_REGISTRY,
-            "ptx": PTX_REGISTRY,
-            "metal_msl": METAL_REGISTRY,
-            "metal": METAL_REGISTRY,
-            "wasm_simd": WASM_REGISTRY,
-            "wasm": WASM_REGISTRY,
-            "webgl": WEBGL_REGISTRY,
-            "webgpu_wgsl": WGSL_REGISTRY,
-            "wgsl": WGSL_REGISTRY,
-            "aten": ATEN_REGISTRY,
-            "array_api": ARRAY_API_REGISTRY,
-            "chex": CHEX_REGISTRY,
-            "grain": GRAIN_REGISTRY,
-            "orbax": ORBAX_REGISTRY,
-            "orbax_checkpoint": ORBAX_REGISTRY,
-            "orbax.checkpoint": ORBAX_REGISTRY,
-            "optax": OPTAX_REGISTRY,
-            "odl": ODL_CATALOG,
-            "abstract": ODL_CATALOG,
         }
-        return domain_map.get(domain)
+        overridden = override_map.get(domain)
+        if overridden is not None:
+            return overridden.get
+        witness = _SECONDARY_CATALOG_BY_DOMAIN.get(domain)
+        return witness.lookup if witness is not None else None
 
     def _filter_by_level(self, errors: list[ValidationError]) -> list[ValidationError]:
         """Filter accumulated validation diagnostics according to the active severity level.
@@ -419,8 +430,8 @@ class Validator:
             s = self.registry.get(node.op_type)
             if s is not None and s.domain == node.domain:
                 return s
-            secondary = self._get_domain_registry(node.domain)
-            return secondary.get(node.op_type) if secondary is not None else self.registry.get(node.op_type)
+            secondary_lookup = self._resolve_secondary_lookup(node.domain)
+            return secondary_lookup(node.op_type) if secondary_lookup is not None else self.registry.get(node.op_type)
 
         return self.registry.get(node.op_type)
 
@@ -465,13 +476,13 @@ class Validator:
         return errors
 
     def _validate_secondary_domain_kind(
-        self, node: LogicalNode, secondary: Mapping[str, OpSchema]
+        self, node: LogicalNode, secondary_lookup: typing.Callable[[str], OpSchema | None]
     ) -> list[ValidationError]:
-        """Validate node kind against a secondary domain registry and hardware primitive table.
+        """Validate node kind against a secondary domain lookup callable and hardware primitive table.
 
         Args:
             node (LogicalNode): Node to validate.
-            secondary (Mapping[str, OpSchema]): Secondary domain registry.
+            secondary_lookup (typing.Callable[[str], OpSchema | None]): Secondary domain lookup function.
 
         Returns:
             list[ValidationError]: Validation error list (empty if valid).
@@ -495,7 +506,7 @@ class Validator:
 
         reg_schema = self.registry.get(node.op_type)
         if (
-            node.op_type in secondary
+            secondary_lookup(node.op_type) is not None
             or node.op_type in extra_primitives
             or (reg_schema is not None and reg_schema.domain == node.domain)
         ):
@@ -565,9 +576,9 @@ class Validator:
                 else []
             )
 
-        secondary = self._get_domain_registry(node.domain)
-        if secondary is not None:
-            return self._validate_secondary_domain_kind(node, secondary)
+        secondary_lookup = self._resolve_secondary_lookup(node.domain)
+        if secondary_lookup is not None:
+            return self._validate_secondary_domain_kind(node, secondary_lookup)
 
         if node.domain in CORE_MLIR_DIALECTS:
             return self._validate_core_mlir_dialect(node)
@@ -625,7 +636,8 @@ class Validator:
         if schema is None:
             return errors
 
-        allowed_isa_keys = _ISA_ALLOWED_ATTRIBUTES.get(node.domain, set())
+        isa_sem = HARDWARE_SEMANTICS_BY_DOMAIN.get(node.domain)
+        allowed_isa_keys = isa_sem.allowed_attributes if isa_sem is not None else frozenset()
 
         for key, value in node.attributes.items():
             if key not in schema.attributes:
@@ -646,8 +658,7 @@ class Validator:
             canonical_type = normalize_attribute_type(attr_schema.type)
             if value is None and not attr_schema.required and attr_schema.default is None:
                 continue
-            checker = _ATTRIBUTE_TYPE_CHECKERS[canonical_type]
-            if not checker(value):
+            if not check_attribute_type_value(canonical_type, value):
                 errors.append(
                     ValidationError(
                         node_id=node.id,
@@ -837,6 +848,47 @@ class Validator:
         return self._filter_by_level(
             self._validate_graph_recursive(graph, populate_defaults=populate_defaults, outer_scope=None)
         )
+
+    def build_graph_rules(self, populate_defaults: bool = False) -> tuple[ValidationRule[LogicalGraph], ...]:
+        """Return the declarative ``ValidationRule[LogicalGraph]`` pipeline for this ``Validator``.
+
+        Args:
+            populate_defaults (bool): Whether node validation populates default schema attributes.
+
+        Returns:
+            tuple[ValidationRule[LogicalGraph], ...]: Composable graph-level validation rules.
+        """
+        return (
+            rule_from_errors_fn(
+                "graph_structure_and_nodes",
+                lambda g: self._filter_by_level(
+                    self._validate_graph_recursive(g, populate_defaults=populate_defaults, outer_scope=None)
+                ),
+            ),
+        )
+
+    def validate_graph_applicative(
+        self,
+        graph: LogicalGraph,
+        populate_defaults: bool = False,
+    ) -> Validation[tuple[ValidationError, ...], ProvenGraph[SchemaValidPhase]]:
+        """Applicatively validate ``graph`` without short-circuiting and mint ``ProvenGraph[SchemaValidPhase]``.
+
+        Args:
+            graph (LogicalGraph): Computation graph to validate.
+            populate_defaults (bool): Whether to populate missing default attributes on the cloned snapshot.
+
+        Returns:
+            Validation[tuple[ValidationError, ...], ProvenGraph[SchemaValidPhase]]:
+                ``Valid`` proven graph when zero diagnostics pass active ``self.level`` filter,
+                or ``Invalid`` tuple of all accumulated ``ValidationError`` items.
+        """
+        cloned = graph.clone()
+        composite = combine_rules(self.build_graph_rules(populate_defaults=populate_defaults), name="validate_graph")
+        errs = errors_from_validation(composite.run(cloned))
+        if errs:
+            return Invalid(tuple(errs))
+        return Valid(ProvenGraph(graph=cloned, ordered_nodes=tuple(cloned.nodes.values())))
 
     def validate_vopd_pairing(self, opX: LogicalNode, opY: LogicalNode) -> list[ValidationError]:
         """Validate AMD RDNA3 / GFX11 dual-issue VOPD instruction pairing rules.

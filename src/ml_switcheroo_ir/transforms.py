@@ -10,6 +10,7 @@ import copy
 import typing
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 
 import typing_extensions
 
@@ -20,6 +21,7 @@ from ml_switcheroo_ir.graph import (
     LogicalNode,
     topological_sort,
 )
+from ml_switcheroo_ir.identifiers import PortRef, is_non_bool_int
 from ml_switcheroo_ir.protocols import DeviceLikeProtocol
 from ml_switcheroo_ir.schema.custom_ops import (
     COLLECTIVE_OPS_REGISTRY,
@@ -33,6 +35,7 @@ from ml_switcheroo_ir.shapes import (
     infer_op_output_shape,
     normalize_axis,
 )
+from ml_switcheroo_ir.typeclasses import Endo, Eq, HashableWitness, Monoid, endo_monoid
 from ml_switcheroo_ir.types import AttributeValue, DType, InitializerValue, TensorShape, TensorSpec
 
 HashableAttrKey: typing_extensions.TypeAlias = typing.Union[
@@ -91,6 +94,25 @@ NON_DETERMINISTIC_OPS: set[str] = {
     "Multinomial",
     "Bernoulli",
 }
+
+__all__ = [
+    "ATTR_HASH_WITNESS",
+    "CANONICAL_OPTIMIZE_PIPELINE",
+    "COMMUTATIVE_OPS",
+    "CSE_PASS",
+    "DCE_PASS",
+    "GraphTransformPass",
+    "HashableAttrKey",
+    "LOGICAL_GRAPH_EQ",
+    "NODE_CSE_WITNESS",
+    "NodeCseSignatureKey",
+    "SHAPE_CONSTANT_PROP_PASS",
+    "compose_passes",
+    "eliminate_common_subexpressions",
+    "eliminate_dead_nodes",
+    "fixpoint_graph_pass",
+    "propagate_shapes_and_constants",
+]
 
 COMMUTATIVE_OPS: frozenset[str] = frozenset(
     {
@@ -326,7 +348,7 @@ def _collect_subgraph_free_vars(
             referenced.update(sub_node.inputs)
             referenced.update(_collect_subgraph_free_vars(sub_node.subgraphs))
         for ref in referenced:
-            base = ref.rpartition(":")[0] if ":" in ref else ref
+            base = PortRef.base_identifier(ref)
             if ref not in local_bound and base not in local_bound:
                 free_vars.add(ref)
     return free_vars
@@ -1659,3 +1681,188 @@ def propagate_shapes_and_constants(graph: LogicalGraph) -> LogicalGraph:
         initializers=graph.initializers,
         edges=kept_edges,
     )
+
+
+def _attr_cse_eq(lhs: AttributeValue, rhs: AttributeValue) -> bool:
+    """Check CSE canonical attribute equivalence via ``_serialize_attr_for_key``.
+
+    Args:
+        lhs (AttributeValue): Left attribute value.
+        rhs (AttributeValue): Right attribute value.
+
+    Returns:
+        bool: True iff canonical serialized keys match.
+    """
+    return _serialize_attr_for_key(lhs) == _serialize_attr_for_key(rhs)
+
+
+def _attr_cse_hash(val: AttributeValue) -> int:
+    """Compute CSE attribute hash coherent with ``_attr_cse_eq``.
+
+    Args:
+        val (AttributeValue): Attribute value.
+
+    Returns:
+        int: Hash of canonical serialized key.
+    """
+    return hash(_serialize_attr_for_key(val))
+
+
+def _standalone_node_cse_key(node: LogicalNode) -> NodeCseSignatureKey:
+    """Compute the standalone ``NodeCseSignatureKey`` of ``node`` over its current inputs/subgraphs.
+
+    Args:
+        node (LogicalNode): Candidate IR node.
+
+    Returns:
+        NodeCseSignatureKey: Canonical CSE signature tuple.
+    """
+    return _build_node_cse_signature(node, node.inputs, node.subgraphs)
+
+
+def _node_cse_eq(lhs: LogicalNode, rhs: LogicalNode) -> bool:
+    """Check CSE expression equivalence of two ``LogicalNode`` instances.
+
+    Args:
+        lhs (LogicalNode): Left node.
+        rhs (LogicalNode): Right node.
+
+    Returns:
+        bool: True iff CSE signatures match.
+    """
+    return _standalone_node_cse_key(lhs) == _standalone_node_cse_key(rhs)
+
+
+def _node_cse_hash(node: LogicalNode) -> int:
+    """Compute CSE hash of ``node`` coherent with ``_node_cse_eq``.
+
+    Args:
+        node (LogicalNode): Candidate IR node.
+
+    Returns:
+        int: Hash of ``_standalone_node_cse_key(node)``.
+    """
+    return hash(_standalone_node_cse_key(node))
+
+
+def _graph_eq(lhs: LogicalGraph, rhs: LogicalGraph) -> bool:
+    """Check semantic equality of two ``LogicalGraph`` instances.
+
+    Args:
+        lhs (LogicalGraph): Left graph.
+        rhs (LogicalGraph): Right graph.
+
+    Returns:
+        bool: True iff ``lhs == rhs``.
+    """
+    return lhs == rhs
+
+
+ATTR_HASH_WITNESS: typing.Final[HashableWitness[AttributeValue]] = HashableWitness(
+    eq_witness=Eq(eq=_attr_cse_eq),
+    hash_value=_attr_cse_hash,
+)
+NODE_CSE_WITNESS: typing.Final[HashableWitness[LogicalNode]] = HashableWitness(
+    eq_witness=Eq(eq=_node_cse_eq),
+    hash_value=_node_cse_hash,
+)
+LOGICAL_GRAPH_EQ: typing.Final[Eq[LogicalGraph]] = Eq(eq=_graph_eq)
+
+
+@dataclass(frozen=True)
+class GraphTransformPass:
+    """Composable endomorphism pass witness over ``LogicalGraph``.
+
+    Attributes:
+        name (str): Human-readable optimization pass name.
+        apply (Callable[[LogicalGraph], LogicalGraph]): Pure graph-to-graph transformation function.
+    """
+
+    name: str
+    apply: Callable[[LogicalGraph], LogicalGraph]
+
+    def __call__(self, graph: LogicalGraph) -> LogicalGraph:
+        """Execute ``self.apply(graph)``.
+
+        Args:
+            graph (LogicalGraph): Input computation graph.
+
+        Returns:
+            LogicalGraph: Transformed computation graph.
+        """
+        return self.apply(graph)
+
+
+def compose_passes(*passes: GraphTransformPass) -> GraphTransformPass:
+    """Sequentially compose ``passes`` left-to-right (``p1`` then ``p2`` ...) via ``endo_monoid()``.
+
+    Note: ``Endo`` composes mathematically right-to-left ``outer(inner(x))``, so reversing ``passes``
+    into ``endo_monoid()`` executes ``passes[0]`` first and ``passes[-1]`` last as a compiler pipeline!
+
+    Args:
+        *passes (GraphTransformPass): Ordered sequence of optimization passes to run in pipeline order.
+
+    Returns:
+        GraphTransformPass: Composed pipeline pass witness.
+    """
+    if not passes:
+        graph_endo_monoid: Monoid[Endo[LogicalGraph]] = endo_monoid()
+        return GraphTransformPass(name="identity", apply=graph_endo_monoid.empty().app)
+    graph_endo: Monoid[Endo[LogicalGraph]] = endo_monoid()
+    composed_endo = graph_endo.mconcat(Endo(app=p.apply) for p in reversed(passes))
+    pipeline_name = " -> ".join(p.name for p in passes)
+    return GraphTransformPass(name=pipeline_name, apply=composed_endo.app)
+
+
+def fixpoint_graph_pass(pass_obj: GraphTransformPass, max_iterations: int = 16) -> GraphTransformPass:
+    """Repeat ``pass_obj`` until ``LOGICAL_GRAPH_EQ`` stabilizes or ``max_iterations`` is reached.
+
+    Args:
+        pass_obj (GraphTransformPass): Inner optimization pass or pipeline.
+        max_iterations (int): Non-negative iteration cap (defaults to 16).
+
+    Returns:
+        GraphTransformPass: Fixpoint-iterated graph optimization pass.
+
+    Raises:
+        ValueError: If ``max_iterations`` is boolean or negative.
+    """
+    if not is_non_bool_int(max_iterations) or max_iterations < 0:
+        raise ValueError(f"fixpoint_graph_pass requires non-negative int max_iterations, got {max_iterations!r}.")
+
+    def _iterate(graph: LogicalGraph) -> LogicalGraph:
+        """Run ``pass_obj`` until stabilization or ``max_iterations``.
+
+        Args:
+            graph (LogicalGraph): Input computation graph.
+
+        Returns:
+            LogicalGraph: Stabilized computation graph.
+        """
+        curr = graph
+        for _ in range(max_iterations):
+            nxt = pass_obj.apply(curr)
+            if LOGICAL_GRAPH_EQ.eq(curr, nxt):
+                return nxt
+            curr = nxt
+        return curr
+
+    return GraphTransformPass(name=f"fixpoint({pass_obj.name})", apply=_iterate)
+
+
+DCE_PASS: typing.Final[GraphTransformPass] = GraphTransformPass(
+    name="dce",
+    apply=eliminate_dead_nodes,
+)
+CSE_PASS: typing.Final[GraphTransformPass] = GraphTransformPass(
+    name="cse",
+    apply=eliminate_common_subexpressions,
+)
+SHAPE_CONSTANT_PROP_PASS: typing.Final[GraphTransformPass] = GraphTransformPass(
+    name="propagate_shapes_and_constants",
+    apply=propagate_shapes_and_constants,
+)
+CANONICAL_OPTIMIZE_PIPELINE: typing.Final[GraphTransformPass] = fixpoint_graph_pass(
+    compose_passes(SHAPE_CONSTANT_PROP_PASS, CSE_PASS, DCE_PASS),
+    max_iterations=8,
+)

@@ -174,12 +174,16 @@ classDiagram
         +outputs: list[str]
         +initializers: dict[str, InitializerValue]
         +attributes: dict[str, AttributeValue]
-        +loop_options: dict[str, AttributeValue] | None
-        +mesh: LogicalMesh | None
+        +annotations: dict[str, AttributeValue]
+        +metadata: dict[str, AttributeValue]
+        +loop_options: dict[str, AttributeValue] | LoopOptionsProtocol | None
+        +mesh: LogicalMesh | MeshLikeProtocol | Sequence[str] | dict[str, AttributeValue] | None
         +pipeline_topology: PipelineTopologyConfig | None
+        +sorted_nodes: list[LogicalNode] | None
         +edges: tuple[LogicalEdge, ...]
         +nodes_list: list[LogicalNode]
         +iter_nodes() Iterator[LogicalNode]
+        +from_json_result(payload) Result[CodecError, LogicalGraph]
     }
 
     class LogicalNode {
@@ -193,10 +197,11 @@ classDiagram
         +shape_metadata: tuple[DimensionType, ...] | None
         +dtype: DType | None
         +output_specs: list[TensorSpec]
-        +sharding: PartitionSpec | None
+        +sharding: PartitionSpec | str | dict[str, AttributeValue] | None
         +subgraphs: dict[str, LogicalGraph | AttributeValue]
-        +device: str | None
-        +stream: str | None
+        +device: str | DeviceLikeProtocol | None
+        +stream: str | int | None
+        +strides: tuple[int, ...] | None
         +source_ast_ref: str | None
     }
 
@@ -327,6 +332,15 @@ The repository exposes a complete CLI (`ml-switcheroo-ir` / `python -m ml_switch
 - `list-ops`: Discover and search registered operators across all 21 built-in registries.
 - `dump-snapshot`: Dump public package symbols, methods, and all 21 operator registries to a GhostRef v2 `SnapshotEnvelope` JSON file.
 - `export-schema`: Export Draft 2020-12 JSON schemas and TypeScript definitions.
+
+### 3.10. Algebraic Typeclass Witnesses, Closed ADTs & Proof-Carrying IR (`v0.0.8`)
+
+To guarantee total, sound static typing (`mypy --strict`, zero `Any`, zero `cast`, zero reflection) across compiler passes and serialization boundaries, `ml-switcheroo-ir` layers an explicit GHC Core-style typeclass witness architecture:
+- **Tier-1 Structural Interoperability Protocols (`ml_switcheroo_ir.protocols`) & Aliases**: Nine `@typing.runtime_checkable` `Protocol` classes (`DTypeLikeProtocol`, `DeviceLikeProtocol`, `SymbolicNodeProtocol`, `SymbolicIntWrapperProtocol` / `SymbolicDimProtocol`, `CustomRuleHandleProtocol`, `LoopOptionsProtocol`, `MeshLikeProtocol`, `ArrayBufferProtocol`, `SubgraphLikeProtocol`) allow downstream compiler and framework objects to flow into `LogicalGraph` (`annotations`, `metadata`, `sorted_nodes`, `mesh`, `loop_options` — aliased as `IRGraph`) and `LogicalNode` (`strides`, `device`, `sharding`, `dtype` — aliased as `IRNode`) with zero upward imports and strict `extra="forbid"` validation.
+- **Explicit Typeclass Witness Dictionaries (`ml_switcheroo_ir.typeclasses`)**: Immutable `@dataclass(frozen=True)` records encoding `Eq[A]`, `Ord[A]`, `HashableWitness[A]`, `Semigroup[A]`, `Monoid[A]` (including `dict_monoid`, `product_monoid`, and `endo_monoid`), `Semiring[A]`, `Ring[A]` (`POLYNOMIAL_RING`, `DIMENSION_SEMIRING`), `BoundedLattice[A]` (`VALIDATION_LEVEL_LATTICE`), bidirectional `Codec[WireT, A]` / `JsonCodec[A]`, `PythonExprEmit[A]`, and first-order recursion schemes (`EndoRewrite[N]`, `RecursiveFold[N, R]`).
+- **Closed Sum Types & Exhaustiveness (`assert_never`)**: Closed `SymExpr` (`SymConst | SymVar | SymBinaryOp | SymUnaryOp | SymPiecewise`), closed normal-form `AttrTerm` (`project_attribute_value` / `embed_attribute_value`), monadic `Result[E, A] = Ok[A] | Err[E]`, and error-accumulating Applicative `Validation[E, A] = Valid[A] | Invalid[E]` checked with `typing_extensions.assert_never`.
+- **Zero-Cost Domain Vocabulary & Phantom Proofs (`identifiers.py`, `proofs.py`)**: `NewType` aliases (`NodeId`, `SsaValueName`, `DialectDomain`, `OpName`, `MeshAxisName`, `NonBoolInt`, `NonNegativeInt`, `PositiveInt`), structured `PortRef`, and clone-isolated `ProvenGraph[PhaseT]` tokens (`AcyclicSortedPhase`, `SchemaValidPhase`, `ShardingValidPhase`, `GroundedPhase`).
+- **Unified Catalog, ISA & Translation Witnesses**: `ALL_DIALECT_CATALOG_WITNESSES` across all 21 operator registries, `HARDWARE_SEMANTICS_BY_DOMAIN` (`HardwareDialectSemantics` for RDNA, SASS, WGSL, PTX), `PartialIso[A, B]` bidirectional weight/layout morphisms (`OIHW <-> HWIO <-> NCHW <-> NHWC` and QKV split/merge), `FILE_COMPLIANCE_MONOID`, `COMMUNICATION_VOLUME_MONOID`, and composable `GraphTransformPass` pipelines (`CANONICAL_OPTIMIZE_PIPELINE`).
 
 ---
 

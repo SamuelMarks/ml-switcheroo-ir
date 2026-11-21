@@ -25,9 +25,11 @@ This guide details programmatic graph manipulation, multi-dialect schema validat
    - [Validating Graphs](#validating-graphs)
    - [Auditing Graphs with `ml-ecosystem-snapshots` / `ml-framework-snapshots`](#auditing-graphs-with-ml-ecosystem-snapshots--ml-framework-snapshots)
    - [Programmatic Schema Export, TypeScript & Python Code Generation](#programmatic-schema-export-typescript--python-code-generation)
+   - [Algebraic Typeclasses, Phantom Proofs & Total Outcomes](#algebraic-typeclasses-phantom-proofs--total-outcomes)
 2. [Interface Protocols for Compilers & Frontends](#2-interface-protocols-for-compilers--frontends)
    - [Implementing `GraphFrontend`](#implementing-graphfrontend)
    - [Implementing `CompilerBackend`](#implementing-compilerbackend)
+   - [Tier-1 Structural Protocols & `IRGraph` / `IRNode` Aliases](#tier-1-structural-protocols--irgraph--irnode-aliases)
 3. [CLI Reference & Workflows](#3-cli-reference--workflows)
    - [Graph Validation (`validate`)](#1-graph-validation-validate)
    - [Snapshot Grounding (`ground`)](#2-snapshot-grounding-ground)
@@ -43,6 +45,7 @@ This guide details programmatic graph manipulation, multi-dialect schema validat
    - [Recipe C: Validating StableHLO & MLIR Lowerings](#recipe-c-validating-stablehlo--mlir-lowerings)
    - [Recipe D: Hardware-Specific SASS Scoreboarding & RDNA3 VOPD Validation](#recipe-d-hardware-specific-sass-scoreboarding--rdna3-vopd-validation)
    - [Recipe E: Pre-Lowering Graph Optimization Pipeline](#recipe-e-pre-lowering-graph-optimization-pipeline)
+   - [Recipe F: Proof-Carrying Validation & Composable Transform Passes](#recipe-f-proof-carrying-validation--composable-transform-passes)
 
 ---
 
@@ -600,6 +603,63 @@ assert "def build_model() -> sw_ir.LogicalGraph:" in py_code
 export_schemas(out_dir="dist/schemas", include_typescript=True)
 ```
 
+### Algebraic Typeclasses, Phantom Proofs & Total Outcomes
+
+`ml-switcheroo-ir` (`v0.0.8`) provides explicit GHC Core-inspired typeclass witness dictionaries (`ml_switcheroo_ir.typeclasses`), zero-cost refined identifiers (`ml_switcheroo_ir.identifiers`), closed ADTs (`SymExpr`, `AttrTerm`), and phantom-typed `ProvenGraph` witnesses (`ml_switcheroo_ir.proofs`):
+
+```python
+from ml_switcheroo_ir import (
+    ALL_DIALECT_CATALOG_WITNESSES,
+    DType,
+    LogicalGraph,
+    LogicalNode,
+    Ok,
+    PortRef,
+    SymExpr,
+    Valid,
+    graph_from_json_result,
+    project_attribute_value,
+    prove_acyclic_sorted,
+    prove_schema_valid,
+)
+from ml_switcheroo_ir.shapes import broadcast_shapes_result, parse_symbolic_expr_result
+from ml_switcheroo_ir.translation import ParameterTranslationEngine
+from ml_switcheroo_ir.types import AttrDType
+
+# 1. Closed ADTs & Total Symbolic Parsing / Shape Inference
+sym_res = parse_symbolic_expr_result("2 * B + 4")
+assert isinstance(sym_res, Ok)
+expr: SymExpr = sym_res.value
+
+bcast_res = broadcast_shapes_result((expr, 1), (1, 64))
+assert isinstance(bcast_res, Ok) and bcast_res.value == (expr, 64)
+
+# 2. Normal-form AttrTerm projection & typed PortRef parsing
+term = project_attribute_value(DType.bfloat16)
+assert isinstance(term, AttrDType) and term.value == DType.bfloat16
+port = PortRef.parse("split_node:1")
+assert port.port_index == 1 and port.render() == "split_node:1"
+
+# 3. Total JSON Codec deserialization & Phantom-Typed ProvenGraph minting
+g = LogicalGraph(
+    name="Verified",
+    nodes={"x": LogicalNode(id="x", op_type="Input"), "r": LogicalNode(id="r", op_type="Relu", inputs=["x"])},
+    outputs=["r"],
+)
+decoded = graph_from_json_result(g.to_json())
+assert isinstance(decoded, Ok)
+
+sorted_proof = prove_acyclic_sorted(decoded.value)
+schema_proof = prove_schema_valid(decoded.value)
+assert isinstance(sorted_proof, Ok) and isinstance(schema_proof, Valid)
+
+# 4. Partial Isomorphisms & Unified Dialect Catalog Witnesses (21 catalogs)
+assert len(ALL_DIALECT_CATALOG_WITNESSES) == 21
+conv_iso = ParameterTranslationEngine().conv_layout_iso("NCHW", "NHWC")
+nhwc_res = conv_iso.forward([[[[1.0, 2.0]]]])
+assert isinstance(nhwc_res, Ok) and conv_iso.backward(nhwc_res.value) == Ok([[[[1.0, 2.0]]]])
+```
+
 ---
 
 ## 2. Interface Protocols for Compilers & Frontends
@@ -644,6 +704,70 @@ class WebGPUBackend(CompilerBackend[str]):
         for node in graph.nodes_list:
             shader_lines.append(f"// Op: {node.domain}.{node.op_type} (Node: {node.id})")
         return "\n".join(shader_lines)
+```
+
+### Tier-1 Structural Protocols & `IRGraph` / `IRNode` Aliases
+
+`ml_switcheroo_ir.protocols` provides `@typing.runtime_checkable` structural `Protocol` contracts (`DTypeLikeProtocol`, `DeviceLikeProtocol`, `SymbolicNodeProtocol`, `SymbolicIntWrapperProtocol` / `SymbolicDimProtocol`, `CustomRuleHandleProtocol`, `LoopOptionsProtocol`, `MeshLikeProtocol`, `ArrayBufferProtocol`, and `SubgraphLikeProtocol`) so downstream compiler objects interoperate directly with `IRNode` (`LogicalNode`) and `IRGraph` (`LogicalGraph`) without upward imports:
+
+```python
+from dataclasses import dataclass
+
+from ml_switcheroo_ir import (
+    DeviceLikeProtocol,
+    IRGraph,
+    IRNode,
+    LoopOptionsProtocol,
+    MeshLikeProtocol,
+)
+
+
+@dataclass(frozen=True)
+class CustomDevice:
+    type: str = "cuda"
+    index: int | None = 0
+
+
+@dataclass(frozen=True)
+class CustomMesh:
+    axis_names: tuple[str, ...] = ("dp", "tp")
+
+
+@dataclass(frozen=True)
+class CustomLoopOpts:
+    parallel_iterations: int | None = 4
+    swap_memory: bool | None = False
+    maximum_iterations: int | None = 32
+
+
+dev = CustomDevice()
+mesh = CustomMesh()
+loop_opts = CustomLoopOpts()
+assert isinstance(dev, DeviceLikeProtocol)
+assert isinstance(mesh, MeshLikeProtocol)
+assert isinstance(loop_opts, LoopOptionsProtocol)
+
+node = IRNode(
+    id="act",
+    op_type="Relu",
+    inputs=["x"],
+    outputs=["y"],
+    device=dev,
+    stream=0,
+    strides=(64, 1),
+)
+graph = IRGraph(
+    name="ProtocolGraph",
+    nodes={"act": node},
+    inputs=["x"],
+    outputs=["y"],
+    mesh=mesh,
+    loop_options=loop_opts,
+    annotations={"pass": "traced"},
+    metadata={"dialect_version": 8},
+    sorted_nodes=[node],
+)
+assert node.strides == (64, 1) and graph.annotations["pass"] == "traced"
 ```
 
 ---
@@ -933,4 +1057,35 @@ def optimize_for_lowering(raw_graph: LogicalGraph) -> LogicalGraph:
     g = eliminate_common_subexpressions(g)
     g = propagate_shapes_and_constants(g)
     return g
+```
+
+### Recipe F: Proof-Carrying Validation & Composable Transform Passes
+
+Compose pure `GraphTransformPass` witnesses into a fixpoint pipeline via `endo_monoid()` and verify the output with applicative `Validator.validate_graph_applicative`:
+
+```python
+from ml_switcheroo_ir import (
+    CSE_PASS,
+    DCE_PASS,
+    SHAPE_CONSTANT_PROP_PASS,
+    LogicalGraph,
+    ProvenGraph,
+    SchemaValidPhase,
+    Valid,
+    compose_passes,
+    fixpoint_graph_pass,
+)
+from ml_switcheroo_ir.validator import Validator
+
+pipeline = fixpoint_graph_pass(
+    compose_passes(SHAPE_CONSTANT_PROP_PASS, CSE_PASS, DCE_PASS),
+    max_iterations=8,
+)
+
+
+def optimize_and_prove(raw_graph: LogicalGraph) -> ProvenGraph[SchemaValidPhase] | None:
+    """Optimize a LogicalGraph to fixpoint and mint a SchemaValidPhase proof token."""
+    opt_graph = pipeline.apply(raw_graph)
+    outcome = Validator().validate_graph_applicative(opt_graph)
+    return outcome.value if isinstance(outcome, Valid) else None
 ```

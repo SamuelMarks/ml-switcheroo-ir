@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+import typing
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 
 from ml_switcheroo_ir.graph import LogicalNode
+from ml_switcheroo_ir.identifiers import DialectDomain, is_non_bool_int
 from ml_switcheroo_ir.schema.ghost import (
     WGSL_COMPUTE_BUILTINS,
     WGSL_MUTATING_OPS,
@@ -16,9 +19,16 @@ from ml_switcheroo_ir.schema.rdna_registry import (
     RDNA_VOPD_SLOTS,
 )
 from ml_switcheroo_ir.schema.sass_registry import SASS_PIPELINE_LATENCIES
-from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel
+from ml_switcheroo_ir.typeclasses.outcome import Invalid, Valid, Validation
+from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel, errors_from_validation
 
 __all__ = [
+    "HARDWARE_SEMANTICS_BY_DOMAIN",
+    "HardwareDialectSemantics",
+    "PTX_ISA_SEMANTICS",
+    "RDNA_ISA_SEMANTICS",
+    "SASS_ISA_SEMANTICS",
+    "WGSL_ISA_SEMANTICS",
     "_extract_dst_vgpr",
     "_extract_sass_registers",
     "_extract_vgpr_indices",
@@ -77,8 +87,8 @@ def _extract_dst_vgpr(node: LogicalNode) -> int | None:
     dst = node.attributes.get("dst_vgpr")
     if dst is None:
         dst = node.attributes.get("dst")
-    if isinstance(dst, int) and not isinstance(dst, bool):
-        return dst
+    if is_non_bool_int(dst):
+        return int(dst)
     if dst is not None:
         m = _VGPR_ATTR_PATTERN.match(str(dst).strip())
         if m:
@@ -568,7 +578,7 @@ def _validate_wgsl_isa(node: LogicalNode) -> list[ValidationError]:
 def validate_isa_instruction_node(
     node: LogicalNode, level: ValidationLevel = ValidationLevel.WARNING
 ) -> list[ValidationError]:
-    """Validate GPU accelerator ISA instructions (AMD RDNA, NVIDIA SASS, and WebGPU WGSL).
+    """Validate GPU accelerator ISA instructions via ``HARDWARE_SEMANTICS_BY_DOMAIN``.
 
     Args:
         node (LogicalNode): The node representing an ISA instruction or WGSL primitive.
@@ -577,13 +587,10 @@ def validate_isa_instruction_node(
     Returns:
         list[ValidationError]: Detected validation errors or warnings.
     """
-    if node.domain in ("amd_rdna", "rdna"):
-        return _validate_rdna_isa(node, level)
-    if node.domain in ("nvidia_sass", "sass"):
-        return _validate_sass_isa(node)
-    if node.domain in ("webgpu_wgsl", "wgsl"):
-        return _validate_wgsl_isa(node)
-    return []
+    semantics = HARDWARE_SEMANTICS_BY_DOMAIN.get(node.domain)
+    if semantics is None:
+        return []
+    return errors_from_validation(semantics.validate_instruction(node, level))
 
 
 def _parse_wait_barrier_mask(node: LogicalNode) -> set[int]:
@@ -672,3 +679,161 @@ def validate_sass_scoreboarding_sequence(
         }
 
     return errors
+
+
+def _errors_to_unit_validation(errs: Sequence[ValidationError]) -> Validation[tuple[ValidationError, ...], None]:
+    """Convert a sequence of ``ValidationError`` items into a unit ``Validation`` value.
+
+    Args:
+        errs (Sequence[ValidationError]): Collected errors.
+
+    Returns:
+        Validation[tuple[ValidationError, ...], None]: ``Valid(None)`` when empty else ``Invalid(tuple(errs))``.
+    """
+    frozen = tuple(errs)
+    return Invalid(frozen) if frozen else Valid(None)
+
+
+def _rdna_dst_tuple(node: LogicalNode) -> tuple[str | int, ...]:
+    """Extract RDNA destination VGPR as a 0- or 1-element tuple.
+
+    Args:
+        node (LogicalNode): RDNA instruction node.
+
+    Returns:
+        tuple[str | int, ...]: Destination VGPR index tuple.
+    """
+    dst = _extract_dst_vgpr(node)
+    return (dst,) if dst is not None else ()
+
+
+def _validate_rdna_sequence(
+    nodes: Sequence[LogicalNode],
+    _level: ValidationLevel,
+) -> Validation[tuple[ValidationError, ...], None]:
+    """Validate consecutive VOPD dual-issue pairs in an RDNA instruction sequence.
+
+    Args:
+        nodes (Sequence[LogicalNode]): Sequence of RDNA instruction nodes.
+        _level (ValidationLevel): Active validation level.
+
+    Returns:
+        Validation[tuple[ValidationError, ...], None]: Accumulated VOPD pairing diagnostics.
+    """
+    errs: list[ValidationError] = []
+    for idx in range(len(nodes) - 1):
+        if nodes[idx].attributes.get("vopd_slot") == "X" and nodes[idx + 1].attributes.get("vopd_slot") == "Y":
+            errs.extend(validate_vopd_pairing(nodes[idx], nodes[idx + 1]))
+    return _errors_to_unit_validation(errs)
+
+
+@dataclass(frozen=True)
+class HardwareDialectSemantics:
+    """Explicit typeclass witness dictionary describing low-level GPU/accelerator ISA semantics.
+
+    Attributes:
+        domains (tuple[DialectDomain, ...]): Recognized domain namespaces for this hardware ISA.
+        allowed_attributes (frozenset[str]): Recognized ISA-specific node attribute keys.
+        extract_src_operands (Callable[[LogicalNode], tuple[str | int, ...]]): Source register/operand extractor.
+        extract_dst_operands (Callable[[LogicalNode], tuple[str | int, ...]]): Destination register/operand extractor.
+        validate_instruction (Callable): Single-instruction applicative validator.
+        validate_sequence (Callable): Instruction-stream hazard/pairing validator.
+    """
+
+    domains: tuple[DialectDomain, ...]
+    allowed_attributes: frozenset[str]
+    extract_src_operands: Callable[[LogicalNode], tuple[str | int, ...]]
+    extract_dst_operands: Callable[[LogicalNode], tuple[str | int, ...]]
+    validate_instruction: Callable[[LogicalNode, ValidationLevel], Validation[tuple[ValidationError, ...], None]]
+    validate_sequence: Callable[[Sequence[LogicalNode], ValidationLevel], Validation[tuple[ValidationError, ...], None]]
+
+
+RDNA_ISA_SEMANTICS: typing.Final[HardwareDialectSemantics] = HardwareDialectSemantics(
+    domains=(DialectDomain("amd_rdna"), DialectDomain("rdna")),
+    allowed_attributes=frozenset(
+        {
+            "wavefront_size",
+            "register_classes",
+            "vgpr_operands",
+            "dst_vgpr",
+            "src_vgprs",
+            "dst",
+            "vopd_slot",
+            "vopd_target",
+            "modifiers",
+            "literal",
+            "imm",
+            "imm32",
+        }
+    ),
+    extract_src_operands=lambda n: tuple(_extract_vgpr_indices(n)),
+    extract_dst_operands=_rdna_dst_tuple,
+    validate_instruction=lambda n, lvl: _errors_to_unit_validation(_validate_rdna_isa(n, lvl)),
+    validate_sequence=_validate_rdna_sequence,
+)
+
+SASS_ISA_SEMANTICS: typing.Final[HardwareDialectSemantics] = HardwareDialectSemantics(
+    domains=(DialectDomain("nvidia_sass"), DialectDomain("sass")),
+    allowed_attributes=frozenset(
+        {
+            "barrier_predicate",
+            "warp_sync",
+            "memory_space",
+            "stall",
+            "stall_count",
+            "yield",
+            "yield_flag",
+            "read_barrier",
+            "write_barrier",
+            "wait_barrier_mask",
+            "barrier_mask",
+            "execution_latency",
+            "modifiers",
+            "control_codes",
+            "register_classes",
+            "src_regs",
+            "srcs",
+            "dst_reg",
+            "dst",
+        }
+    ),
+    extract_src_operands=lambda n: tuple(_extract_sass_registers(n, role="src")),
+    extract_dst_operands=lambda n: tuple(_extract_sass_registers(n, role="dst")),
+    validate_instruction=lambda n, _lvl: _errors_to_unit_validation(_validate_sass_isa(n)),
+    validate_sequence=lambda ns, lvl: _errors_to_unit_validation(validate_sass_scoreboarding_sequence(ns, level=lvl)),
+)
+
+WGSL_ISA_SEMANTICS: typing.Final[HardwareDialectSemantics] = HardwareDialectSemantics(
+    domains=(DialectDomain("webgpu_wgsl"), DialectDomain("wgsl")),
+    allowed_attributes=frozenset(
+        {
+            "workgroup_size",
+            "address_space",
+            "qualifier",
+            "struct_alignment",
+            "alignment",
+            "array_stride",
+            "builtin",
+            "is_mutating",
+        }
+    ),
+    extract_src_operands=lambda n: tuple(n.inputs),
+    extract_dst_operands=lambda n: tuple(n.outputs),
+    validate_instruction=lambda n, _lvl: _errors_to_unit_validation(_validate_wgsl_isa(n)),
+    validate_sequence=lambda _ns, _lvl: Valid(None),
+)
+
+PTX_ISA_SEMANTICS: typing.Final[HardwareDialectSemantics] = HardwareDialectSemantics(
+    domains=(DialectDomain("nvidia_ptx"), DialectDomain("ptx")),
+    allowed_attributes=frozenset({"vector_widths", "min_sm", "address_space"}),
+    extract_src_operands=lambda n: tuple(n.inputs),
+    extract_dst_operands=lambda n: tuple(n.outputs),
+    validate_instruction=lambda _n, _lvl: Valid(None),
+    validate_sequence=lambda _ns, _lvl: Valid(None),
+)
+
+HARDWARE_SEMANTICS_BY_DOMAIN: typing.Final[Mapping[str, HardwareDialectSemantics]] = {
+    str(dom): sem
+    for sem in (RDNA_ISA_SEMANTICS, SASS_ISA_SEMANTICS, WGSL_ISA_SEMANTICS, PTX_ISA_SEMANTICS)
+    for dom in sem.domains
+}

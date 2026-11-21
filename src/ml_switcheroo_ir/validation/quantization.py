@@ -2,13 +2,28 @@
 
 from __future__ import annotations
 
+import typing
 from collections.abc import Sequence
 
 from ml_switcheroo_ir.graph import LogicalNode
+from ml_switcheroo_ir.identifiers import is_non_bool_int
 from ml_switcheroo_ir.shapes import DimensionType
-from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel
+from ml_switcheroo_ir.validation.core import (
+    ValidationError,
+    ValidationLevel,
+    ValidationRule,
+    combine_rules,
+    errors_from_validation,
+    rule_from_errors_fn,
+    when_predicate,
+)
 
-__all__ = ["validate_quantization_node"]
+__all__ = [
+    "BLOCK_QUANTIZE_RULE",
+    "DEQUANTIZE_GROUPED_INT4_RULE",
+    "QUANTIZATION_NODE_RULE",
+    "validate_quantization_node",
+]
 
 _VALID_MX_SCALE_DTYPES: frozenset[str] = frozenset({"float8_e8m0fnu", "e8m0", "fp8_e8m0", "uint8"})
 _VALID_INT4_PACKING: frozenset[str] = frozenset({"marlin", "exllama", "tensorrt_llm", "awq", "gptq"})
@@ -27,7 +42,7 @@ def _extract_validated_axis(node: LogicalNode, default_axis: int) -> tuple[int, 
     if "axis" not in node.attributes:
         return default_axis, []
     axis_attr = node.attributes["axis"]
-    if isinstance(axis_attr, bool) or not isinstance(axis_attr, int):
+    if not is_non_bool_int(axis_attr):
         return default_axis, [
             ValidationError(
                 node_id=node.id,
@@ -206,6 +221,44 @@ def _validate_dequantize_grouped_int4(node: LogicalNode) -> list[ValidationError
     return errors
 
 
+def _is_block_quantize(node: LogicalNode) -> bool:
+    """Return True if ``node`` represents a ``block_quantize`` operator.
+
+    Args:
+        node (LogicalNode): Candidate IR node.
+
+    Returns:
+        bool: True when normalized op name equals ``'block_quantize'``.
+    """
+    return node.op_type.replace("quantization.", "").lower() == "block_quantize"
+
+
+def _is_dequantize_grouped_int4(node: LogicalNode) -> bool:
+    """Return True if ``node`` represents a ``dequantize_grouped_int4`` operator.
+
+    Args:
+        node (LogicalNode): Candidate IR node.
+
+    Returns:
+        bool: True when normalized op name equals ``'dequantize_grouped_int4'``.
+    """
+    return node.op_type.replace("quantization.", "").lower() == "dequantize_grouped_int4"
+
+
+BLOCK_QUANTIZE_RULE: typing.Final[ValidationRule[LogicalNode]] = when_predicate(
+    _is_block_quantize,
+    rule_from_errors_fn("block_quantize", _validate_block_quantize),
+)
+DEQUANTIZE_GROUPED_INT4_RULE: typing.Final[ValidationRule[LogicalNode]] = when_predicate(
+    _is_dequantize_grouped_int4,
+    rule_from_errors_fn("dequantize_grouped_int4", _validate_dequantize_grouped_int4),
+)
+QUANTIZATION_NODE_RULE: typing.Final[ValidationRule[LogicalNode]] = combine_rules(
+    (BLOCK_QUANTIZE_RULE, DEQUANTIZE_GROUPED_INT4_RULE),
+    name="quantization_node",
+)
+
+
 def validate_quantization_node(node: LogicalNode) -> list[ValidationError]:
     """Validate quantization operator attributes, alignment constraints, and packing formats.
 
@@ -218,9 +271,4 @@ def validate_quantization_node(node: LogicalNode) -> list[ValidationError]:
     Returns:
         list[ValidationError]: Detected quantization validation errors.
     """
-    clean_op = node.op_type.replace("quantization.", "").lower()
-    if clean_op == "block_quantize":
-        return _validate_block_quantize(node)
-    if clean_op == "dequantize_grouped_int4":
-        return _validate_dequantize_grouped_int4(node)
-    return []
+    return errors_from_validation(QUANTIZATION_NODE_RULE.run(node))

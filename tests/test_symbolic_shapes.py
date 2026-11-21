@@ -865,3 +865,16 @@ def test_sym_polynomial_pow_symmetry_and_bool_guards() -> None:
     pw = SymPiecewise([(vx, vy)], default=SymConst(1))
     si_pw = SymInt(pw)
     assert pw == si_pw and si_pw == pw and hash(pw) == hash(si_pw)
+
+    abs_y = SymUnaryOp("abs", vy)
+    assert SymbolicSolver.is_consistent(vx * (abs_y + vx), (vx * abs_y) + (vx**2)) is True
+    assert SymbolicSolver.is_consistent((vx * vx) * abs_y, vx * (vx * abs_y)) is True
+    assert SymbolicSolver.is_consistent((abs_y + 1) ** 2, (abs_y**2) + (2 * abs_y) + 1) is True
+    assert SymbolicSolver.is_consistent(SymBinaryOp("**", abs_y, SymConst(-1)), SymBinaryOp("**", abs_y, SymConst(-1)))
+    assert not SymbolicSolver.is_consistent(SymBinaryOp("**", abs_y, SymConst(-1)), abs_y)
+    assert not SymbolicSolver.is_consistent(SymBinaryOp("**", abs_y, vx), SymBinaryOp("**", abs_y, vy))
+
+    cancelled_neg = SymBinaryOp("-", abs_y, SymBinaryOp("+", SymConst(4), abs_y))
+    assert SymbolicSolver.is_consistent(SymUnaryOp("abs", cancelled_neg), 4) is True
+    assert not SymbolicSolver.is_consistent(SymUnaryOp("ceil", SymConst(4)), 4)
+    assert (SymUnaryOp("abs", SymConst(-3)) + vx).simplify() == SymBinaryOp("+", vx, SymConst(3))

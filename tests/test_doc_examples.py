@@ -983,3 +983,152 @@ def test_root_markdown_integrity() -> None:
     assert toc_anchors
     for anchor in toc_anchors:
         assert anchor in heading_slugs, f"Broken anchor '#{anchor}' in USAGE.md"
+
+
+def test_v008_algebraic_typeclasses_and_proof_carrying_doc_recipes() -> None:
+    """Execute v0.0.8 README Quick Start 7, USAGE Algebraic Typeclasses, and Recipe F examples."""
+    from ml_switcheroo_ir import (
+        ALL_DIALECT_CATALOG_WITNESSES,
+        CANONICAL_OPTIMIZE_PIPELINE,
+        CSE_PASS,
+        DCE_PASS,
+        SHAPE_CONSTANT_PROP_PASS,
+        DType,
+        LogicalGraph,
+        LogicalNode,
+        Ok,
+        PortRef,
+        ProvenGraph,
+        SchemaValidPhase,
+        SymExpr,
+        Valid,
+        compose_passes,
+        fixpoint_graph_pass,
+        graph_from_json_result,
+        project_attribute_value,
+        prove_acyclic_sorted,
+        prove_schema_valid,
+    )
+    from ml_switcheroo_ir.shapes import broadcast_shapes_result, parse_symbolic_expr_result
+    from ml_switcheroo_ir.translation import ParameterTranslationEngine
+    from ml_switcheroo_ir.types import AttrDType
+
+    sym_res = parse_symbolic_expr_result("2 * B + 4")
+    assert isinstance(sym_res, Ok)
+    expr: SymExpr = sym_res.value
+
+    bcast_res = broadcast_shapes_result((expr, 1), (1, 64))
+    assert isinstance(bcast_res, Ok) and bcast_res.value == (expr, 64)
+
+    term = project_attribute_value(DType.bfloat16)
+    assert isinstance(term, AttrDType) and term.value == DType.bfloat16
+    port = PortRef.parse("split_node:1")
+    assert port.port_index == 1 and port.render() == "split_node:1"
+
+    g = LogicalGraph(
+        name="Verified",
+        nodes={"x": LogicalNode(id="x", op_type="Input"), "r": LogicalNode(id="r", op_type="Relu", inputs=["x"])},
+        outputs=["r"],
+    )
+    decoded = graph_from_json_result(g.to_json())
+    assert isinstance(decoded, Ok)
+
+    sorted_proof = prove_acyclic_sorted(decoded.value)
+    schema_proof = prove_schema_valid(decoded.value)
+    assert isinstance(sorted_proof, Ok) and isinstance(schema_proof, Valid)
+
+    optimized_default = CANONICAL_OPTIMIZE_PIPELINE.apply(schema_proof.value.graph)
+    assert "r" in optimized_default.nodes
+
+    pipeline = fixpoint_graph_pass(
+        compose_passes(SHAPE_CONSTANT_PROP_PASS, CSE_PASS, DCE_PASS),
+        max_iterations=8,
+    )
+    opt_graph = pipeline.apply(g)
+    outcome = Validator().validate_graph_applicative(opt_graph)
+    proven: ProvenGraph[SchemaValidPhase] | None = outcome.value if isinstance(outcome, Valid) else None
+    assert proven is not None and len(proven.ordered_nodes) == 2
+
+    assert len(ALL_DIALECT_CATALOG_WITNESSES) == 21
+    conv_iso = ParameterTranslationEngine().conv_layout_iso("NCHW", "NHWC")
+    nhwc_res = conv_iso.forward([[[[1.0, 2.0]]]])
+    assert isinstance(nhwc_res, Ok) and conv_iso.backward(nhwc_res.value) == Ok([[[[1.0, 2.0]]]])
+
+
+def test_usage_tier1_structural_protocols_and_aliases_doc_example() -> None:
+    """Execute USAGE.md Section 2 Tier-1 Structural Protocols & IRGraph / IRNode Aliases example."""
+    from dataclasses import dataclass
+
+    from ml_switcheroo_ir import (
+        DeviceLikeProtocol,
+        IRGraph,
+        IRNode,
+        LoopOptionsProtocol,
+        MeshLikeProtocol,
+    )
+
+    @dataclass(frozen=True)
+    class CustomDevice:
+        """Doc example hardware device.
+
+        Attributes:
+            type (str): Backend device type.
+            index (int | None): Optional device ordinal.
+        """
+
+        type: str = "cuda"
+        index: int | None = 0
+
+    @dataclass(frozen=True)
+    class CustomMesh:
+        """Doc example SPMD mesh.
+
+        Attributes:
+            axis_names (tuple[str, ...]): Ordered mesh axis names.
+        """
+
+        axis_names: tuple[str, ...] = ("dp", "tp")
+
+    @dataclass(frozen=True)
+    class CustomLoopOpts:
+        """Doc example loop options.
+
+        Attributes:
+            parallel_iterations (int | None): Parallel loop trip limit.
+            swap_memory (bool | None): Host-device swap flag.
+            maximum_iterations (int | None): Optional loop bound.
+        """
+
+        parallel_iterations: int | None = 4
+        swap_memory: bool | None = False
+        maximum_iterations: int | None = 32
+
+    dev = CustomDevice()
+    mesh = CustomMesh()
+    loop_opts = CustomLoopOpts()
+    assert isinstance(dev, DeviceLikeProtocol)
+    assert isinstance(mesh, MeshLikeProtocol)
+    assert isinstance(loop_opts, LoopOptionsProtocol)
+
+    node = IRNode(
+        id="act",
+        op_type="Relu",
+        inputs=["x"],
+        outputs=["y"],
+        device=dev,
+        stream=0,
+        strides=(64, 1),
+    )
+    graph = IRGraph(
+        name="ProtocolGraph",
+        nodes={"act": node},
+        inputs=["x"],
+        outputs=["y"],
+        mesh=mesh,
+        loop_options=loop_opts,
+        annotations={"pass": "traced"},
+        metadata={"dialect_version": 8},
+        sorted_nodes=[node],
+    )
+    assert node.strides == (64, 1) and graph.annotations["pass"] == "traced"
+    assert graph.metadata["dialect_version"] == 8 and graph.sorted_nodes == [node]

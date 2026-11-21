@@ -16,21 +16,82 @@ from ml_switcheroo_ir.protocols import (
     SymbolicNodeProtocol,
 )
 from ml_switcheroo_ir.shapes.polynomial import Polynomial, poly_to_symnode
+from ml_switcheroo_ir.typeclasses.algebra import Eq, HashableWitness
+from ml_switcheroo_ir.typeclasses.fold import EndoRewrite
+
+BinarySymOpKind: typing_extensions.TypeAlias = typing.Literal["+", "-", "*", "//", "%", "**", "max", "min"]
+UnarySymOpKind: typing_extensions.TypeAlias = typing.Literal["-", "+", "abs", "ceil", "floor"]
+ComparisonOpKind: typing_extensions.TypeAlias = typing.Literal["==", "!=", "<", "<=", ">", ">="]
+
+_BINARY_SYM_OPS: frozenset[str] = frozenset({"+", "-", "*", "//", "%", "**", "max", "min"})
+_UNARY_SYM_OPS: frozenset[str] = frozenset({"-", "+", "abs", "ceil", "floor"})
+_COMPARISON_OPS: frozenset[str] = frozenset({"==", "!=", "<", "<=", ">", ">="})
 
 __all__ = [
+    "BinarySymOpKind",
+    "ComparisonOpKind",
     "DimensionType",
     "DimensionValue",
+    "SYM_EXPR_EQ",
+    "SYM_EXPR_HASH",
+    "SYM_EXPR_REWRITE",
     "ShapeType",
     "SymBinaryOp",
     "SymCondition",
     "SymConst",
+    "SymExpr",
     "SymInt",
     "SymNode",
     "SymPiecewise",
     "SymUnaryOp",
     "SymVar",
+    "UnarySymOpKind",
     "format_symbolic_protocol_expr",
+    "is_binary_sym_op",
+    "is_comparison_op",
+    "is_sym_expr",
+    "is_unary_sym_op",
+    "sym_expr_eval",
+    "sym_expr_format",
+    "sym_expr_free_vars",
+    "sym_expr_simplify",
 ]
+
+
+def is_binary_sym_op(op: str) -> typing.TypeGuard[BinarySymOpKind]:
+    """Narrow ``op`` to the closed ``BinarySymOpKind`` literal union.
+
+    Args:
+        op (str): Candidate binary operator token.
+
+    Returns:
+        typing.TypeGuard[BinarySymOpKind]: True iff ``op`` is a recognized symbolic binary operator.
+    """
+    return op in _BINARY_SYM_OPS
+
+
+def is_unary_sym_op(op: str) -> typing.TypeGuard[UnarySymOpKind]:
+    """Narrow ``op`` to the closed ``UnarySymOpKind`` literal union.
+
+    Args:
+        op (str): Candidate unary operator token.
+
+    Returns:
+        typing.TypeGuard[UnarySymOpKind]: True iff ``op`` is a recognized symbolic unary operator.
+    """
+    return op in _UNARY_SYM_OPS
+
+
+def is_comparison_op(op: str) -> typing.TypeGuard[ComparisonOpKind]:
+    """Narrow ``op`` to the closed ``ComparisonOpKind`` relational operator literal union.
+
+    Args:
+        op (str): Candidate relational operator token.
+
+    Returns:
+        typing.TypeGuard[ComparisonOpKind]: True iff ``op`` is a recognized relational operator.
+    """
+    return op in _COMPARISON_OPS
 
 
 def format_symbolic_protocol_expr(
@@ -819,11 +880,12 @@ class SymBinaryOp(SymNode):
             if res is not None:
                 return res
 
-        poly = self.to_polynomial()
+        candidate = SymBinaryOp(self.op, s_left, s_right)
+        poly = candidate.to_polynomial()
         if poly is not None:
             return poly_to_symnode(poly)
 
-        return SymBinaryOp(self.op, s_left, s_right)
+        return candidate
 
     @staticmethod
     def _poly_pow(base_poly: Polynomial, exp: int) -> Polynomial | None:
@@ -1035,6 +1097,21 @@ class SymUnaryOp(SymNode):
             set[str]: Set of variable names.
         """
         return self.operand.free_vars()
+
+    def to_polynomial(self) -> Polynomial | None:
+        """Convert unary ``-`` or ``+`` expression to canonical ``Polynomial`` if operand is polynomial.
+
+        Returns:
+            Polynomial | None: Canonical polynomial or ``None`` for non-polynomial unary ops (e.g. ``abs``).
+        """
+        inner = self.operand.to_polynomial()
+        if inner is None:
+            return None
+        if self.op == "-":
+            return inner.neg()
+        if self.op == "+":
+            return inner
+        return None
 
     def __str__(self) -> str:
         """Return string representation.
@@ -1661,3 +1738,185 @@ DimensionType: typing_extensions.TypeAlias = typing.Annotated[
 DimensionValue: typing_extensions.TypeAlias = typing.Union[DimensionType, None]
 ShapeType: typing_extensions.TypeAlias = Sequence[DimensionType]
 SymCondition: typing_extensions.TypeAlias = typing.Union[Callable[[dict[str, int]], bool], SymNode, bool, str]
+SymExpr: typing_extensions.TypeAlias = typing.Union[
+    SymConst,
+    SymVar,
+    SymBinaryOp,
+    SymUnaryOp,
+    SymPiecewise,
+]
+
+
+def is_sym_expr(val: SymNode | DimensionType) -> typing.TypeGuard[SymExpr]:
+    """Narrow a ``SymNode`` or ``DimensionType`` to the closed ``SymExpr`` sum type.
+
+    Args:
+        val (SymNode | DimensionType): Candidate node or dimension value.
+
+    Returns:
+        typing.TypeGuard[SymExpr]: True iff ``val`` is one of the five closed ``SymExpr`` constructors.
+    """
+    return isinstance(val, (SymConst, SymVar, SymBinaryOp, SymUnaryOp, SymPiecewise))
+
+
+def sym_expr_free_vars(expr: SymExpr) -> set[str]:
+    """Exhaustively collect free symbolic variable identifiers from a closed ``SymExpr``.
+
+    Args:
+        expr (SymExpr): Closed symbolic expression tree.
+
+    Returns:
+        set[str]: Set of referenced symbolic variable names.
+    """
+    result: set[str]
+    if isinstance(expr, SymConst):
+        result = set()
+    elif isinstance(expr, SymVar):
+        result = {expr.name}
+    elif isinstance(expr, SymBinaryOp):
+        result = expr.left.free_vars() | expr.right.free_vars()
+    elif isinstance(expr, SymUnaryOp):
+        result = expr.operand.free_vars()
+    elif isinstance(expr, SymPiecewise):
+        result = expr.free_vars()
+    else:
+        typing_extensions.assert_never(expr)
+    return result
+
+
+def sym_expr_eval(expr: SymExpr, env: dict[str, int]) -> int:
+    """Exhaustively evaluate a closed ``SymExpr`` under integer variable bindings ``env``.
+
+    Args:
+        expr (SymExpr): Closed symbolic expression tree.
+        env (dict[str, int]): Mapping from symbolic variable names to concrete integer values.
+
+    Returns:
+        int: Evaluated integer value.
+    """
+    out: int
+    if isinstance(expr, SymConst):
+        out = expr.value
+    elif isinstance(expr, SymVar):
+        out = expr.eval(env)
+    elif isinstance(expr, SymBinaryOp):
+        out = expr.eval(env)
+    elif isinstance(expr, SymUnaryOp):
+        out = expr.eval(env)
+    elif isinstance(expr, SymPiecewise):
+        out = expr.eval(env)
+    else:
+        typing_extensions.assert_never(expr)
+    return out
+
+
+def sym_expr_simplify(expr: SymExpr) -> SymExpr:
+    """Exhaustively simplify a closed ``SymExpr`` and guarantee a closed ``SymExpr`` return type.
+
+    Args:
+        expr (SymExpr): Closed symbolic expression tree.
+
+    Returns:
+        SymExpr: Simplified closed symbolic expression tree.
+    """
+    simplified: SymNode
+    if isinstance(expr, SymConst):
+        simplified = expr
+    elif isinstance(expr, SymVar):
+        simplified = expr
+    elif isinstance(expr, SymBinaryOp):
+        simplified = expr.simplify()
+    elif isinstance(expr, SymUnaryOp):
+        simplified = expr.simplify()
+    elif isinstance(expr, SymPiecewise):
+        simplified = expr.simplify()
+    else:
+        typing_extensions.assert_never(expr)
+    return simplified if is_sym_expr(simplified) else expr
+
+
+def sym_expr_format(expr: SymExpr) -> str:
+    """Exhaustively render a closed ``SymExpr`` into its canonical infix string form.
+
+    Args:
+        expr (SymExpr): Closed symbolic expression tree.
+
+    Returns:
+        str: Canonical human-readable expression string.
+    """
+    rendered: str
+    if isinstance(expr, SymConst):
+        rendered = str(expr.value)
+    elif isinstance(expr, SymVar):
+        rendered = expr.name
+    elif isinstance(expr, SymBinaryOp):
+        rendered = str(expr)
+    elif isinstance(expr, SymUnaryOp):
+        rendered = str(expr)
+    elif isinstance(expr, SymPiecewise):
+        rendered = str(expr)
+    else:
+        typing_extensions.assert_never(expr)
+    return rendered
+
+
+def _map_sym_child(child: SymNode, fn: Callable[[SymExpr], SymExpr]) -> SymNode:
+    """Apply ``fn`` to ``child`` when ``child`` is a closed ``SymExpr``, preserving open mocks unchanged.
+
+    Args:
+        child (SymNode): Child symbolic node.
+        fn (Callable[[SymExpr], SymExpr]): Closed ``SymExpr`` endomorphism.
+
+    Returns:
+        SymNode: Transformed child node.
+    """
+    return fn(child) if is_sym_expr(child) else child
+
+
+def _map_sym_expr_children(expr: SymExpr, fn: Callable[[SymExpr], SymExpr]) -> SymExpr:
+    """Map ``fn`` across the immediate ``SymExpr`` children of ``expr`` with ``assert_never`` exhaustiveness.
+
+    Args:
+        expr (SymExpr): Parent closed symbolic expression.
+        fn (Callable[[SymExpr], SymExpr]): Child transformation function.
+
+    Returns:
+        SymExpr: Rebuilt ``SymExpr`` with transformed immediate children.
+    """
+    rebuilt: SymExpr
+    if isinstance(expr, (SymConst, SymVar)):
+        rebuilt = expr
+    elif isinstance(expr, SymBinaryOp):
+        rebuilt = SymBinaryOp(expr.op, _map_sym_child(expr.left, fn), _map_sym_child(expr.right, fn))
+    elif isinstance(expr, SymUnaryOp):
+        rebuilt = SymUnaryOp(expr.op, _map_sym_child(expr.operand, fn))
+    elif isinstance(expr, SymPiecewise):
+        new_cases: list[tuple[SymCondition, SymNode]] = []
+        for cond, branch in expr.cases:
+            mapped_cond: SymCondition = fn(cond) if isinstance(cond, SymNode) and is_sym_expr(cond) else cond
+            new_cases.append((mapped_cond, _map_sym_child(branch, fn)))
+        rebuilt = SymPiecewise(cases=new_cases, default=_map_sym_child(expr.default, fn))
+    else:
+        typing_extensions.assert_never(expr)
+    return rebuilt
+
+
+def _sym_expr_eq(lhs: SymExpr, rhs: SymExpr) -> bool:
+    """Check equivalence of two ``SymExpr`` values via ``SymNode.__eq__``.
+
+    Args:
+        lhs (SymExpr): Left symbolic expression.
+        rhs (SymExpr): Right symbolic expression.
+
+    Returns:
+        bool: True iff ``lhs == rhs``.
+    """
+    return lhs == rhs
+
+
+SYM_EXPR_EQ: typing.Final[Eq[SymExpr]] = Eq(eq=_sym_expr_eq)
+SYM_EXPR_HASH: typing.Final[HashableWitness[SymExpr]] = HashableWitness(
+    eq_witness=SYM_EXPR_EQ,
+    hash_value=hash,
+)
+SYM_EXPR_REWRITE: typing.Final[EndoRewrite[SymExpr]] = EndoRewrite(map_children=_map_sym_expr_children)

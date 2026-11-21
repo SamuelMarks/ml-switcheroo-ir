@@ -2,41 +2,72 @@
 
 from __future__ import annotations
 
+import types
 import typing
+from collections.abc import Mapping
 
 import typing_extensions
 
+from ml_switcheroo_ir.typeclasses.algebra import Eq, HashableWitness, Ring, Semiring
+
 if typing.TYPE_CHECKING:
-    from ml_switcheroo_ir.shapes.ast import SymNode
+    from ml_switcheroo_ir.shapes.ast import SymExpr, SymNode
 
 MonomialType: typing_extensions.TypeAlias = tuple[tuple[str, int], ...]
 
 __all__ = [
     "MonomialType",
+    "POLYNOMIAL_EQ",
+    "POLYNOMIAL_HASH",
+    "POLYNOMIAL_RING",
+    "POLYNOMIAL_SEMIRING",
     "Polynomial",
+    "poly_from_sym_expr",
     "poly_to_symnode",
 ]
 
 
 class Polynomial:
-    """Canonical multivariate polynomial over integer coefficients for symbolic equivalence.
+    """Immutable canonical multivariate polynomial over integer coefficients for symbolic equivalence.
 
     Attributes:
-        terms (dict[MonomialType, int]): Mapping from canonical monomials to integer coefficients.
+        terms (Mapping[MonomialType, int]): Read-only mapping from canonical monomials to integer coefficients.
+        canonical_terms (tuple[tuple[MonomialType, int], ...]): Sorted immutable monomial-coefficient pairs.
     """
 
-    def __init__(self, terms: dict[MonomialType, int] | None = None) -> None:
-        """Initialize a canonical polynomial.
+    def __init__(self, terms: Mapping[MonomialType, int] | None = None) -> None:
+        """Initialize an immutable canonical polynomial.
 
         Args:
-            terms (dict[MonomialType, int] | None): Dictionary mapping canonical monomials
-                (tuples of (var_name, power) sorted) to non-zero integer coefficients.
+            terms (Mapping[MonomialType, int] | None): Mapping from canonical monomials
+                (sorted tuples of ``(var_name, power)``) to integer coefficients.
         """
-        self.terms: dict[MonomialType, int] = {}
+        cleaned: dict[MonomialType, int] = {}
         if terms:
             for mono, coeff in terms.items():
                 if coeff != 0:
-                    self.terms[mono] = coeff
+                    cleaned[mono] = coeff
+        sorted_items = tuple(sorted(cleaned.items()))
+        self._canonical_terms: tuple[tuple[MonomialType, int], ...] = sorted_items
+        self._terms_proxy: Mapping[MonomialType, int] = types.MappingProxyType(dict(sorted_items))
+
+    @property
+    def terms(self) -> Mapping[MonomialType, int]:
+        """Return an immutable mapping view of canonical non-zero monomials to coefficients.
+
+        Returns:
+            Mapping[MonomialType, int]: Read-only monomial-to-coefficient mapping.
+        """
+        return self._terms_proxy
+
+    @property
+    def canonical_terms(self) -> tuple[tuple[MonomialType, int], ...]:
+        """Return sorted immutable ``(monomial, coefficient)`` entries.
+
+        Returns:
+            tuple[tuple[MonomialType, int], ...]: Deterministic canonical term tuple.
+        """
+        return self._canonical_terms
 
     @classmethod
     def from_const(cls, val: int) -> Polynomial:
@@ -256,15 +287,23 @@ class Polynomial:
         """
         if not isinstance(other, Polynomial):
             return False
-        return self.terms == other.terms
+        return self._canonical_terms == other._canonical_terms
 
     def __hash__(self) -> int:
-        """Compute hash of polynomial terms.
+        """Compute deterministic hash of immutable canonical polynomial terms.
 
         Returns:
-            int: Hash code.
+            int: Hash code coherent with ``__eq__``.
         """
-        return hash(tuple(sorted(self.terms.items())))
+        return hash(self._canonical_terms)
+
+    def neg(self) -> Polynomial:
+        """Return the additive inverse ``-self`` of this polynomial.
+
+        Returns:
+            Polynomial: Negated polynomial satisfying ``self.add(self.neg()).is_zero()``.
+        """
+        return Polynomial({mono: -coeff for mono, coeff in self._canonical_terms})
 
     def __str__(self) -> str:
         """Return string representation of polynomial.
@@ -364,3 +403,70 @@ def poly_to_symnode(poly: Polynomial) -> SymNode:
         res_node = SymBinaryOp(op, res_node, term_node)
 
     return res_node
+
+
+def poly_from_sym_expr(expr: SymExpr) -> Polynomial | None:
+    """Lower a closed ``SymExpr`` into its canonical ``Polynomial`` if polynomial, else ``None``.
+
+    Dispatches exhaustively over ``SymConst | SymVar | SymBinaryOp | SymUnaryOp | SymPiecewise``
+    using ``typing_extensions.assert_never``.
+
+    Args:
+        expr (SymExpr): Closed symbolic expression AST node.
+
+    Returns:
+        Polynomial | None: Canonical polynomial or ``None`` if non-polynomial (e.g. ``//``, ``max``, piecewise).
+    """
+    from ml_switcheroo_ir.shapes.ast import SymBinaryOp, SymConst, SymPiecewise, SymUnaryOp, SymVar
+
+    lowered: Polynomial | None
+    if isinstance(expr, SymConst):
+        lowered = Polynomial.from_const(expr.value)
+    elif isinstance(expr, SymVar):
+        lowered = Polynomial.from_var(expr.name)
+    elif isinstance(expr, SymBinaryOp):
+        lowered = expr.to_polynomial()
+    elif isinstance(expr, SymUnaryOp):
+        inner = expr.operand.to_polynomial()
+        if inner is not None and expr.op == "-":
+            lowered = Polynomial.from_const(0).sub(inner)
+        elif inner is not None and expr.op == "+":
+            lowered = inner
+        else:
+            lowered = expr.to_polynomial()
+    elif isinstance(expr, SymPiecewise):
+        lowered = expr.to_polynomial()
+    else:
+        typing_extensions.assert_never(expr)
+    return lowered
+
+
+def _poly_eq(lhs: Polynomial, rhs: Polynomial) -> bool:
+    """Compare two ``Polynomial`` instances for canonical equality.
+
+    Args:
+        lhs (Polynomial): Left polynomial.
+        rhs (Polynomial): Right polynomial.
+
+    Returns:
+        bool: True iff ``lhs == rhs``.
+    """
+    return lhs == rhs
+
+
+POLYNOMIAL_EQ: typing.Final[Eq[Polynomial]] = Eq(eq=_poly_eq)
+POLYNOMIAL_HASH: typing.Final[HashableWitness[Polynomial]] = HashableWitness(
+    eq_witness=POLYNOMIAL_EQ,
+    hash_value=hash,
+)
+POLYNOMIAL_SEMIRING: typing.Final[Semiring[Polynomial]] = Semiring(
+    zero=lambda: Polynomial.from_const(0),
+    one=lambda: Polynomial.from_const(1),
+    add=Polynomial.add,
+    mul=Polynomial.mul,
+)
+POLYNOMIAL_RING: typing.Final[Ring[Polynomial]] = Ring(
+    semiring=POLYNOMIAL_SEMIRING,
+    neg=Polynomial.neg,
+    sub=Polynomial.sub,
+)

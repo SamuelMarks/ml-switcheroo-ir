@@ -2,19 +2,52 @@
 
 from __future__ import annotations
 
+import typing
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from enum import Enum
 
 import pydantic
+import typing_extensions
 
 from ml_switcheroo_ir.schema.base import REGISTRY_LOCK, LazyMetadataMap
 from ml_switcheroo_ir.schema.mlir_registry import build_core_mlir_dialects
+from ml_switcheroo_ir.typeclasses.algebra import (
+    INT_ORD,
+    BoundedLattice,
+    Eq,
+    Monoid,
+    Ord,
+    Semigroup,
+    contramap_ord,
+    tuple_monoid,
+)
+from ml_switcheroo_ir.typeclasses.outcome import (
+    Invalid,
+    Valid,
+    Validation,
+    collect_unit_validations,
+)
+
+_TargetT = typing.TypeVar("_TargetT")
 
 __all__ = [
     "CORE_MLIR_DIALECTS",
     "KNOWN_SYNONYMS",
+    "VALIDATION_ERRORS_MONOID",
+    "VALIDATION_ERRORS_SEMIGROUP",
+    "VALIDATION_LEVEL_EQ",
+    "VALIDATION_LEVEL_LATTICE",
+    "VALIDATION_LEVEL_ORD",
     "ValidationError",
     "ValidationLevel",
+    "ValidationRule",
+    "combine_rules",
     "compute_levenshtein",
+    "errors_from_validation",
+    "rule_from_errors_fn",
+    "validation_level_rank",
+    "when_predicate",
 ]
 
 
@@ -111,6 +144,31 @@ class ValidationLevel(Enum):
     ERROR = "ERROR"
 
 
+def validation_level_rank(level: ValidationLevel) -> int:
+    """Map ``ValidationLevel`` exhaustively to its monotonic lattice rank ``0..3``.
+
+    Order: ``LENIENT (0) < WARNING (1) < ERROR (2) < STRICT (3)``.
+
+    Args:
+        level (ValidationLevel): Validation severity/strictness enum value.
+
+    Returns:
+        int: Monotonic integer rank in ``{0, 1, 2, 3}``.
+    """
+    rank: int
+    if level is ValidationLevel.LENIENT:
+        rank = 0
+    elif level is ValidationLevel.WARNING:
+        rank = 1
+    elif level is ValidationLevel.ERROR:
+        rank = 2
+    elif level is ValidationLevel.STRICT:
+        rank = 3
+    else:
+        typing_extensions.assert_never(level)
+    return rank
+
+
 class _ValidationErrorPayload(pydantic.BaseModel):
     """Pydantic schema validating ValidationError fields.
 
@@ -186,3 +244,170 @@ class ValidationError(Exception):
             str: Human-readable error message with severity level.
         """
         return f"[{self.level.value}] Node '{self.node_id}' attribute '{self.attribute}': {self.message}"
+
+    def _as_tuple(self) -> tuple[str, str, str, ValidationLevel, str | None]:
+        """Project ``ValidationError`` fields into an immutable canonical comparison tuple.
+
+        Returns:
+            tuple[str, str, str, ValidationLevel, str | None]: Canonical field tuple.
+        """
+        return (self.node_id, self.attribute, self.message, self.level, self.suggested_fix)
+
+    def __eq__(self, other: object) -> bool:
+        """Check structural equality between two ``ValidationError`` instances.
+
+        Args:
+            other (object): Candidate comparison object.
+
+        Returns:
+            bool: True iff ``other`` is a ``ValidationError`` with identical fields.
+        """
+        if not isinstance(other, ValidationError):
+            return False
+        return self._as_tuple() == other._as_tuple()
+
+    def __hash__(self) -> int:
+        """Compute deterministic hash coherent with ``ValidationError.__eq__``.
+
+        Returns:
+            int: Structural hash code.
+        """
+        return hash(self._as_tuple())
+
+
+VALIDATION_LEVEL_ORD: typing.Final[Ord[ValidationLevel]] = contramap_ord(INT_ORD, validation_level_rank)
+VALIDATION_LEVEL_EQ: typing.Final[Eq[ValidationLevel]] = VALIDATION_LEVEL_ORD.eq_witness
+VALIDATION_LEVEL_LATTICE: typing.Final[BoundedLattice[ValidationLevel]] = BoundedLattice(
+    eq_witness=VALIDATION_LEVEL_EQ,
+    bottom=lambda: ValidationLevel.LENIENT,
+    top=lambda: ValidationLevel.STRICT,
+    join=VALIDATION_LEVEL_ORD.max_val,
+    meet=VALIDATION_LEVEL_ORD.min_val,
+)
+
+VALIDATION_ERRORS_MONOID: typing.Final[Monoid[tuple[ValidationError, ...]]] = tuple_monoid()
+VALIDATION_ERRORS_SEMIGROUP: typing.Final[Semigroup[tuple[ValidationError, ...]]] = VALIDATION_ERRORS_MONOID.semigroup
+
+
+@dataclass(frozen=True)
+class ValidationRule(typing.Generic[_TargetT]):
+    """Composable applicative validation rule over target ``_TargetT`` (node, sequence, or graph).
+
+    Attributes:
+        name (str): Descriptive rule identifier.
+        run (Callable[[_TargetT], Validation[tuple[ValidationError, ...], None]]):
+            Total check returning ``Valid(None)`` or ``Invalid(errors_tuple)``.
+    """
+
+    name: str
+    run: Callable[[_TargetT], Validation[tuple[ValidationError, ...], None]]
+
+
+def rule_from_errors_fn(
+    name: str,
+    fn: Callable[[_TargetT], Sequence[ValidationError]],
+) -> ValidationRule[_TargetT]:
+    """Lift a legacy ``_TargetT -> Sequence[ValidationError]`` function into a ``ValidationRule``.
+
+    Args:
+        name (str): Rule identifier.
+        fn (Callable[[_TargetT], Sequence[ValidationError]]): Diagnostic list producer.
+
+    Returns:
+        ValidationRule[_TargetT]: Applicative ``ValidationRule`` witness.
+    """
+
+    def _execute(target: _TargetT) -> Validation[tuple[ValidationError, ...], None]:
+        """Run ``fn(target)`` and wrap non-empty errors in ``Invalid``.
+
+        Args:
+            target (_TargetT): Target value under validation.
+
+        Returns:
+            Validation[tuple[ValidationError, ...], None]: ``Valid(None)`` or ``Invalid(tuple(errs))``.
+        """
+        errs = tuple(fn(target))
+        if errs:
+            return Invalid(errs)
+        return Valid(None)
+
+    return ValidationRule(name=name, run=_execute)
+
+
+def combine_rules(rules: Sequence[ValidationRule[_TargetT]], name: str = "combined") -> ValidationRule[_TargetT]:
+    """Applicatively compose ``rules`` via ``VALIDATION_ERRORS_MONOID`` without short-circuiting.
+
+    Args:
+        rules (Sequence[ValidationRule[_TargetT]]): Ordered rules to execute independently.
+        name (str): Composite rule identifier.
+
+    Returns:
+        ValidationRule[_TargetT]: Combined rule accumulating all diagnostics across ``rules``.
+    """
+    frozen_rules = tuple(rules)
+
+    def _run_all(target: _TargetT) -> Validation[tuple[ValidationError, ...], None]:
+        """Run every rule in ``frozen_rules`` and accumulate errors monoidally.
+
+        Args:
+            target (_TargetT): Target value under validation.
+
+        Returns:
+            Validation[tuple[ValidationError, ...], None]: ``Valid(None)`` if all pass else ``Invalid``.
+        """
+        accumulated = collect_unit_validations(
+            VALIDATION_ERRORS_MONOID,
+            (rule.run(target) for rule in frozen_rules),
+        )
+        if accumulated:
+            return Invalid(accumulated)
+        return Valid(None)
+
+    return ValidationRule(name=name, run=_run_all)
+
+
+def when_predicate(
+    pred: Callable[[_TargetT], bool],
+    rule: ValidationRule[_TargetT],
+) -> ValidationRule[_TargetT]:
+    """Guard ``rule`` so it runs only when ``pred(target)`` holds, yielding ``Valid(None)`` otherwise.
+
+    Args:
+        pred (Callable[[_TargetT], bool]): Activation predicate on ``_TargetT``.
+        rule (ValidationRule[_TargetT]): Underlying rule to execute when ``pred`` returns True.
+
+    Returns:
+        ValidationRule[_TargetT]: Guarded validation rule.
+    """
+
+    def _guarded(target: _TargetT) -> Validation[tuple[ValidationError, ...], None]:
+        """Evaluate ``pred(target)`` before delegating to ``rule.run``.
+
+        Args:
+            target (_TargetT): Target value under validation.
+
+        Returns:
+            Validation[tuple[ValidationError, ...], None]: ``Valid(None)`` when skipped else ``rule.run(target)``.
+        """
+        if not pred(target):
+            return Valid(None)
+        return rule.run(target)
+
+    return ValidationRule(name=f"when({rule.name})", run=_guarded)
+
+
+def errors_from_validation(outcome: Validation[tuple[ValidationError, ...], None]) -> list[ValidationError]:
+    """Extract a mutable ``list[ValidationError]`` from a unit ``Validation`` outcome.
+
+    Args:
+        outcome (Validation[tuple[ValidationError, ...], None]): Validation outcome.
+
+    Returns:
+        list[ValidationError]: Empty list on ``Valid``, or list of accumulated errors on ``Invalid``.
+    """
+    if isinstance(outcome, Valid):
+        return []
+    elif isinstance(outcome, Invalid):
+        return list(outcome.errors)
+    else:
+        typing_extensions.assert_never(outcome)

@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import math
+import typing
 from collections.abc import Mapping
 
 import pydantic
 
 from ml_switcheroo_ir.distributed import PartitionAxisElement, PartitionSpec
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalMesh, LogicalNode
+from ml_switcheroo_ir.identifiers import is_non_bool_int
 from ml_switcheroo_ir.shapes.ast import SymNode
+from ml_switcheroo_ir.typeclasses.algebra import INT_SUM_MONOID, Monoid, Semigroup, dict_monoid
 from ml_switcheroo_ir.types import DType, describe_value_type
 from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel
 
 __all__ = [
+    "COMMUNICATION_VOLUME_MONOID",
     "CommunicationVolumeReport",
     "estimate_communication_volume",
     "estimate_graph_communication_volume",
@@ -125,7 +129,7 @@ def _resolve_node_element_count(
                 element_count *= evaluated
         return element_count
     numel = node.attributes.get("tensor_numel", 1024)
-    return int(numel) if isinstance(numel, int) and not isinstance(numel, bool) else 1024
+    return int(numel) if is_non_bool_int(numel) else 1024
 
 
 def estimate_communication_volume(
@@ -162,11 +166,70 @@ def estimate_communication_volume(
     return tensor_bytes
 
 
+_AXIS_BYTES_MONOID: typing.Final[Monoid[dict[str, int]]] = dict_monoid(INT_SUM_MONOID.semigroup)
+
+
+def _combine_comm_reports(
+    lhs: CommunicationVolumeReport,
+    rhs: CommunicationVolumeReport,
+) -> CommunicationVolumeReport:
+    """Associatively combine two ``CommunicationVolumeReport`` instances.
+
+    Args:
+        lhs (CommunicationVolumeReport): Left report.
+        rhs (CommunicationVolumeReport): Right report.
+
+    Returns:
+        CommunicationVolumeReport: Merged report with summed byte totals and axis/op maps.
+    """
+    return CommunicationVolumeReport(
+        total_volume_bytes=INT_SUM_MONOID.combine(lhs.total_volume_bytes, rhs.total_volume_bytes),
+        by_axis=_AXIS_BYTES_MONOID.combine(lhs.by_axis, rhs.by_axis),
+        by_op=_AXIS_BYTES_MONOID.combine(lhs.by_op, rhs.by_op),
+    )
+
+
+COMMUNICATION_VOLUME_MONOID: typing.Final[Monoid[CommunicationVolumeReport]] = Monoid(
+    empty=lambda: CommunicationVolumeReport(total_volume_bytes=0, by_axis={}, by_op={}),
+    semigroup=Semigroup(combine=_combine_comm_reports),
+)
+
+
+def _node_communication_report(
+    node: LogicalNode,
+    mesh: LogicalMesh | None,
+    symbol_bindings: Mapping[str, int] | None,
+) -> CommunicationVolumeReport:
+    """Build a single-node ``CommunicationVolumeReport`` for collective nodes or ``empty()`` otherwise.
+
+    Args:
+        node (LogicalNode): Graph node to inspect.
+        mesh (LogicalMesh | None): Active logical mesh if available.
+        symbol_bindings (Mapping[str, int] | None): Optional symbolic dimension bindings.
+
+    Returns:
+        CommunicationVolumeReport: Single-node communication report or neutral empty report.
+    """
+    if (
+        node.domain in ("collective", "ml.switcheroo.collective")
+        or node.op_type.startswith("collective.")
+        or node.op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all")
+    ):
+        vol = estimate_communication_volume(node, mesh, symbol_bindings=symbol_bindings)
+        axis = str(node.attributes.get("mesh_axis", "unknown"))
+        return CommunicationVolumeReport(
+            total_volume_bytes=vol,
+            by_axis={axis: vol},
+            by_op={node.op_type: vol},
+        )
+    return COMMUNICATION_VOLUME_MONOID.empty()
+
+
 def estimate_graph_communication_volume(
     graph: LogicalGraph,
     symbol_bindings: Mapping[str, int] | None = None,
 ) -> CommunicationVolumeReport:
-    """Aggregate analytical communication volume across all collective operators in a graph.
+    """Aggregate analytical communication volume across all collective operators via ``COMMUNICATION_VOLUME_MONOID``.
 
     Args:
         graph (LogicalGraph): The computational graph to analyze.
@@ -176,27 +239,9 @@ def estimate_graph_communication_volume(
         CommunicationVolumeReport: Report with total communication volume in bytes,
             and breakdowns by mesh axis and operator type.
     """
-    total_bytes = 0
-    by_axis: dict[str, int] = {}
-    by_op: dict[str, int] = {}
-
-    for node in graph.nodes.values():
-        if (
-            node.domain in ("collective", "ml.switcheroo.collective")
-            or node.op_type.startswith("collective.")
-            or node.op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all")
-        ):
-            logical_mesh = graph.mesh if isinstance(graph.mesh, LogicalMesh) else None
-            vol = estimate_communication_volume(node, logical_mesh, symbol_bindings=symbol_bindings)
-            total_bytes += vol
-            axis = str(node.attributes.get("mesh_axis", "unknown"))
-            by_axis[axis] = by_axis.get(axis, 0) + vol
-            by_op[node.op_type] = by_op.get(node.op_type, 0) + vol
-
-    return CommunicationVolumeReport(
-        total_volume_bytes=total_bytes,
-        by_axis=by_axis,
-        by_op=by_op,
+    logical_mesh = graph.mesh if isinstance(graph.mesh, LogicalMesh) else None
+    return COMMUNICATION_VOLUME_MONOID.mconcat(
+        _node_communication_report(node, logical_mesh, symbol_bindings) for node in graph.nodes.values()
     )
 
 

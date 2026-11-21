@@ -7,18 +7,59 @@ import json
 import logging
 import os
 import typing
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 
 import pydantic
 import typing_extensions
 
 from ml_switcheroo_ir.schema.ghost import StandardMap
 from ml_switcheroo_ir.snapshots import get_effective_snapshot_dir
+from ml_switcheroo_ir.typeclasses.outcome import Err, Ok, Result, and_then
 from ml_switcheroo_ir.types import AttributeValue, JsonValue
 
 _logger = logging.getLogger(__name__)
 
+_IsoA = typing.TypeVar("_IsoA")
+_IsoB = typing.TypeVar("_IsoB")
+_IsoC = typing.TypeVar("_IsoC")
+
 RoleFrameworkMap: typing_extensions.TypeAlias = dict[str, list[str]]
+
+
+@dataclass(frozen=True)
+class PartialIso(typing.Generic[_IsoA, _IsoB]):
+    """Bidirectional partial isomorphism witness between representations ``_IsoA`` and ``_IsoB``.
+
+    Attributes:
+        forward (Callable[[_IsoA], Result[str, _IsoB]]): Fallible forward morphism ``_IsoA -> Result[str, _IsoB]``.
+        backward (Callable[[_IsoB], Result[str, _IsoA]]): Fallible inverse morphism ``_IsoB -> Result[str, _IsoA]``.
+    """
+
+    forward: Callable[[_IsoA], Result[str, _IsoB]]
+    backward: Callable[[_IsoB], Result[str, _IsoA]]
+
+    def inverse(self) -> PartialIso[_IsoB, _IsoA]:
+        """Swap ``forward`` and ``backward`` to obtain the inverse ``PartialIso[_IsoB, _IsoA]``.
+
+        Returns:
+            PartialIso[_IsoB, _IsoA]: Inverted partial isomorphism witness.
+        """
+        return PartialIso(forward=self.backward, backward=self.forward)
+
+    def compose(self, other: PartialIso[_IsoB, _IsoC]) -> PartialIso[_IsoA, _IsoC]:
+        """Sequentially compose ``self`` (``_IsoA <-> _IsoB``) with ``other`` (``_IsoB <-> _IsoC``).
+
+        Args:
+            other (PartialIso[_IsoB, _IsoC]): Downstream partial isomorphism.
+
+        Returns:
+            PartialIso[_IsoA, _IsoC]: Composed end-to-end partial isomorphism.
+        """
+        return PartialIso(
+            forward=lambda a: and_then(self.forward(a), other.forward),
+            backward=lambda c: and_then(other.backward(c), self.backward),
+        )
 
 
 def _is_4d_nested_sequence(
@@ -49,12 +90,43 @@ class OperationTranslationSpec(pydantic.BaseModel):
     Attributes:
         roles (dict[str, RoleFrameworkMap]): Mapping of semantic role names to framework parameter lists.
         defaults (dict[str, dict[str, JsonValue]] | None): Optional default parameter values per framework.
+        metadata (dict[str, JsonValue] | None): Optional extra snapshot metadata keys normalized under strict mode.
     """
 
-    model_config = pydantic.ConfigDict(extra="allow")
+    model_config = pydantic.ConfigDict(extra="forbid")
 
     roles: dict[str, RoleFrameworkMap] = pydantic.Field(default_factory=dict)
     defaults: dict[str, dict[str, JsonValue]] | None = None
+    metadata: dict[str, JsonValue] | None = None
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _collect_extra_metadata(
+        cls,
+        raw: OperationTranslationSpec | Mapping[str, JsonValue],
+    ) -> OperationTranslationSpec | dict[str, JsonValue]:
+        """Fold any non-standard snapshot keys into ``metadata`` so ``extra='forbid'`` remains sound.
+
+        Args:
+            raw (OperationTranslationSpec | Mapping[str, JsonValue]): Candidate spec or mapping.
+
+        Returns:
+            OperationTranslationSpec | dict[str, JsonValue]: Normalized mapping with strict fields only.
+        """
+        if isinstance(raw, OperationTranslationSpec) or not isinstance(raw, Mapping):
+            return raw
+        known = {"roles", "defaults", "metadata"}
+        extras = {k: v for k, v in raw.items() if k not in known}
+        if not extras:
+            return dict(raw)
+        merged_meta: dict[str, JsonValue] = {}
+        existing_meta = raw.get("metadata")
+        if isinstance(existing_meta, Mapping):
+            merged_meta.update(existing_meta)
+        merged_meta.update(extras)
+        out = {k: v for k, v in raw.items() if k in known}
+        out["metadata"] = merged_meta
+        return out
 
 
 class TranslationMap(pydantic.BaseModel):
@@ -310,6 +382,7 @@ __all__ = [
     "NestedTensorSequence",
     "OperationTranslationSpec",
     "ParameterTranslationEngine",
+    "PartialIso",
     "PermutableTensorProtocol",
     "PermutedWeightDescriptor",
     "RoleFrameworkMap",
@@ -1070,12 +1143,15 @@ class ParameterTranslationEngine:
         Raises:
             ValueError: If source_format or target_format is invalid or ranks mismatch.
         """
-        src = source_format.upper().strip()
-        tgt = target_format.upper().strip()
-        if len(src) != 4 or len(tgt) != 4:
-            raise ValueError(f"Conv weight formats must have rank 4: '{src}', '{tgt}'.")
+        raw_src = source_format.upper().strip()
+        raw_tgt = target_format.upper().strip()
+        if len(raw_src) != 4 or len(raw_tgt) != 4:
+            raise ValueError(f"Conv weight formats must have rank 4: '{raw_src}', '{raw_tgt}'.")
+        axis_map = {"N": "O", "C": "I", "H": "H", "W": "W"}
+        src = "".join(axis_map[ch] for ch in raw_src) if sorted(raw_src) == sorted("NCHW") else raw_src
+        tgt = "".join(axis_map[ch] for ch in raw_tgt) if sorted(raw_tgt) == sorted("NCHW") else raw_tgt
         if sorted(src) != sorted("OIHW") or sorted(tgt) != sorted("OIHW"):
-            raise ValueError(f"Formats must be permutations of 'OIHW': '{src}', '{tgt}'.")
+            raise ValueError(f"Formats must be permutations of 'OIHW': '{raw_src}', '{raw_tgt}'.")
         if src == tgt:
             return weights
 
@@ -1235,3 +1311,176 @@ class ParameterTranslationEngine:
             merged_flat = [*q_weight, *k_weight, *v_weight]
             return tuple(merged_flat) if is_tup else merged_flat
         return MergedQKVWeightDescriptor("qkv", (q_weight, k_weight, v_weight), concat_dim)
+
+    def translate_parameter_result(
+        self,
+        operation: str,
+        param_name: str,
+        source_framework: str,
+        target_framework: str,
+    ) -> Result[str, str]:
+        """Total variant of ``translate_parameter`` returning ``Result[str, str]`` without raising.
+
+        Args:
+            operation (str): Canonical operation name.
+            param_name (str): Source framework parameter name.
+            source_framework (str): Source framework identifier.
+            target_framework (str): Target framework identifier.
+
+        Returns:
+            Result[str, str]: ``Ok(target_param)`` or ``Err(diagnostic)``.
+        """
+        try:
+            return Ok(self.translate_parameter(operation, param_name, source_framework, target_framework))
+        except (KeyError, ValueError) as exc:
+            return Err(str(exc))
+
+    def translate_attributes_result(
+        self,
+        operation: str,
+        attributes: Mapping[str, AttributeValue],
+        source_framework: str,
+        target_framework: str,
+        allow_passthrough: bool = False,
+    ) -> Result[str, dict[str, AttributeValue]]:
+        """Total variant of ``translate_attributes`` returning ``Result[str, dict[str, AttributeValue]]``.
+
+        Args:
+            operation (str): Canonical operation name.
+            attributes (Mapping[str, AttributeValue]): Source attribute mapping.
+            source_framework (str): Source framework identifier.
+            target_framework (str): Target framework identifier.
+            allow_passthrough (bool): Whether unmapped keys pass through unchanged.
+
+        Returns:
+            Result[str, dict[str, AttributeValue]]: ``Ok(translated_dict)`` or ``Err(diagnostic)``.
+        """
+        try:
+            return Ok(
+                self.translate_attributes(
+                    operation,
+                    attributes,
+                    source_framework,
+                    target_framework,
+                    allow_passthrough=allow_passthrough,
+                )
+            )
+        except (KeyError, ValueError) as exc:
+            return Err(str(exc))
+
+    def conv_layout_iso(
+        self,
+        source_format: str,
+        target_format: str,
+    ) -> PartialIso[TensorLike, TensorLike]:
+        """Construct a bidirectional ``PartialIso`` permuting 4D conv layouts ``source_format <-> target_format``.
+
+        Args:
+            source_format (str): Source 4D kernel layout (permutation of ``'OIHW'``).
+            target_format (str): Target 4D kernel layout (permutation of ``'OIHW'``).
+
+        Returns:
+            PartialIso[TensorLike, TensorLike]: Bidirectional layout partial isomorphism.
+        """
+
+        def _fwd(weights: TensorLike) -> Result[str, TensorLike]:
+            """Permute ``source_format -> target_format``.
+
+            Args:
+                weights (TensorLike): Source kernel tensor or nested list.
+
+            Returns:
+                Result[str, TensorLike]: Permuted target tensor or ``Err``.
+            """
+            try:
+                permuted = self.permute_conv_weights(weights, source_format, target_format)
+            except ValueError as exc:
+                return Err(str(exc))
+            if isinstance(permuted, PermutedWeightDescriptor):
+                return Err("Symbolic PermutedWeightDescriptor requires concrete tensor for PartialIso.")
+            return Ok(permuted)
+
+        def _bwd(weights: TensorLike) -> Result[str, TensorLike]:
+            """Permute ``target_format -> source_format``.
+
+            Args:
+                weights (TensorLike): Target kernel tensor or nested list.
+
+            Returns:
+                Result[str, TensorLike]: Restored source tensor or ``Err``.
+            """
+            try:
+                restored = self.permute_conv_weights(weights, target_format, source_format)
+            except ValueError as exc:
+                return Err(str(exc))
+            if isinstance(restored, PermutedWeightDescriptor):
+                return Err("Symbolic PermutedWeightDescriptor requires concrete tensor for PartialIso.")
+            return Ok(restored)
+
+        return PartialIso(forward=_fwd, backward=_bwd)
+
+    def qkv_split_merge_iso(
+        self,
+        num_heads: int,
+        num_kv_heads: int | None,
+        head_dim: int,
+        dim: int = 0,
+    ) -> PartialIso[TensorLike, tuple[TensorLike, TensorLike, TensorLike]]:
+        """Construct a bidirectional ``PartialIso`` splitting/merging fused QKV sequence weights.
+
+        Args:
+            num_heads (int): Number of query attention heads.
+            num_kv_heads (int | None): Number of key/value heads (``None`` for MHA).
+            head_dim (int): Dimension per attention head.
+            dim (int): Split/concatenation axis (0 or 1).
+
+        Returns:
+            PartialIso[TensorLike, tuple[TensorLike, TensorLike, TensorLike]]:
+                Bidirectional ``fused_qkv <-> (q, k, v)`` partial isomorphism.
+        """
+
+        def _split(fused: TensorLike) -> Result[str, tuple[TensorLike, TensorLike, TensorLike]]:
+            """Split fused QKV weight into ``(q, k, v)``.
+
+            Args:
+                fused (TensorLike): Fused QKV weight sequence/tensor.
+
+            Returns:
+                Result[str, tuple[TensorLike, TensorLike, TensorLike]]: Split triple or ``Err``.
+            """
+            try:
+                q_w, k_w, v_w = self.split_qkv_weights(
+                    fused,
+                    num_heads,
+                    head_dim,
+                    split_dim=dim,
+                    num_kv_heads=num_kv_heads,
+                )
+            except ValueError as exc:
+                return Err(str(exc))
+            if (
+                isinstance(q_w, SplitQKVSliceDescriptor)
+                or isinstance(k_w, SplitQKVSliceDescriptor)
+                or isinstance(v_w, SplitQKVSliceDescriptor)
+            ):
+                return Err("Symbolic SplitQKVSliceDescriptor cannot be inverted without concrete slices.")
+            return Ok((q_w, k_w, v_w))
+
+        def _merge(parts: tuple[TensorLike, TensorLike, TensorLike]) -> Result[str, TensorLike]:
+            """Merge ``(q, k, v)`` back into a fused QKV weight.
+
+            Args:
+                parts (tuple[TensorLike, TensorLike, TensorLike]): ``(q, k, v)`` weight triple.
+
+            Returns:
+                Result[str, TensorLike]: Merged QKV weight or ``Err``.
+            """
+            try:
+                merged = self.merge_qkv_weights(parts[0], parts[1], parts[2], concat_dim=dim)
+            except ValueError as exc:
+                return Err(str(exc))
+            if isinstance(merged, MergedQKVWeightDescriptor):
+                return Err("Symbolic MergedQKVWeightDescriptor cannot be inverted without concrete sequences.")
+            return Ok(merged)
+
+        return PartialIso(forward=_split, backward=_merge)

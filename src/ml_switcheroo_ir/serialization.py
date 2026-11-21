@@ -35,22 +35,46 @@ from ml_switcheroo_ir.shapes import (
     SymBinaryOp,
     SymCondition,
     SymConst,
+    SymExpr,
     SymInt,
     SymNode,
     SymPiecewise,
     SymUnaryOp,
     SymVar,
     format_symbolic_protocol_expr,
+    is_sym_expr,
     parse_symbolic_expr,
 )
+from ml_switcheroo_ir.typeclasses import Codec, CodecError, Err, JsonCodec, Ok, Result
 from ml_switcheroo_ir.types import (
+    AttrBool,
+    AttrBytes,
+    AttrCompositeTerm,
+    AttrDomainTerm,
+    AttrDType,
+    AttrFloat,
     AttributeValue,
+    AttrInt,
+    AttrMap,
+    AttrModel,
+    AttrNone,
+    AttrProtocolLeaf,
+    AttrScalarTerm,
+    AttrSeq,
+    AttrShape,
+    AttrStr,
+    AttrSymInt,
+    AttrSymNode,
+    AttrTensorSpec,
+    AttrTerm,
     DType,
     InitializerValue,
     JsonValue,
     TensorShape,
     TensorSpec,
     _encode_json_safe_protocol_leaf,
+    describe_value_type,
+    project_attribute_value,
 )
 
 if typing.TYPE_CHECKING:
@@ -72,7 +96,16 @@ RawGraphValue: typing_extensions.TypeAlias = typing.Union[
 _TAG_KEY: typing.Final[str] = "__sw_type__"
 
 __all__ = [
+    "ATTRIBUTE_VALUE_JSON_CODEC",
+    "DIMENSION_JSON_CODEC",
+    "DTYPE_JSON_CODEC",
+    "LOGICAL_GRAPH_JSON_CODEC",
+    "LOGICAL_NODE_JSON_CODEC",
+    "PARTITION_SPEC_JSON_CODEC",
     "RawGraphValue",
+    "SYM_EXPR_JSON_CODEC",
+    "TENSOR_SHAPE_JSON_CODEC",
+    "TENSOR_SPEC_JSON_CODEC",
     "ZstdCompressorProtocol",
     "ZstdDecompressorProtocol",
     "ZstdModuleProtocol",
@@ -92,6 +125,8 @@ __all__ = [
     "_stream_parse_graph",
     "_stream_parse_nodes_section",
     "_stream_write_graph",
+    "graph_from_dict_result",
+    "graph_from_json_result",
     "graph_to_dict",
     "zstandard",
 ]
@@ -175,6 +210,49 @@ def _encode_sym_condition(cond: SymCondition) -> JsonValue:
     return str(cond)
 
 
+def _encode_sym_expr(expr: SymExpr) -> dict[str, JsonValue]:
+    """Exhaustively encode a closed ``SymExpr`` into a lossless tagged Format-A JSON dictionary.
+
+    Args:
+        expr (SymExpr): Closed symbolic expression node to encode.
+
+    Returns:
+        dict[str, JsonValue]: Tagged JSON dictionary preserving exact AST structure.
+    """
+    payload: dict[str, JsonValue]
+    if isinstance(expr, SymVar):
+        payload = {_TAG_KEY: "SymNode", "expr": str(expr), "kind": "var", "name": expr.name}
+    elif isinstance(expr, SymConst):
+        payload = {_TAG_KEY: "SymNode", "expr": str(expr), "kind": "const", "value": expr.value}
+    elif isinstance(expr, SymBinaryOp):
+        payload = {
+            _TAG_KEY: "SymNode",
+            "expr": str(expr),
+            "kind": "binary_op",
+            "left": _encode_symnode(expr.left),
+            "op": expr.op,
+            "right": _encode_symnode(expr.right),
+        }
+    elif isinstance(expr, SymUnaryOp):
+        payload = {
+            _TAG_KEY: "SymNode",
+            "expr": str(expr),
+            "kind": "unary_op",
+            "op": expr.op,
+            "operand": _encode_symnode(expr.operand),
+        }
+    elif isinstance(expr, SymPiecewise):
+        payload = {
+            _TAG_KEY: "SymNode",
+            "cases": [[_encode_sym_condition(c), _encode_symnode(e)] for c, e in expr.cases],
+            "default": _encode_symnode(expr.default),
+            "kind": "piecewise",
+        }
+    else:
+        typing_extensions.assert_never(expr)
+    return payload
+
+
 def _encode_symnode(node: SymNode) -> dict[str, JsonValue]:
     """Encode a ``SymNode`` AST into a lossless tagged JSON dictionary.
 
@@ -184,34 +262,8 @@ def _encode_symnode(node: SymNode) -> dict[str, JsonValue]:
     Returns:
         dict[str, JsonValue]: Tagged JSON dictionary preserving exact AST structure.
     """
-    if isinstance(node, SymVar):
-        return {_TAG_KEY: "SymNode", "expr": str(node), "kind": "var", "name": node.name}
-    if isinstance(node, SymConst):
-        return {_TAG_KEY: "SymNode", "expr": str(node), "kind": "const", "value": node.value}
-    if isinstance(node, SymBinaryOp):
-        return {
-            _TAG_KEY: "SymNode",
-            "expr": str(node),
-            "kind": "binary_op",
-            "left": _encode_symnode(node.left),
-            "op": node.op,
-            "right": _encode_symnode(node.right),
-        }
-    if isinstance(node, SymUnaryOp):
-        return {
-            _TAG_KEY: "SymNode",
-            "expr": str(node),
-            "kind": "unary_op",
-            "op": node.op,
-            "operand": _encode_symnode(node.operand),
-        }
-    if isinstance(node, SymPiecewise):
-        return {
-            _TAG_KEY: "SymNode",
-            "cases": [[_encode_sym_condition(c), _encode_symnode(e)] for c, e in node.cases],
-            "default": _encode_symnode(node.default),
-            "kind": "piecewise",
-        }
+    if is_sym_expr(node):
+        return _encode_sym_expr(node)
     return {_TAG_KEY: "SymNode", "expr": str(node)}
 
 
@@ -255,14 +307,14 @@ def _decode_piecewise_symnode(raw: Mapping[str, RawGraphValue]) -> SymPiecewise:
     return SymPiecewise(cases=cases, default=_decode_symnode(def_raw))
 
 
-def _decode_symnode(raw: Mapping[str, RawGraphValue]) -> SymNode:
-    """Decode a tagged ``SymNode`` dictionary back into a ``SymNode`` AST.
+def _decode_symnode(raw: Mapping[str, RawGraphValue]) -> SymExpr:
+    """Decode a tagged ``SymNode`` dictionary back into a closed ``SymExpr`` AST.
 
     Args:
         raw (Mapping[str, RawGraphValue]): Tagged dictionary with ``__sw_type__ == 'SymNode'``.
 
     Returns:
-        SymNode: Reconstructed symbolic expression node.
+        SymExpr: Reconstructed closed symbolic expression node.
 
     Raises:
         ValueError: If the tagged ``SymNode`` payload is malformed.
@@ -412,8 +464,107 @@ def _encode_model_attribute_leaf(val: pydantic.BaseModel) -> JsonValue:
     return dumped
 
 
+def _encode_scalar_attr_term(term: AttrScalarTerm) -> JsonValue:
+    """Exhaustively encode an ``AttrScalarTerm`` into Format-A JSON.
+
+    Args:
+        term (AttrScalarTerm): Closed scalar attribute term.
+
+    Returns:
+        JsonValue: Primitive JSON scalar or tagged ``bytes`` envelope.
+    """
+    out: JsonValue
+    if isinstance(term, AttrNone):
+        out = None
+    elif isinstance(term, AttrBool):
+        out = term.value
+    elif isinstance(term, AttrInt):
+        out = term.value
+    elif isinstance(term, AttrFloat):
+        out = term.value
+    elif isinstance(term, AttrStr):
+        out = term.value
+    elif isinstance(term, AttrBytes):
+        out = _encode_rich_attribute_leaf(term.value)
+    else:
+        typing_extensions.assert_never(term)
+    return out
+
+
+def _encode_domain_attr_term(term: AttrDomainTerm) -> JsonValue:
+    """Exhaustively encode an ``AttrDomainTerm`` into Format-A JSON.
+
+    Args:
+        term (AttrDomainTerm): Closed domain/model/protocol attribute term.
+
+    Returns:
+        JsonValue: Tagged JSON envelope or model dump.
+    """
+    out: JsonValue
+    if isinstance(term, AttrDType):
+        out = _encode_rich_attribute_leaf(term.value)
+    elif isinstance(term, AttrShape):
+        out = _encode_rich_attribute_leaf(term.value)
+    elif isinstance(term, AttrTensorSpec):
+        out = _encode_rich_attribute_leaf(term.value)
+    elif isinstance(term, AttrSymNode):
+        out = _encode_rich_attribute_leaf(term.value)
+    elif isinstance(term, AttrSymInt):
+        out = _encode_rich_attribute_leaf(term.value)
+    elif isinstance(term, AttrModel):
+        out = _encode_model_attribute_leaf(term.value)
+    elif isinstance(term, AttrProtocolLeaf):
+        out = _encode_json_safe_protocol_leaf(term.value)
+    else:
+        typing_extensions.assert_never(term)
+    return out
+
+
+def _encode_composite_attr_term(term: AttrCompositeTerm) -> JsonValue:
+    """Exhaustively encode an ``AttrCompositeTerm`` into a JSON array or object.
+
+    Args:
+        term (AttrCompositeTerm): Closed sequence or mapping term.
+
+    Returns:
+        JsonValue: Encoded JSON list or dictionary.
+    """
+    out: JsonValue
+    if isinstance(term, AttrSeq):
+        out = [_encode_attr_term(item) for item in term.items]
+    elif isinstance(term, AttrMap):
+        out = {k: _encode_attr_term(v) for k, v in term.entries}
+    else:
+        typing_extensions.assert_never(term)
+    return out
+
+
+def _encode_attr_term(term: AttrTerm) -> JsonValue:
+    """Exhaustively encode a closed ``AttrTerm`` into Format-A JSON with ``assert_never``.
+
+    Args:
+        term (AttrTerm): Closed normal-form attribute term.
+
+    Returns:
+        JsonValue: Encoded JSON structure.
+    """
+    out: JsonValue
+    if isinstance(term, (AttrNone, AttrBool, AttrInt, AttrFloat, AttrStr, AttrBytes)):
+        out = _encode_scalar_attr_term(term)
+    elif isinstance(
+        term,
+        (AttrDType, AttrShape, AttrTensorSpec, AttrSymNode, AttrSymInt, AttrModel, AttrProtocolLeaf),
+    ):
+        out = _encode_domain_attr_term(term)
+    elif isinstance(term, (AttrSeq, AttrMap)):
+        out = _encode_composite_attr_term(term)
+    else:
+        typing_extensions.assert_never(term)
+    return out
+
+
 def _encode_attribute_value(val: AttributeValue) -> JsonValue:
-    """Encode an ``AttributeValue`` into pure JSON types using lossless ``__sw_type__`` envelopes.
+    """Encode an ``AttributeValue`` into pure JSON types via ``AttrTerm`` and ``__sw_type__`` envelopes.
 
     Args:
         val (AttributeValue): IR attribute value.
@@ -421,28 +572,7 @@ def _encode_attribute_value(val: AttributeValue) -> JsonValue:
     Returns:
         JsonValue: Pure JSON-serializable structure.
     """
-    if isinstance(val, (bytes, DType, SymInt, SymNode, TensorShape, TensorSpec)):
-        return _encode_rich_attribute_leaf(val)
-    if val is None or isinstance(val, (bool, int, float, str)):
-        return val
-    if isinstance(val, pydantic.BaseModel):
-        return _encode_model_attribute_leaf(val)
-    if isinstance(
-        val,
-        (
-            DTypeLikeProtocol,
-            DeviceLikeProtocol,
-            SymbolicNodeProtocol,
-            SymbolicIntWrapperProtocol,
-            CustomRuleHandleProtocol,
-            LoopOptionsProtocol,
-            ArrayBufferProtocol,
-        ),
-    ):
-        return _encode_json_safe_protocol_leaf(val)
-    if isinstance(val, Mapping):
-        return {str(k): _encode_attribute_value(v) for k, v in val.items()}
-    return [_encode_attribute_value(item) for item in val]
+    return _encode_attr_term(project_attribute_value(val))
 
 
 def _encode_initializer_value(val: InitializerValue) -> JsonValue:
@@ -1667,3 +1797,435 @@ def _stream_write_graph(
             val_str = json.dumps(header[key], sort_keys=True, indent=indent, default=_encode_special_types)
             fp.write(f"{_indent_json_fragment(val_str, pad1)}{comma}{_NL}")
     fp.write("}")
+
+
+def _decode_dtype_json(raw: JsonValue) -> Result[CodecError, DType]:
+    """Decode ``DType`` from JSON string or ``__sw_type__ == 'DType'`` object.
+
+    Args:
+        raw (JsonValue): Candidate JSON wire value.
+
+    Returns:
+        Result[CodecError, DType]: Decoded ``DType`` or ``CodecError``.
+    """
+    try:
+        if isinstance(raw, Mapping) and raw.get(_TAG_KEY) == "DType":
+            return Ok(DType.from_str(str(raw["value"])))
+        if isinstance(raw, str):
+            return Ok(DType.from_str(raw))
+    except (KeyError, TypeError, ValueError) as exc:
+        return Err(CodecError(path=(), expected="DType", actual_description=describe_value_type(raw), message=str(exc)))
+    return Err(
+        CodecError(
+            path=(),
+            expected="DType string or tagged DType object",
+            actual_description=describe_value_type(raw),
+            message="Invalid DType JSON payload.",
+        )
+    )
+
+
+def _decode_sym_expr_json(raw: JsonValue) -> Result[CodecError, SymExpr]:
+    """Decode closed ``SymExpr`` from tagged ``SymNode`` JSON object or expression string.
+
+    Args:
+        raw (JsonValue): Candidate JSON wire value.
+
+    Returns:
+        Result[CodecError, SymExpr]: Decoded closed ``SymExpr`` or ``CodecError``.
+    """
+    try:
+        if isinstance(raw, Mapping) and raw.get(_TAG_KEY) == "SymNode":
+            return Ok(_decode_symnode(raw))
+        if isinstance(raw, str):
+            return Ok(parse_symbolic_expr(raw))
+    except (KeyError, TypeError, ValueError) as exc:
+        return Err(
+            CodecError(path=(), expected="SymExpr", actual_description=describe_value_type(raw), message=str(exc))
+        )
+    return Err(
+        CodecError(
+            path=(),
+            expected="tagged SymNode object or expression str",
+            actual_description=describe_value_type(raw),
+            message="Invalid SymExpr JSON payload.",
+        )
+    )
+
+
+def _decode_dimension_json(raw: JsonValue) -> Result[CodecError, DimensionType]:
+    """Decode ``DimensionType`` from JSON scalar or tagged symbolic object.
+
+    Args:
+        raw (JsonValue): Candidate JSON wire value.
+
+    Returns:
+        Result[CodecError, DimensionType]: Decoded ``DimensionType`` or ``CodecError``.
+    """
+    if raw is None or isinstance(raw, (list, float)):
+        return Err(
+            CodecError(
+                path=(),
+                expected="int | str | SymNode | SymInt",
+                actual_description=describe_value_type(raw),
+                message="Invalid dimension JSON type.",
+            )
+        )
+    try:
+        return Ok(_parse_raw_dim_entry(raw))
+    except (KeyError, TypeError, ValueError) as exc:
+        return Err(
+            CodecError(path=(), expected="DimensionType", actual_description=describe_value_type(raw), message=str(exc))
+        )
+
+
+def _decode_tensor_shape_json(raw: JsonValue) -> Result[CodecError, TensorShape]:
+    """Decode ``TensorShape`` from JSON array of dimensions or tagged ``TensorShape`` object.
+
+    Args:
+        raw (JsonValue): Candidate JSON wire value.
+
+    Returns:
+        Result[CodecError, TensorShape]: Decoded ``TensorShape`` or ``CodecError``.
+    """
+    if isinstance(raw, Mapping) and raw.get(_TAG_KEY) == "TensorShape":
+        dims_raw = raw.get("dims")
+        if not isinstance(dims_raw, list):
+            return Err(
+                CodecError(
+                    path=("dims",),
+                    expected="JSON array",
+                    actual_description=describe_value_type(dims_raw),
+                    message="TensorShape 'dims' must be a list.",
+                )
+            )
+        raw = dims_raw
+    if not isinstance(raw, list):
+        return Err(
+            CodecError(
+                path=(),
+                expected="TensorShape array or tagged object",
+                actual_description=describe_value_type(raw),
+                message="Expected list of dimensions.",
+            )
+        )
+    dims: list[DimensionType] = []
+    for idx, item in enumerate(raw):
+        step = _decode_dimension_json(item)
+        if isinstance(step, Ok):
+            dims.append(step.value)
+        elif isinstance(step, Err):
+            return Err(step.error.prepend_path(idx))
+        else:
+            typing_extensions.assert_never(step)
+    return Ok(TensorShape(tuple(dims)))
+
+
+def _decode_tensor_spec_json(raw: JsonValue) -> Result[CodecError, TensorSpec]:
+    """Decode ``TensorSpec`` from JSON object ``{'shape': [...], 'dtype': ...}``.
+
+    Args:
+        raw (JsonValue): Candidate JSON wire value.
+
+    Returns:
+        Result[CodecError, TensorSpec]: Decoded ``TensorSpec`` or ``CodecError``.
+    """
+    if not isinstance(raw, Mapping):
+        return Err(
+            CodecError(
+                path=(),
+                expected="TensorSpec JSON object",
+                actual_description=describe_value_type(raw),
+                message="Expected mapping with 'shape' and 'dtype'.",
+            )
+        )
+    shape_res = _decode_tensor_shape_json(raw.get("shape", []))
+    if isinstance(shape_res, Err):
+        return Err(shape_res.error.prepend_path("shape"))
+    dtype_res = _decode_dtype_json(raw.get("dtype", "float32"))
+    if isinstance(dtype_res, Err):
+        return Err(dtype_res.error.prepend_path("dtype"))
+    raw_sp = raw.get("sparsity")
+    if raw_sp is not None and not isinstance(raw_sp, str):
+        return Err(
+            CodecError(
+                path=("sparsity",),
+                expected="str | None",
+                actual_description=describe_value_type(raw_sp),
+                message="TensorSpec sparsity must be string or null.",
+            )
+        )
+    return Ok(TensorSpec(shape=shape_res.value.dims, dtype=dtype_res.value, sparsity=raw_sp))
+
+
+def _encode_partition_spec_json(spec: PartitionSpec) -> JsonValue:
+    """Encode ``PartitionSpec`` into canonical JSON object ``{'axes': [...]}``.
+
+    Args:
+        spec (PartitionSpec): Sharding partition specification.
+
+    Returns:
+        JsonValue: JSON object representation.
+    """
+    axes_json: JsonValue = json.loads(json.dumps(spec.axes))
+    return {"axes": axes_json}
+
+
+def _decode_partition_spec_json(raw: JsonValue) -> Result[CodecError, PartitionSpec]:
+    """Decode ``PartitionSpec`` from ``{'axes': [...]}`` or JSON array.
+
+    Args:
+        raw (JsonValue): Candidate JSON wire value.
+
+    Returns:
+        Result[CodecError, PartitionSpec]: Decoded ``PartitionSpec`` or ``CodecError``.
+    """
+    axes_raw: JsonValue = raw.get("axes") if isinstance(raw, Mapping) else raw
+    if not isinstance(axes_raw, list):
+        return Err(
+            CodecError(
+                path=("axes",) if isinstance(raw, Mapping) else (),
+                expected="JSON array of partition axes",
+                actual_description=describe_value_type(axes_raw),
+                message="PartitionSpec axes must be a JSON list.",
+            )
+        )
+    try:
+        normalized = tuple(_normalize_partition_axis(item) for item in axes_raw)
+        return Ok(PartitionSpec(normalized))
+    except (TypeError, ValueError, pydantic.ValidationError) as exc:
+        return Err(
+            CodecError(
+                path=(),
+                expected="valid PartitionSpec axes",
+                actual_description=describe_value_type(raw),
+                message=str(exc),
+            )
+        )
+
+
+def _decode_attribute_json(raw: JsonValue) -> Result[CodecError, AttributeValue]:
+    """Decode an ``AttributeValue`` from Format-A JSON with structured path-preserving ``CodecError``.
+
+    Args:
+        raw (JsonValue): Candidate JSON wire value.
+
+    Returns:
+        Result[CodecError, AttributeValue]: Decoded ``AttributeValue`` or ``CodecError`` with JSON path.
+    """
+    if isinstance(raw, list):
+        items: list[AttributeValue] = []
+        for idx, item in enumerate(raw):
+            step = _decode_attribute_json(item)
+            if isinstance(step, Ok):
+                items.append(step.value)
+            elif isinstance(step, Err):
+                return Err(step.error.prepend_path(idx))
+            else:
+                typing_extensions.assert_never(step)
+        return Ok(items)
+    if isinstance(raw, Mapping) and _TAG_KEY not in raw:
+        mapped: dict[str, AttributeValue] = {}
+        for k, val in raw.items():
+            key_str = str(k)
+            step = _decode_attribute_json(val)
+            if isinstance(step, Ok):
+                mapped[key_str] = step.value
+            elif isinstance(step, Err):
+                return Err(step.error.prepend_path(key_str))
+            else:
+                typing_extensions.assert_never(step)
+        return Ok(mapped)
+    try:
+        return Ok(_coerce_attribute_value(raw))
+    except (KeyError, TypeError, ValueError, pydantic.ValidationError) as exc:
+        return Err(
+            CodecError(
+                path=(),
+                expected="AttributeValue",
+                actual_description=describe_value_type(raw),
+                message=str(exc),
+            )
+        )
+
+
+def _decode_logical_node_json(raw: JsonValue) -> Result[CodecError, LogicalNode]:
+    """Decode a ``LogicalNode`` from a serialized node JSON object.
+
+    Args:
+        raw (JsonValue): Candidate JSON wire value.
+
+    Returns:
+        Result[CodecError, LogicalNode]: Decoded ``LogicalNode`` or ``CodecError``.
+    """
+    from ml_switcheroo_ir.graph import LogicalGraph as _LogicalGraph
+
+    if not isinstance(raw, Mapping):
+        return Err(
+            CodecError(
+                path=(),
+                expected="LogicalNode JSON object",
+                actual_description=describe_value_type(raw),
+                message="Expected mapping representing LogicalNode.",
+            )
+        )
+    try:
+        return Ok(_parse_node_dict(raw, _LogicalGraph))
+    except (KeyError, TypeError, ValueError, pydantic.ValidationError) as exc:
+        return Err(
+            CodecError(
+                path=(),
+                expected="LogicalNode",
+                actual_description=describe_value_type(raw),
+                message=str(exc),
+            )
+        )
+
+
+def graph_from_dict_result(data: Mapping[str, RawGraphValue]) -> Result[CodecError, LogicalGraph]:
+    """Total dictionary deserializer returning ``Result[CodecError, LogicalGraph]`` with path breadcrumbs.
+
+    Args:
+        data (Mapping[str, RawGraphValue]): Candidate graph dictionary.
+
+    Returns:
+        Result[CodecError, LogicalGraph]: Deserialized ``LogicalGraph`` or ``CodecError``.
+    """
+    from ml_switcheroo_ir.graph import LogicalGraph as _LogicalGraph
+    from ml_switcheroo_ir.graph import NodeDict as _NodeDict
+
+    raw_nodes = data.get("nodes", {})
+    if not isinstance(raw_nodes, Mapping):
+        return Err(
+            CodecError(
+                path=("nodes",),
+                expected="Mapping[str, LogicalNode]",
+                actual_description=describe_value_type(raw_nodes),
+                message="LogicalGraph 'nodes' field must be a JSON object.",
+            )
+        )
+    parsed_nodes: dict[str, LogicalNode] = {}
+    for nid, ndata in raw_nodes.items():
+        if not isinstance(ndata, Mapping):
+            return Err(
+                CodecError(
+                    path=("nodes", str(nid)),
+                    expected="LogicalNode JSON object",
+                    actual_description=describe_value_type(ndata),
+                    message="Each entry in 'nodes' must be a JSON object.",
+                )
+            )
+        try:
+            parsed_nodes[str(nid)] = _parse_node_dict(ndata, _LogicalGraph)
+        except (KeyError, TypeError, ValueError, pydantic.ValidationError) as exc:
+            return Err(
+                CodecError(
+                    path=("nodes", str(nid)),
+                    expected="valid LogicalNode",
+                    actual_description=describe_value_type(ndata),
+                    message=str(exc),
+                )
+            )
+    try:
+        return Ok(_build_graph_from_parsed_sections(_LogicalGraph, _NodeDict(parsed_nodes), data))
+    except (KeyError, TypeError, ValueError, pydantic.ValidationError) as exc:
+        return Err(
+            CodecError(
+                path=(),
+                expected="valid LogicalGraph envelope",
+                actual_description="dict",
+                message=str(exc),
+            )
+        )
+
+
+def graph_from_json_result(payload: str | bytes) -> Result[CodecError, LogicalGraph]:
+    """Total JSON string/bytes deserializer returning ``Result[CodecError, LogicalGraph]``.
+
+    Args:
+        payload (str | bytes): Raw UTF-8 JSON string or byte buffer.
+
+    Returns:
+        Result[CodecError, LogicalGraph]: Deserialized ``LogicalGraph`` or ``CodecError``.
+    """
+    try:
+        text = payload.decode("utf-8") if isinstance(payload, bytes) else payload
+        parsed: JsonValue = json.loads(text)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return Err(
+            CodecError(
+                path=(),
+                expected="valid UTF-8 JSON document",
+                actual_description=describe_value_type(payload),
+                message=str(exc),
+            )
+        )
+    if not isinstance(parsed, Mapping):
+        return Err(
+            CodecError(
+                path=(),
+                expected="LogicalGraph JSON object",
+                actual_description=describe_value_type(parsed),
+                message="Top-level JSON value must be an object.",
+            )
+        )
+    return graph_from_dict_result(parsed)
+
+
+def _decode_logical_graph_json(raw: JsonValue) -> Result[CodecError, LogicalGraph]:
+    """Decode ``LogicalGraph`` from ``JsonValue`` via ``graph_from_dict_result``.
+
+    Args:
+        raw (JsonValue): Candidate JSON wire value.
+
+    Returns:
+        Result[CodecError, LogicalGraph]: Decoded ``LogicalGraph`` or ``CodecError``.
+    """
+    if not isinstance(raw, Mapping):
+        return Err(
+            CodecError(
+                path=(),
+                expected="LogicalGraph JSON object",
+                actual_description=describe_value_type(raw),
+                message="Expected JSON object for LogicalGraph.",
+            )
+        )
+    return graph_from_dict_result(raw)
+
+
+DTYPE_JSON_CODEC: typing.Final[JsonCodec[DType]] = Codec(
+    encode=lambda dt: {_TAG_KEY: "DType", "value": dt.value},
+    decode=_decode_dtype_json,
+)
+SYM_EXPR_JSON_CODEC: typing.Final[JsonCodec[SymExpr]] = Codec(
+    encode=_encode_sym_expr,
+    decode=_decode_sym_expr_json,
+)
+DIMENSION_JSON_CODEC: typing.Final[JsonCodec[DimensionType]] = Codec(
+    encode=_encode_dimension,
+    decode=_decode_dimension_json,
+)
+TENSOR_SHAPE_JSON_CODEC: typing.Final[JsonCodec[TensorShape]] = Codec(
+    encode=lambda sh: {_TAG_KEY: "TensorShape", "dims": [_encode_dimension(d) for d in sh.dims]},
+    decode=_decode_tensor_shape_json,
+)
+TENSOR_SPEC_JSON_CODEC: typing.Final[JsonCodec[TensorSpec]] = Codec(
+    encode=_serialize_tensor_spec_dict,
+    decode=_decode_tensor_spec_json,
+)
+PARTITION_SPEC_JSON_CODEC: typing.Final[JsonCodec[PartitionSpec]] = Codec(
+    encode=_encode_partition_spec_json,
+    decode=_decode_partition_spec_json,
+)
+ATTRIBUTE_VALUE_JSON_CODEC: typing.Final[JsonCodec[AttributeValue]] = Codec(
+    encode=_encode_attribute_value,
+    decode=_decode_attribute_json,
+)
+LOGICAL_NODE_JSON_CODEC: typing.Final[JsonCodec[LogicalNode]] = Codec(
+    encode=_serialize_node_dict,
+    decode=_decode_logical_node_json,
+)
+LOGICAL_GRAPH_JSON_CODEC: typing.Final[JsonCodec[LogicalGraph]] = Codec(
+    encode=graph_to_dict,
+    decode=_decode_logical_graph_json,
+)

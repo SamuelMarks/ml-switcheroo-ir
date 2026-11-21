@@ -10,7 +10,8 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from ml_switcheroo_ir.schema.base import normalize_attribute_type
+from ml_switcheroo_ir.schema import ALL_DIALECT_CATALOG_WITNESSES
+from ml_switcheroo_ir.schema.base import DialectCatalogWitness, normalize_attribute_type
 from ml_switcheroo_ir.schema.custom_ops import (
     CANONICAL_ATTENTION_SCHEMAS,
     COLLECTIVE_OPS_REGISTRY,
@@ -2166,6 +2167,54 @@ def verify_optax_grounding(snapshots_dir: Path | None = None, *, strict: bool = 
     )
 
 
+def verify_catalog_witnesses_grounding(
+    snapshots_dir: Path | None = None,
+    *,
+    strict: bool = False,
+    witnesses: Sequence[DialectCatalogWitness[OpSchema]] | None = None,
+) -> list[str]:
+    """Audit structural completeness and snapshot presence for ``ALL_DIALECT_CATALOG_WITNESSES``.
+
+    Args:
+        snapshots_dir (Path | None): Optional ground-truth snapshot directory.
+        strict (bool): Require every ``snapshot_glob`` to match at least one file when ``snapshots_dir`` is given.
+        witnesses (Sequence[DialectCatalogWitness[OpSchema]] | None): Optional witness override for testing.
+
+    Returns:
+        list[str]: Diagnostic error messages if any catalog witness is incomplete or ungrounded.
+    """
+    active = ALL_DIALECT_CATALOG_WITNESSES if witnesses is None else witnesses
+    errors: list[str] = []
+    if witnesses is None and len(active) != 21:
+        errors.append(f"Expected 21 DialectCatalogWitness entries, got {len(active)}.")
+    seen_names: set[str] = set()
+    for witness in active:
+        if witness.registry_name in seen_names:
+            errors.append(f"Duplicate DialectCatalogWitness registry_name '{witness.registry_name}'.")
+        seen_names.add(witness.registry_name)
+        if not witness.domains:
+            errors.append(f"DialectCatalogWitness '{witness.registry_name}' has empty domains.")
+        ops = witness.list_ops()
+        if not ops:
+            errors.append(f"DialectCatalogWitness '{witness.registry_name}' listed 0 ops.")
+        for op_name in ops:
+            if witness.lookup(op_name) is None:
+                errors.append(
+                    f"DialectCatalogWitness '{witness.registry_name}' lookup failed for listed op '{op_name}'."
+                )
+        if snapshots_dir is not None and strict and witness.snapshot_glob is not None:
+            if not any(snapshots_dir.glob(witness.snapshot_glob)):
+                errors.extend(
+                    _missing_snapshot_error(
+                        witness.registry_name,
+                        witness.snapshot_glob,
+                        snapshots_dir,
+                        strict=True,
+                    )
+                )
+    return errors
+
+
 def _verify_local_schemas_only() -> int:
     """Verify local schemas across all internal registries when external snapshot directories are absent.
 
@@ -2173,7 +2222,8 @@ def _verify_local_schemas_only() -> int:
         int: Process exit code (0 for success, 1 for failure).
     """
     all_errors = (
-        verify_custom_ops_grounding()
+        verify_catalog_witnesses_grounding()
+        + verify_custom_ops_grounding()
         + verify_onnx_grounding()
         + verify_quantization_grounding()
         + verify_state_ops_grounding()
@@ -2210,7 +2260,8 @@ def _run_all_snapshot_verifiers(snapshots_dir: Path, *, strict: bool = False) ->
         list[str]: Combined list of all diagnostic error messages.
     """
     return (
-        verify_stablehlo_grounding(snapshots_dir, strict=strict)
+        verify_catalog_witnesses_grounding(snapshots_dir, strict=strict)
+        + verify_stablehlo_grounding(snapshots_dir, strict=strict)
         + verify_mlir_grounding(snapshots_dir, strict=strict)
         + verify_ir_snapshot_grounding(snapshots_dir, strict=strict)
         + verify_custom_ops_grounding(snapshots_dir, strict=strict)
@@ -2315,6 +2366,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Using snapshots directory: {snapshots_dir}")
     all_errors = _run_all_snapshot_verifiers(snapshots_dir, strict=bool(args.strict))
 
+    print(f"Audited DialectCatalogWitnesses: {len(ALL_DIALECT_CATALOG_WITNESSES)} catalogs.")
     print(f"Audited StableHLO schemas: {len(STABLEHLO_REGISTRY)} ops.")
     print(f"Audited MLIR dialects: {len(CORE_MLIR_DIALECTS)} dialects.")
     print(f"Audited Custom ops: {len(CUSTOM_OPS_REGISTRY)} ops.")
