@@ -808,9 +808,11 @@ def test_generalized_dimension_equivalence_non_polynomial_atoms() -> None:
 
     var_b = SymVar("B")
     var_n = SymVar("N")
+    assert SymUnaryOp("-", var_b).to_polynomial() == Polynomial.from_var("B").neg()
     assert SymUnaryOp("+", var_b).to_polynomial() == Polynomial.from_var("B")
     assert SymUnaryOp("abs", var_b).to_polynomial() is None
     assert SymUnaryOp("abs", SymBinaryOp("//", var_b, SymConst(2))).to_polynomial() is None
+    assert DIMENSION_EQ.eq(SymUnaryOp("-", var_b), SymBinaryOp("-", SymConst(0), var_b))
 
     assert SymbolicSolver._to_generalized_polynomial(SymUnaryOp("+", var_b)) == Polynomial.from_var("B")
     assert DIMENSION_EQ.eq(

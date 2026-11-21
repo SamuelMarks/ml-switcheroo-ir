@@ -427,13 +427,7 @@ def poly_from_sym_expr(expr: SymExpr) -> Polynomial | None:
     elif isinstance(expr, SymBinaryOp):
         lowered = expr.to_polynomial()
     elif isinstance(expr, SymUnaryOp):
-        inner = expr.operand.to_polynomial()
-        if inner is not None and expr.op == "-":
-            lowered = Polynomial.from_const(0).sub(inner)
-        elif inner is not None and expr.op == "+":
-            lowered = inner
-        else:
-            lowered = expr.to_polynomial()
+        lowered = expr.to_polynomial()
     elif isinstance(expr, SymPiecewise):
         lowered = expr.to_polynomial()
     else:

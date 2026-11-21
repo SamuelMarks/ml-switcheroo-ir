@@ -878,3 +878,14 @@ def test_sym_polynomial_pow_symmetry_and_bool_guards() -> None:
     assert SymbolicSolver.is_consistent(SymUnaryOp("abs", cancelled_neg), 4) is True
     assert not SymbolicSolver.is_consistent(SymUnaryOp("ceil", SymConst(4)), 4)
     assert (SymUnaryOp("abs", SymConst(-3)) + vx).simplify() == SymBinaryOp("+", vx, SymConst(3))
+
+
+def test_sym_unary_op_to_polynomial_branches() -> None:
+    """Verify all branches of SymUnaryOp.to_polynomial deterministically."""
+    vx = SymVar("x")
+    vy = SymVar("y")
+    assert (-vx).to_polynomial() == Polynomial.from_var("x").neg()
+    assert SymUnaryOp("+", vx).to_polynomial() == Polynomial.from_var("x")
+    assert abs(vx).to_polynomial() is None
+    assert (-SymBinaryOp("//", vx, vy)).to_polynomial() is None
+    assert SymbolicSolver.is_consistent(-vx, SymBinaryOp("-", SymConst(0), vx)) is True
