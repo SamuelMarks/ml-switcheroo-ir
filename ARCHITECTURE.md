@@ -55,16 +55,16 @@ This architecture establishes a source-to-source and source-to-binary compilatio
 
 ## 2. Ecosystem Repository Taxonomy
 
-The ecosystem enforces a strictly layered, hierarchical dependency DAG. Circular dependencies are strictly forbidden.
+The ecosystem enforces a strictly layered, hierarchical dependency DAG. Circular dependencies are strictly forbidden, with `ml-switcheroo-ir` serving as the zero-internal-dependency **Tier 0** algebraic foundation (`pydantic` and `zstandard` only) and `ml-ecosystem-snapshots` serving as **Tier 1** (depending on the published `ml-switcheroo-ir` wheel).
 
 ```mermaid
 graph TD
-    subgraph Tier 0: Ground-Truth Grounding
-        SNAPS[ml-ecosystem-snapshots]
+    subgraph Tier 0: Algebraic IR Foundation
+        IR[ml-switcheroo-ir]
     end
 
-    subgraph Tier 1: Core Definitions & Dialects
-        IR[ml-switcheroo-ir]
+    subgraph Tier 1: Ground-Truth Grounding
+        SNAPS[ml-ecosystem-snapshots]
     end
 
     subgraph Tier 2: Tracing & AD Engine
@@ -75,48 +75,45 @@ graph TD
         SW[ml-switcheroo]
     end
 
-    subgraph Tier 3: Functional Foundation
+    subgraph Tier 3: Primary Frontends
         ZJ[zero-jax]
-        ZC[zero-chex]
-        ZO[zero-optax]
-        ZG[zero-grain]
-        ZOB[zero-orbax]
-    end
-
-    subgraph Tier 4: Neural Networks & Frontends
-        ZF[zero-flax]
         ZP[zero-pytorch]
         ZK[zero-keras]
-        ZT[zero-tensorflow]
         ZM[zero-mlx]
         ZPX[zero-pax]
+    end
+
+    subgraph Tier 4: Ecosystem Libraries & Coupled Frontends
+        ZT[zero-tensorflow]
+        ZC[zero-chex]
+        ZF[zero-flax]
+        ZG[zero-grain]
+        ZO[zero-optax]
+        ZOB[zero-orbax]
     end
 
     subgraph Tier 5: Verification & Golden Seeds
         ZZ[zero-zoo]
     end
 
-    IR -->|Ghost Protocol v2 Schemas| SNAPS
+    SNAPS -->|Depends On Ghost & Typeclass Kernel| IR
     COMP -->|Depends On| IR
-    SW -->|Uses IR & Adapters| IR
+    SW -->|Depends On IR, Snapshots & Compiler| IR
+    SW -->|Depends On| SNAPS
+    SW -->|Depends On| COMP
 
     ZJ -->|Depends On| COMP
-    ZC -->|Depends On| COMP
-    ZO -->|Depends On| ZJ
-    ZO -->|Depends On| ZC
-    ZG -->|Depends On| COMP
-    ZOB -->|Depends On| COMP
-    ZJ -->|Depends On| ZC
-
-    ZF -->|Depends On| ZJ
-    ZF -->|Depends On| ZO
-    ZF -->|Depends On| ZOB
-
     ZP -->|Depends On| COMP
     ZK -->|Depends On| COMP
-    ZT -->|Depends On| COMP
     ZM -->|Depends On| COMP
     ZPX -->|Depends On| COMP
+
+    ZT -->|Depends On| ZK
+    ZC -->|Depends On| ZJ
+    ZF -->|Depends On| ZJ
+    ZG -->|Depends On| ZJ
+    ZO -->|Depends On| ZJ
+    ZOB -->|Depends On| ZJ
 
     ZZ -.->|Tests Golden Equivalence| ZF
     ZZ -.->|Tests Golden Equivalence| ZP
@@ -126,12 +123,20 @@ graph TD
     ZZ -.->|Tests Golden Equivalence| ZG
 ```
 
+### Acyclic Release Pipeline
+
+1. **Wave 1 (Tier 0 -- Sequential):** Release `ml-switcheroo-ir` (`v0.0.9`) with zero internal ecosystem dependencies.
+2. **Wave 2 (Tier 1 & Tier 2 -- Parallel):** Release `ml-ecosystem-snapshots` (`v0.0.9`, capturing `ir_v0.0.9.json`) and `ml-switcheroo-compiler` (`v0.0.4`) in parallel against `ml-switcheroo-ir==0.0.9`.
+3. **Wave 3 (Transpiler & Primary Frontends -- Parallel):** Release `ml-switcheroo` (`v0.0.7`) alongside `zero-jax`, `zero-pytorch`, `zero-mlx`, `zero-keras`, and `zero-pax`.
+4. **Wave 4 (Coupled Frontends & JAX Ecosystem -- Parallel):** Release `zero-tensorflow` (after `zero-keras`) and `zero-{chex,flax,grain,optax,orbax}` (after `zero-jax`).
+5. **Wave 5 (Tier 5 -- Final Integration Gate):** Certify cross-framework numerical and `ProvenGraph[FullyVerifiedPhase]` parity in `zero-zoo`.
+
 ### Component Breakdown
 
-1. **`ml-ecosystem-snapshots` (v0.0.6) / `ml-framework-snapshots` (Tier 0)**:
-   The empirical ground-truth database. Introspects and captures full dumps of the official module hierarchy, classes, fields, functions, function args (types, defaults), docstrings, and AST snapshots from official upstream framework releases (PyTorch, JAX, TensorFlow, Optax, Orbax, Chex, Grain, and `ml-switcheroo-ir` via `ir_v0.0.6.json`). It provides the reference manifests that eliminate LLM and compiler hallucinations.
-2. **`ml-switcheroo-ir` (Tier 1)**:
-   The foundational intermediate representation contract. Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, `LogicalMesh`, distributed sharding & topologies (`PartitionSpec`, `PipelineTopologyConfig`, `WebRTCSignalingTopology`), symbolic shape algebra (`SymNode`, `SymInt`, `Polynomial`, `SymbolicSolver`, `ShapeTracker`), autodiff sentinels (`ZeroTangent`, `NoTangent`), multi-dialect schema registries (ONNX, StableHLO, MLIR, Modern Custom Ops, State/Collective/Quantization Ops, ODL, ATen, Array API, Chex, Grain, Orbax, Optax, WebGPU WGSL, NVIDIA PTX/SASS, AMD RDNA, Apple Metal, WASM SIMD, WebGL), native IR graph transformations (DCE, CSE, shape propagation), Ghost Protocol v2 specifications, cross-framework `ParameterTranslationEngine`, JSON Schema / TypeScript / Python code generation (`export.py`), and the anti-hallucination `GroundingValidator`.
+1. **`ml-switcheroo-ir` (v0.0.9, Tier 0)**:
+   The zero-internal-dependency foundational intermediate representation and Haskell-inspired algebraic kernel (`pydantic` and `zstandard` only). Defines `LogicalNode`, `LogicalEdge`, `LogicalGraph`, deeply immutable `FrozenLogicalGraph` (`freeze_graph` / `thaw_graph`), covariant cumulative `ProvenGraph[FullyVerifiedPhase]` phantom proofs, explicit frozen typeclass witnesses (`Eq`, `Ord`, `HashableWitness`, `Semigroup`, `Monoid`, `Semiring`, `Ring`, `BoundedLattice`, `NonEmpty`, `Codec`, `Pretty`, `EndoRewrite`, `RecursiveFold`), closed ADTs (`IrDomainError`, `SymExpr`, `AttrTerm`, `Result`, `Validation[NonEmpty[E], A]`), distributed sharding & topologies (`LogicalMesh`, `PartitionSpec`, `PipelineTopologyConfig`, `WebRTCSignalingTopology`), symbolic shape algebra (`SymNode`, `SymInt`, `Polynomial`, `SymbolicSolver`, `ShapeInferenceRuleRegistry`), autodiff sentinels (`ZeroTangent`, `NoTangent`), 21 multi-dialect schema registries, proof-preserving IR graph passes (`ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE`), Ghost Protocol v2 specifications, `ParameterTranslationEngine` (`PartialIso`), JSON Schema / TypeScript / Python code generation (`export.py`), and the `GroundingValidator`.
+2. **`ml-ecosystem-snapshots` (v0.0.9) / `ml-framework-snapshots` (Tier 1)**:
+   The empirical ground-truth database depending on Tier-0 `ml-switcheroo-ir`. Introspects and captures full dumps of the official module hierarchy, classes, fields, functions, function args (types, defaults), docstrings, and AST snapshots from official upstream framework releases (PyTorch, JAX, TensorFlow, Optax, Orbax, Chex, Grain, and `ml-switcheroo-ir` via `ir_v0.0.9.json`), providing the reference manifests that eliminate LLM and compiler hallucinations.
 3. **`ml-switcheroo-compiler` (Tier 2)**:
    The computational execution engine. Features:
    - **`TracerTape`**: Thread-safe AOT tracing leveraging `threading.local`.
@@ -175,15 +180,31 @@ classDiagram
         +initializers: dict[str, InitializerValue]
         +attributes: dict[str, AttributeValue]
         +annotations: dict[str, AttributeValue]
-        +metadata: dict[str, AttributeValue]
+        +metadata: dict[str, AttributeValue | LoopOptionsProtocol | None]
         +loop_options: dict[str, AttributeValue] | LoopOptionsProtocol | None
-        +mesh: LogicalMesh | MeshLikeProtocol | Sequence[str] | dict[str, AttributeValue] | None
+        +mesh: LogicalMesh | MeshLikeProtocol | AttributeValue
         +pipeline_topology: PipelineTopologyConfig | None
         +sorted_nodes: list[LogicalNode] | None
         +edges: tuple[LogicalEdge, ...]
         +nodes_list: list[LogicalNode]
         +iter_nodes() Iterator[LogicalNode]
         +from_json_result(payload) Result[CodecError, LogicalGraph]
+    }
+
+    class FrozenLogicalGraph {
+        +name: str
+        +nodes: tuple[tuple[NodeId, FrozenLogicalNode], ...]
+        +edges: tuple[FrozenLogicalEdge, ...]
+        +inputs: tuple[str, ...]
+        +outputs: tuple[str, ...]
+    }
+
+    class ProvenGraph~PhaseT~ {
+        +frozen_graph: FrozenLogicalGraph
+        +ordered_node_ids: tuple[NodeId, ...]
+        +ordered_nodes: tuple[LogicalNode, ...]
+        +ordered_frozen_nodes: tuple[FrozenLogicalNode, ...]
+        +thaw() LogicalGraph
     }
 
     class LogicalNode {
@@ -193,7 +214,7 @@ classDiagram
         +version: int
         +attributes: dict[str, AttributeValue]
         +inputs: list[str]
-        +outputs: list[str]
+        +outputs: VersionedOutputList
         +shape_metadata: tuple[DimensionType, ...] | None
         +dtype: DType | None
         +output_specs: list[TensorSpec]
@@ -202,7 +223,7 @@ classDiagram
         +device: str | DeviceLikeProtocol | None
         +stream: str | int | None
         +strides: tuple[int, ...] | None
-        +source_ast_ref: str | None
+        +source_ast_ref: str | int | None
     }
 
     class ZeroTangent {
@@ -226,6 +247,7 @@ classDiagram
     LogicalGraph o-- LogicalMesh : mesh
     LogicalGraph *-- LogicalNode : nodes
     LogicalGraph *-- LogicalEdge : edges
+    ProvenGraph *-- FrozenLogicalGraph : frozen_graph
     LogicalNode <|-- ZeroTangent
     LogicalNode <|-- NoTangent
 ```
@@ -333,14 +355,14 @@ The repository exposes a complete CLI (`ml-switcheroo-ir` / `python -m ml_switch
 - `dump-snapshot`: Dump public package symbols, methods, and all 21 operator registries to a GhostRef v2 `SnapshotEnvelope` JSON file.
 - `export-schema`: Export Draft 2020-12 JSON schemas and TypeScript definitions.
 
-### 3.10. Algebraic Typeclass Witnesses, Closed ADTs & Proof-Carrying IR (`v0.0.8`)
+### 3.10. Algebraic Typeclass Witnesses, Closed ADTs & Cumulative Proof-Carrying IR (`v0.0.9`)
 
 To guarantee total, sound static typing (`mypy --strict`, zero `Any`, zero `cast`, zero reflection) across compiler passes and serialization boundaries, `ml-switcheroo-ir` layers an explicit GHC Core-style typeclass witness architecture:
 - **Tier-1 Structural Interoperability Protocols (`ml_switcheroo_ir.protocols`) & Aliases**: Nine `@typing.runtime_checkable` `Protocol` classes (`DTypeLikeProtocol`, `DeviceLikeProtocol`, `SymbolicNodeProtocol`, `SymbolicIntWrapperProtocol` / `SymbolicDimProtocol`, `CustomRuleHandleProtocol`, `LoopOptionsProtocol`, `MeshLikeProtocol`, `ArrayBufferProtocol`, `SubgraphLikeProtocol`) allow downstream compiler and framework objects to flow into `LogicalGraph` (`annotations`, `metadata`, `sorted_nodes`, `mesh`, `loop_options` — aliased as `IRGraph`) and `LogicalNode` (`strides`, `device`, `sharding`, `dtype` — aliased as `IRNode`) with zero upward imports and strict `extra="forbid"` validation.
-- **Explicit Typeclass Witness Dictionaries (`ml_switcheroo_ir.typeclasses`)**: Immutable `@dataclass(frozen=True)` records encoding `Eq[A]`, `Ord[A]`, `HashableWitness[A]`, `Semigroup[A]`, `Monoid[A]` (including `dict_monoid`, `product_monoid`, and `endo_monoid`), `Semiring[A]`, `Ring[A]` (`POLYNOMIAL_RING`, `DIMENSION_SEMIRING`), `BoundedLattice[A]` (`VALIDATION_LEVEL_LATTICE`), bidirectional `Codec[WireT, A]` / `JsonCodec[A]`, `PythonExprEmit[A]`, and first-order recursion schemes (`EndoRewrite[N]`, `RecursiveFold[N, R]`).
-- **Closed Sum Types & Exhaustiveness (`assert_never`)**: Closed `SymExpr` (`SymConst | SymVar | SymBinaryOp | SymUnaryOp | SymPiecewise`), closed normal-form `AttrTerm` (`project_attribute_value` / `embed_attribute_value`), monadic `Result[E, A] = Ok[A] | Err[E]`, and error-accumulating Applicative `Validation[E, A] = Valid[A] | Invalid[E]` checked with `typing_extensions.assert_never`.
-- **Zero-Cost Domain Vocabulary & Phantom Proofs (`identifiers.py`, `proofs.py`)**: `NewType` aliases (`NodeId`, `SsaValueName`, `DialectDomain`, `OpName`, `MeshAxisName`, `NonBoolInt`, `NonNegativeInt`, `PositiveInt`), structured `PortRef`, and clone-isolated `ProvenGraph[PhaseT]` tokens (`AcyclicSortedPhase`, `SchemaValidPhase`, `ShardingValidPhase`, `GroundedPhase`).
-- **Unified Catalog, ISA & Translation Witnesses**: `ALL_DIALECT_CATALOG_WITNESSES` across all 21 operator registries, `HARDWARE_SEMANTICS_BY_DOMAIN` (`HardwareDialectSemantics` for RDNA, SASS, WGSL, PTX), `PartialIso[A, B]` bidirectional weight/layout morphisms (`OIHW <-> HWIO <-> NCHW <-> NHWC` and QKV split/merge), `FILE_COMPLIANCE_MONOID`, `COMMUNICATION_VOLUME_MONOID`, and composable `GraphTransformPass` pipelines (`CANONICAL_OPTIMIZE_PIPELINE`).
+- **Explicit Typeclass Witness Dictionaries (`ml_switcheroo_ir.typeclasses`)**: Immutable `@dataclass(frozen=True)` records encoding `Eq[A]`, `Ord[A]`, `HashableWitness[A]`, `Semigroup[A]`, `Monoid[A]` (including `dict_monoid`, `product_monoid`, and `endo_monoid`), `Semiring[A]`, `Ring[A]` (`POLYNOMIAL_RING`, `DIMENSION_SEMIRING`), `BoundedLattice[A]` (`VALIDATION_LEVEL_LATTICE`), `NonEmpty[A]` (`nonempty_semigroup`), bidirectional `Codec[WireT, A]` / `JsonCodec[A]`, `Pretty[A]` (`LOGICAL_GRAPH_PRETTY`, `IR_DOMAIN_ERROR_PRETTY`), `PythonExprEmit[A]`, and first-order recursion schemes (`EndoRewrite[N]`, `RecursiveFold[N, R]`).
+- **Closed Sum Types & Exhaustiveness (`assert_never`)**: Closed 8-variant `IrDomainError` (`errors.py`: `GraphCycleDiagnosticError`, `SchemaValidationBatchError`, `ShardingValidationBatchError`, `GroundingAuditBatchError`, `IrCodecDecodeError`, `ShapeUnificationError`, `IdentifierParseError`, `TranslationIsoError`, formatted via `format_ir_domain_error`), closed `SymExpr` (`SymConst | SymVar | SymBinaryOp | SymUnaryOp | SymPiecewise`), closed normal-form `AttrTerm` (`project_attribute_value` / `embed_attribute_value`), monadic `Result[E, A] = Ok[A] | Err[E]`, and total non-empty Applicative `Validation[NonEmpty[E], A] = Valid[A] | Invalid[NonEmpty[E]]` checked with `typing_extensions.assert_never`.
+- **Zero-Cost Domain Vocabulary, Frozen IR & Cumulative Phantom Proofs (`identifiers.py`, `graph.py`, `proofs.py`)**: `NewType` aliases (`NodeId`, `SsaValueName`, `DialectDomain`, `OpName`, `MeshAxisName`, `NonBoolInt`, `NonNegativeInt`, `PositiveInt`), structured `PortRef`, deeply immutable `FrozenLogicalGraph` / `FrozenLogicalNode` / `FrozenLogicalEdge` (`freeze_graph` / `thaw_graph`, `FROZEN_LOGICAL_GRAPH_EQ`, `FROZEN_LOGICAL_GRAPH_HASH`), and covariant cumulative `ProvenGraph[PhaseT]` witnesses (`AcyclicSortedPhase`, `SchemaValidPhase`, `ShardingValidPhase`, `GroundedPhase`, `AcyclicAndSchemaPhase`, `AcyclicSchemaShardingPhase`, `FullyVerifiedPhase`) with phase-upgrade combinators (`upgrade_to_schema_valid`, `upgrade_to_sharding_valid`, `upgrade_to_fully_verified`, `prove_fully_verified`).
+- **Unified Catalog, ISA, Shape & Transform Witnesses**: `ALL_DIALECT_CATALOG_WITNESSES` across all 21 operator registries, `HARDWARE_SEMANTICS_BY_DOMAIN` (`HardwareDialectSemantics` for RDNA, SASS, WGSL, PTX), extensible `ShapeInferenceRuleRegistry` (`DEFAULT_SHAPE_RULE_REGISTRY`, `SHAPE_RULE_REGISTRY_MONOID`), `PartialIso[A, B]` bidirectional weight/layout morphisms (`OIHW <-> HWIO <-> NCHW <-> NHWC` and QKV split/merge), `FILE_COMPLIANCE_MONOID`, `COMMUNICATION_VOLUME_MONOID`, structural graph recursion (`fold_logical_graph`, `rewrite_logical_graph_bottom_up`), and composable `GraphTransformPass` / proof-preserving `AcyclicGraphPass` pipelines (`CANONICAL_OPTIMIZE_PIPELINE`, `ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE`, `lift_acyclic_pass`).
 
 ---
 
@@ -390,7 +412,7 @@ sequenceDiagram
 ```
 
 ### Trace-to-AST Linking
-To deliver actionable compiler errors and facilitate syntactic round-tripping, `ml-switcheroo-compiler` links trace operations to source Python syntax trees. Using frame introspection (`inspect.currentframe()`), every `LogicalNode` emitted into the IR records a `source_ast_ref` string capturing the source file path, line number, and AST identifier.
+To deliver actionable compiler errors and facilitate syntactic round-tripping, `ml-switcheroo-compiler` links trace operations to source Python syntax trees. Using frame introspection (`inspect.currentframe()`), every `LogicalNode` emitted into the IR records a `source_ast_ref` (`str | int | None`) capturing the source file path, line number, or AST node identifier.
 
 ---
 
@@ -400,6 +422,6 @@ Every repository across the ecosystem adheres to strict verification gates:
 
 - **100% Test Coverage:** Function, branch, and statement coverage enforced on every commit (`pytest --cov --cov-branch --cov-fail-under=100` and `python scripts/check_function_coverage.py`).
 - **100% Documentation Coverage:** Enforced via `interrogate --fail-under=100 src scripts tests` and `python scripts/check_docs.py src scripts tests`.
-- **Strict Static Typing & Anti-Reflection:** Verified using `mypy --strict`, `ruff`, and `scripts/lint_typing.py` with zero `Any`, `object`, `cast`, `getattr`/`setattr`, dunder attribute accesses, or dynamic execution constructs.
+- **Strict Static Typing & Anti-Reflection:** Verified using `mypy --strict` (with `disallow_any_decorated = true`), `ruff`, and `scripts/lint_typing.py` enforcing zero `Any`, `object`, `cast`, `# type: ignore`, `# noqa` or bare `assert` in `src/`, `if TYPE_CHECKING: ... else:` blocks, `getattr`/`setattr`, dunder attribute accesses, or dynamic execution constructs.
 - **Minimal Runtime Dependencies:** Relies on a minimal set of core dependencies.
 - **Git Safety Protocol:** Under no circumstances is `git push` executed autonomously.

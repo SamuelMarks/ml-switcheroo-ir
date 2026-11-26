@@ -17,16 +17,19 @@ from ml_switcheroo_ir.typeclasses.algebra import (
     BoundedLattice,
     Eq,
     Monoid,
+    NonEmpty,
     Ord,
     Semigroup,
     contramap_ord,
+    nonempty_semigroup,
     tuple_monoid,
 )
 from ml_switcheroo_ir.typeclasses.outcome import (
     Invalid,
     Valid,
     Validation,
-    collect_unit_validations,
+    collect_unit_validations_ne,
+    from_error_sequence,
 )
 
 _TargetT = typing.TypeVar("_TargetT")
@@ -35,6 +38,7 @@ __all__ = [
     "CORE_MLIR_DIALECTS",
     "KNOWN_SYNONYMS",
     "VALIDATION_ERRORS_MONOID",
+    "VALIDATION_ERRORS_NE_SEMIGROUP",
     "VALIDATION_ERRORS_SEMIGROUP",
     "VALIDATION_LEVEL_EQ",
     "VALIDATION_LEVEL_LATTICE",
@@ -287,6 +291,7 @@ VALIDATION_LEVEL_LATTICE: typing.Final[BoundedLattice[ValidationLevel]] = Bounde
 
 VALIDATION_ERRORS_MONOID: typing.Final[Monoid[tuple[ValidationError, ...]]] = tuple_monoid()
 VALIDATION_ERRORS_SEMIGROUP: typing.Final[Semigroup[tuple[ValidationError, ...]]] = VALIDATION_ERRORS_MONOID.semigroup
+VALIDATION_ERRORS_NE_SEMIGROUP: typing.Final[Semigroup[NonEmpty[ValidationError]]] = nonempty_semigroup()
 
 
 @dataclass(frozen=True)
@@ -295,12 +300,12 @@ class ValidationRule(typing.Generic[_TargetT]):
 
     Attributes:
         name (str): Descriptive rule identifier.
-        run (Callable[[_TargetT], Validation[tuple[ValidationError, ...], None]]):
-            Total check returning ``Valid(None)`` or ``Invalid(errors_tuple)``.
+        run (Callable[[_TargetT], Validation[NonEmpty[ValidationError], None]]):
+            Total check returning ``Valid(None)`` or ``Invalid(NonEmpty(...))``.
     """
 
     name: str
-    run: Callable[[_TargetT], Validation[tuple[ValidationError, ...], None]]
+    run: Callable[[_TargetT], Validation[NonEmpty[ValidationError], None]]
 
 
 def rule_from_errors_fn(
@@ -317,25 +322,22 @@ def rule_from_errors_fn(
         ValidationRule[_TargetT]: Applicative ``ValidationRule`` witness.
     """
 
-    def _execute(target: _TargetT) -> Validation[tuple[ValidationError, ...], None]:
+    def _execute(target: _TargetT) -> Validation[NonEmpty[ValidationError], None]:
         """Run ``fn(target)`` and wrap non-empty errors in ``Invalid``.
 
         Args:
             target (_TargetT): Target value under validation.
 
         Returns:
-            Validation[tuple[ValidationError, ...], None]: ``Valid(None)`` or ``Invalid(tuple(errs))``.
+            Validation[NonEmpty[ValidationError], None]: ``Valid(None)`` or ``Invalid(NonEmpty(...))``.
         """
-        errs = tuple(fn(target))
-        if errs:
-            return Invalid(errs)
-        return Valid(None)
+        return from_error_sequence(tuple(fn(target)), None)
 
     return ValidationRule(name=name, run=_execute)
 
 
 def combine_rules(rules: Sequence[ValidationRule[_TargetT]], name: str = "combined") -> ValidationRule[_TargetT]:
-    """Applicatively compose ``rules`` via ``VALIDATION_ERRORS_MONOID`` without short-circuiting.
+    """Applicatively compose ``rules`` via ``VALIDATION_ERRORS_NE_SEMIGROUP`` without short-circuiting.
 
     Args:
         rules (Sequence[ValidationRule[_TargetT]]): Ordered rules to execute independently.
@@ -346,22 +348,16 @@ def combine_rules(rules: Sequence[ValidationRule[_TargetT]], name: str = "combin
     """
     frozen_rules = tuple(rules)
 
-    def _run_all(target: _TargetT) -> Validation[tuple[ValidationError, ...], None]:
-        """Run every rule in ``frozen_rules`` and accumulate errors monoidally.
+    def _run_all(target: _TargetT) -> Validation[NonEmpty[ValidationError], None]:
+        """Run every rule in ``frozen_rules`` and accumulate non-empty errors.
 
         Args:
             target (_TargetT): Target value under validation.
 
         Returns:
-            Validation[tuple[ValidationError, ...], None]: ``Valid(None)`` if all pass else ``Invalid``.
+            Validation[NonEmpty[ValidationError], None]: ``Valid(None)`` if all pass else ``Invalid``.
         """
-        accumulated = collect_unit_validations(
-            VALIDATION_ERRORS_MONOID,
-            (rule.run(target) for rule in frozen_rules),
-        )
-        if accumulated:
-            return Invalid(accumulated)
-        return Valid(None)
+        return collect_unit_validations_ne(rule.run(target) for rule in frozen_rules)
 
     return ValidationRule(name=name, run=_run_all)
 
@@ -380,14 +376,14 @@ def when_predicate(
         ValidationRule[_TargetT]: Guarded validation rule.
     """
 
-    def _guarded(target: _TargetT) -> Validation[tuple[ValidationError, ...], None]:
+    def _guarded(target: _TargetT) -> Validation[NonEmpty[ValidationError], None]:
         """Evaluate ``pred(target)`` before delegating to ``rule.run``.
 
         Args:
             target (_TargetT): Target value under validation.
 
         Returns:
-            Validation[tuple[ValidationError, ...], None]: ``Valid(None)`` when skipped else ``rule.run(target)``.
+            Validation[NonEmpty[ValidationError], None]: ``Valid(None)`` when skipped else ``rule.run(target)``.
         """
         if not pred(target):
             return Valid(None)
@@ -396,11 +392,14 @@ def when_predicate(
     return ValidationRule(name=f"when({rule.name})", run=_guarded)
 
 
-def errors_from_validation(outcome: Validation[tuple[ValidationError, ...], None]) -> list[ValidationError]:
+def errors_from_validation(
+    outcome: Validation[NonEmpty[ValidationError] | tuple[ValidationError, ...], None],
+) -> list[ValidationError]:
     """Extract a mutable ``list[ValidationError]`` from a unit ``Validation`` outcome.
 
     Args:
-        outcome (Validation[tuple[ValidationError, ...], None]): Validation outcome.
+        outcome (Validation[NonEmpty[ValidationError] | tuple[ValidationError, ...], None]):
+            Validation outcome.
 
     Returns:
         list[ValidationError]: Empty list on ``Valid``, or list of accumulated errors on ``Invalid``.

@@ -969,10 +969,21 @@ def test_root_markdown_integrity() -> None:
     assert "no_save" not in arch_text
 
     # Dialect compliance count in docs must match get_dialect_ops()
+    from ml_switcheroo_ir import __version__
+
     total_onnx_ops = len(get_dialect_ops())
     assert f"{total_onnx_ops} total ops" in usage_text
     assert f"{total_onnx_ops} grounded entries" in readme_text
     assert f"{total_onnx_ops} grounded entries" in arch_text
+
+    # Package version in tracked root markdown files must match __version__ without stale v0.0.8 tags
+    current_ver_tag = f"`v{__version__}`"
+    assert current_ver_tag in readme_text
+    assert current_ver_tag in usage_text
+    assert current_ver_tag in arch_text
+    assert "(`v0.0.8`)" not in readme_text
+    assert "(`v0.0.8`)" not in usage_text
+    assert "(`v0.0.8`)" not in arch_text
 
     # Every internal Table of Contents anchor in USAGE.md must resolve to a real heading
     heading_slugs = {
@@ -985,30 +996,41 @@ def test_root_markdown_integrity() -> None:
         assert anchor in heading_slugs, f"Broken anchor '#{anchor}' in USAGE.md"
 
 
-def test_v008_algebraic_typeclasses_and_proof_carrying_doc_recipes() -> None:
-    """Execute v0.0.8 README Quick Start 7, USAGE Algebraic Typeclasses, and Recipe F examples."""
+def test_v009_algebraic_typeclasses_and_proof_carrying_doc_recipes() -> None:
+    """Execute v0.0.9 README Quick Start 7, USAGE Algebraic Typeclasses, and Recipe F examples."""
     from ml_switcheroo_ir import (
+        ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE,
         ALL_DIALECT_CATALOG_WITNESSES,
         CANONICAL_OPTIMIZE_PIPELINE,
         CSE_PASS,
         DCE_PASS,
+        DEFAULT_SHAPE_RULE_REGISTRY,
+        FROZEN_LOGICAL_GRAPH_EQ,
         SHAPE_CONSTANT_PROP_PASS,
+        AcyclicAndSchemaPhase,
         DType,
         LogicalGraph,
         LogicalNode,
+        NonEmpty,
         Ok,
         PortRef,
         ProvenGraph,
         SchemaValidPhase,
         SymExpr,
         Valid,
+        ValidatorConfig,
         compose_passes,
         fixpoint_graph_pass,
+        format_ir_domain_error,
+        freeze_graph,
         graph_from_json_result,
         project_attribute_value,
         prove_acyclic_sorted,
         prove_schema_valid,
+        thaw_graph,
+        upgrade_to_schema_valid,
     )
+    from ml_switcheroo_ir.identifiers import parse_node_id
     from ml_switcheroo_ir.shapes import broadcast_shapes_result, parse_symbolic_expr_result
     from ml_switcheroo_ir.translation import ParameterTranslationEngine
     from ml_switcheroo_ir.types import AttrDType
@@ -1019,25 +1041,41 @@ def test_v008_algebraic_typeclasses_and_proof_carrying_doc_recipes() -> None:
 
     bcast_res = broadcast_shapes_result((expr, 1), (1, 64))
     assert isinstance(bcast_res, Ok) and bcast_res.value == (expr, 64)
+    assert "Add" in DEFAULT_SHAPE_RULE_REGISTRY
+    assert NonEmpty.singleton("e1").to_tuple() == ("e1",)
 
     term = project_attribute_value(DType.bfloat16)
     assert isinstance(term, AttrDType) and term.value == DType.bfloat16
     port = PortRef.parse("split_node:1")
     assert port.port_index == 1 and port.render() == "split_node:1"
+    bad_id_res = parse_node_id("")
+    assert not isinstance(bad_id_res, Ok) and "NodeId" in format_ir_domain_error(bad_id_res.error)
 
     g = LogicalGraph(
         name="Verified",
-        nodes={"x": LogicalNode(id="x", op_type="Input"), "r": LogicalNode(id="r", op_type="Relu", inputs=["x"])},
+        nodes={
+            "x": LogicalNode(id="x", op_type="Input", shape_metadata=(2, 4), dtype=DType.float32),
+            "r": LogicalNode(id="r", op_type="Relu", inputs=["x"], shape_metadata=(2, 4), dtype=DType.float32),
+        },
         outputs=["r"],
     )
+    frozen = freeze_graph(g)
+    assert FROZEN_LOGICAL_GRAPH_EQ.eq(frozen, freeze_graph(thaw_graph(frozen)))
+
     decoded = graph_from_json_result(g.to_json())
     assert isinstance(decoded, Ok)
 
     sorted_proof = prove_acyclic_sorted(decoded.value)
-    schema_proof = prove_schema_valid(decoded.value)
+    schema_proof = prove_schema_valid(decoded.value, validator=Validator(ValidatorConfig(strict=True)))
     assert isinstance(sorted_proof, Ok) and isinstance(schema_proof, Valid)
 
-    optimized_default = CANONICAL_OPTIMIZE_PIPELINE.apply(schema_proof.value.graph)
+    optimized_acyclic = ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE.apply_acyclic(sorted_proof.value)
+    cumulative_res = upgrade_to_schema_valid(optimized_acyclic)
+    assert isinstance(cumulative_res, Valid)
+    verified_graph: ProvenGraph[AcyclicAndSchemaPhase] = cumulative_res.value
+    assert len(verified_graph.ordered_nodes) == 2
+
+    optimized_default = CANONICAL_OPTIMIZE_PIPELINE.apply(verified_graph.thaw())
     assert "r" in optimized_default.nodes
 
     pipeline = fixpoint_graph_pass(
@@ -1050,7 +1088,16 @@ def test_v008_algebraic_typeclasses_and_proof_carrying_doc_recipes() -> None:
     assert proven is not None and len(proven.ordered_nodes) == 2
 
     assert len(ALL_DIALECT_CATALOG_WITNESSES) == 21
-    conv_iso = ParameterTranslationEngine().conv_layout_iso("NCHW", "NHWC")
+    engine = ParameterTranslationEngine()
+    tf_attrs_res = engine.translate_attributes_result(
+        operation="normalization",
+        attributes={"eps": 1e-5, "weight": 1.0},
+        source_framework="torch",
+        target_framework="tf",
+    )
+    assert isinstance(tf_attrs_res, Ok) and tf_attrs_res.value == {"epsilon": 1e-5, "gamma": 1.0}
+
+    conv_iso = engine.conv_layout_iso("NCHW", "NHWC")
     nhwc_res = conv_iso.forward([[[[1.0, 2.0]]]])
     assert isinstance(nhwc_res, Ok) and conv_iso.backward(nhwc_res.value) == Ok([[[[1.0, 2.0]]]])
 

@@ -242,15 +242,17 @@ def test_partial_iso_and_parameter_translation_results() -> None:
         }
     )
     assert eng.translate_parameter_result("softmax", "dim", "torch", "jax") == Ok("axis")
-    assert eng.translate_parameter_result("softmax", "missing", "torch", "jax").is_err()
+    param_err = eng.translate_parameter_result("softmax", "missing", "torch", "jax")
+    assert isinstance(param_err, Err) and param_err.error.op_name == "softmax"
     assert eng.translate_attributes_result("softmax", {"dim": -1}, "torch", "jax") == Ok({"axis": -1})
-    assert eng.translate_attributes_result("softmax", {"bad": 1}, "torch", "jax").is_err()
+    attr_err = eng.translate_attributes_result("softmax", {"bad": 1}, "torch", "jax")
+    assert isinstance(attr_err, Err) and attr_err.error.parameter is None
 
-    iso_ab: PartialIso[int, str] = PartialIso(
+    iso_ab: PartialIso[int, str, str] = PartialIso(
         forward=lambda n: Ok(str(n)),
         backward=lambda s: Ok(int(s)) if s.isdigit() else Err("not digits"),
     )
-    iso_bc: PartialIso[str, list[str]] = PartialIso(
+    iso_bc: PartialIso[str, list[str], str] = PartialIso(
         forward=lambda s: Ok([s]),
         backward=lambda xs: Ok(xs[0]) if len(xs) == 1 else Err("bad len"),
     )
@@ -258,6 +260,9 @@ def test_partial_iso_and_parameter_translation_results() -> None:
     inv = composed.inverse()
     assert composed.forward(7) == Ok(["7"])
     assert inv.forward(["7"]) == Ok(7)
+    mapped_iso = iso_ab.map_error(lambda msg: f"ERR:{msg}")
+    assert mapped_iso.backward("abc") == Err("ERR:not digits")
+    assert mapped_iso.forward(3) == Ok("3")
 
     conv_iso = eng.conv_layout_iso("OIHW", "HWIO")
     w_oihw = [[[[1.0, 2.0]]]]

@@ -821,7 +821,7 @@ def test_logical_graph_passes_validation_and_export() -> None:
 
 def test_schema_catalogs_mlir_and_ghost_overload_exports() -> None:
     """Verify wgsl_ops.json resource path, MLIR_REGISTRY, ExtendedGhostRef, GhostParam, and GhostOverload."""
-    assert __version__ == "0.0.8"
+    assert __version__ == "0.0.9"
     assert len(MLIR_REGISTRY) > 0
 
     wgsl_trav = importlib.resources.files("ml_switcheroo_ir.schema.catalogs").joinpath("wgsl_ops.json")

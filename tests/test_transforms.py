@@ -14,6 +14,7 @@ from ml_switcheroo_ir import (
     eliminate_dead_nodes,
     propagate_shapes_and_constants,
 )
+from tests.conftest import seal_hypothesis_test
 
 
 def test_eliminate_dead_nodes_basic() -> None:
@@ -87,6 +88,7 @@ def test_eliminate_dead_nodes_idempotence() -> None:
     assert once.outputs == twice.outputs
 
 
+@seal_hypothesis_test
 @given(
     st.integers(min_value=1, max_value=5),
     st.integers(min_value=1, max_value=5),
@@ -1098,3 +1100,159 @@ def test_symbolic_propagation_and_subgraph_dce_cse() -> None:
     assert "dead_init" not in dce_res.initializers
     assert dce_res.attributes == {"outer_attr": 42}
     assert dce_res.loop_options == {"max_trip": 8}
+
+
+def test_subgraph_eq_pretty_fold_and_rewrite() -> None:
+    """Test LOGICAL_NODE_EQ, LOGICAL_GRAPH_PRETTY, fold_logical_graph, and rewrite_logical_graph_bottom_up."""
+    from ml_switcheroo_ir.transforms import (
+        LOGICAL_GRAPH_EQ,
+        LOGICAL_GRAPH_PRETTY,
+        LOGICAL_NODE_EQ,
+        fold_logical_graph,
+        rewrite_logical_graph_bottom_up,
+    )
+    from ml_switcheroo_ir.typeclasses import INT_SUM_MONOID, Endo
+
+    sub_a = LogicalGraph(name="Sub", nodes={"s": LogicalNode(id="s", op_type="Relu", inputs=["x"], outputs=["y"])})
+    sub_b = LogicalGraph(name="Sub", nodes={"s": LogicalNode(id="s", op_type="Neg", inputs=["x"], outputs=["y"])})
+
+    n_a = LogicalNode(
+        id="if_n",
+        op_type="If",
+        attributes={"alpha": 1.0},
+        subgraphs={"then": sub_a, "meta": [1, 2]},
+    )
+    n_b_sub_diff = n_a.clone(subgraphs={"then": sub_b, "meta": [1, 2]})
+    n_b_type_mismatch = n_a.clone(subgraphs={"then": "not_a_graph", "meta": [1, 2]})
+    n_b_attr_sub_diff = n_a.clone(subgraphs={"then": sub_a, "meta": [9, 9]})
+    n_b_keys_diff = n_a.clone(subgraphs={"only": sub_a})
+    n_b_attr_diff = n_a.clone(attributes={"alpha": 2.0})
+    n_b_scalar_diff = LogicalNode(id="other", op_type="If")
+
+    assert LOGICAL_NODE_EQ.eq(n_a, n_a.clone()) is True
+    assert LOGICAL_NODE_EQ.eq(n_a, n_b_sub_diff) is False
+    assert LOGICAL_NODE_EQ.eq(n_a, n_b_type_mismatch) is False
+    assert LOGICAL_NODE_EQ.eq(n_a, n_b_attr_sub_diff) is False
+    assert LOGICAL_NODE_EQ.eq(n_a, n_b_keys_diff) is False
+    assert LOGICAL_NODE_EQ.eq(n_a, n_b_attr_diff) is False
+    assert LOGICAL_NODE_EQ.eq(n_a, n_b_scalar_diff) is False
+
+    g1 = LogicalGraph(name="G", nodes={"if_n": n_a}, inputs=["x"], outputs=["if_n"])
+    g2 = LogicalGraph(name="OtherName", nodes={"if_n": n_a}, inputs=["x"], outputs=["if_n"])
+    assert LOGICAL_GRAPH_EQ.eq(g1, g1.clone()) is True
+    assert LOGICAL_GRAPH_EQ.eq(g1, g2) is False
+
+    rendered = LOGICAL_GRAPH_PRETTY.render(g1)
+    assert "graph G(x)" in rendered and "region then:" in rendered
+    assert fold_logical_graph(INT_SUM_MONOID, lambda _n: 1, g1) == 2
+
+    order_seen: list[str] = []
+
+    def _record_and_bump(node: LogicalNode) -> LogicalNode:
+        """Record visitation order and bump version by 1.
+
+        Args:
+            node (LogicalNode): Visited node.
+
+        Returns:
+            LogicalNode: Cloned node with incremented version.
+        """
+        order_seen.append(node.id)
+        return node.clone(version=node.version + 1)
+
+    rewritten = rewrite_logical_graph_bottom_up(Endo(app=_record_and_bump), g1)
+    assert order_seen == ["s", "if_n"]
+    assert rewritten.nodes["if_n"].version == 2
+    sub_rewritten = rewritten.nodes["if_n"].subgraphs["then"]
+    assert isinstance(sub_rewritten, LogicalGraph) and sub_rewritten.nodes["s"].version == 2
+
+    plain_g = LogicalGraph(nodes={"p": LogicalNode(id="p", op_type="Relu", inputs=["x"], outputs=["y"])}, outputs=["y"])
+    assert rewrite_logical_graph_bottom_up(lambda n: n.clone(version=5), plain_g).nodes["p"].version == 5
+
+
+def test_acyclic_graph_pass_pipeline_and_order_checks() -> None:
+    """Test AcyclicGraphPass lifting, composition, fixpoint, and _is_valid_topological_order branches."""
+    import pytest
+
+    from ml_switcheroo_ir.identifiers import NodeId
+    from ml_switcheroo_ir.proofs import prove_acyclic_sorted
+    from ml_switcheroo_ir.transforms import (
+        ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE,
+        CANONICAL_OPTIMIZE_PIPELINE,
+        CSE_PASS,
+        DCE_PASS,
+        SHAPE_CONSTANT_PROP_PASS,
+        GraphTransformPass,
+        _is_valid_topological_order,
+        compose_acyclic_passes,
+        fixpoint_acyclic_pass,
+        lift_acyclic_pass,
+    )
+    from ml_switcheroo_ir.typeclasses import Ok
+
+    dag = LogicalGraph(
+        name="OptDag",
+        nodes={
+            "c1": LogicalNode(id="c1", op_type="Constant", attributes={"value": [2, 3]}, outputs=["c1_o"]),
+            "r1": LogicalNode(id="r1", op_type="Relu", inputs=["c1_o"], outputs=["r1_o"]),
+            "r2_dup": LogicalNode(id="r2_dup", op_type="Relu", inputs=["c1_o"], outputs=["r2_o"]),
+            "dead": LogicalNode(id="dead", op_type="Neg", inputs=["r2_o"], outputs=["dead_o"]),
+        },
+        outputs=["r1_o"],
+    )
+    pr = prove_acyclic_sorted(dag)
+    assert isinstance(pr, Ok)
+    opt_pr = ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE(pr.value)
+    assert "dead" not in opt_pr.graph.nodes
+    assert "r2_dup" not in opt_pr.graph.nodes
+
+    direct_pr = CANONICAL_OPTIMIZE_PIPELINE.apply_acyclic(
+        DCE_PASS.apply_acyclic(CSE_PASS.apply_acyclic(SHAPE_CONSTANT_PROP_PASS.apply_acyclic(pr.value)))
+    )
+    assert "dead" not in direct_pr.graph.nodes
+
+    id_pass = compose_acyclic_passes()
+    assert id_pass(opt_pr) == opt_pr
+
+    def _add_tail(g: LogicalGraph) -> LogicalGraph:
+        """Append an extra tail Relu node if absent.
+
+        Args:
+            g (LogicalGraph): Input graph.
+
+        Returns:
+            LogicalGraph: Graph with extra tail node.
+        """
+        c = g.clone()
+        if "tail" not in c.nodes:
+            c.add_node(LogicalNode(id="tail", op_type="Relu", inputs=["r1_o"], outputs=["tail_o"]))
+            c.outputs = ["tail_o"]
+        return c
+
+    lifted_tail = lift_acyclic_pass(GraphTransformPass(name="add_tail", apply=_add_tail))
+    add_tail_acyclic = fixpoint_acyclic_pass(lifted_tail, max_iterations=1)
+    assert "tail" in add_tail_acyclic(opt_pr).graph.nodes
+
+    with pytest.raises(ValueError, match="non-negative int"):
+        fixpoint_acyclic_pass(id_pass, max_iterations=-1)
+    with pytest.raises(ValueError, match="non-negative int"):
+        fixpoint_acyclic_pass(id_pass, max_iterations=True)
+
+    two_g = LogicalGraph(
+        nodes={
+            "a": LogicalNode(id="a", op_type="Relu", inputs=["in"], outputs=["a_out"]),
+            "b": LogicalNode(id="b", op_type="Relu", inputs=["a_out"], outputs=["b_out"]),
+        }
+    )
+    assert _is_valid_topological_order(two_g, (NodeId("a"),)) is False
+    assert _is_valid_topological_order(two_g, (NodeId("a"), NodeId("missing"))) is False
+    assert _is_valid_topological_order(two_g, (NodeId("b"), NodeId("a"))) is False
+
+    direct_two = LogicalGraph(
+        nodes={
+            "a": LogicalNode(id="a", op_type="Relu", inputs=["in"]),
+            "b": LogicalNode(id="b", op_type="Relu", inputs=["a"]),
+        }
+    )
+    assert _is_valid_topological_order(direct_two, (NodeId("a"), NodeId("b"))) is True
+    assert _is_valid_topological_order(direct_two, (NodeId("b"), NodeId("a"))) is False

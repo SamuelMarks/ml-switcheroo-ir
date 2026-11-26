@@ -19,7 +19,8 @@ from ml_switcheroo_ir.schema.rdna_registry import (
     RDNA_VOPD_SLOTS,
 )
 from ml_switcheroo_ir.schema.sass_registry import SASS_PIPELINE_LATENCIES
-from ml_switcheroo_ir.typeclasses.outcome import Invalid, Valid, Validation
+from ml_switcheroo_ir.typeclasses.algebra import NonEmpty
+from ml_switcheroo_ir.typeclasses.outcome import Valid, Validation, from_error_sequence
 from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel, errors_from_validation
 
 __all__ = [
@@ -681,17 +682,16 @@ def validate_sass_scoreboarding_sequence(
     return errors
 
 
-def _errors_to_unit_validation(errs: Sequence[ValidationError]) -> Validation[tuple[ValidationError, ...], None]:
-    """Convert a sequence of ``ValidationError`` items into a unit ``Validation`` value.
+def _errors_to_unit_validation(errs: Sequence[ValidationError]) -> Validation[NonEmpty[ValidationError], None]:
+    """Convert a sequence of ``ValidationError`` items into ``Validation[NonEmpty[ValidationError], None]``.
 
     Args:
         errs (Sequence[ValidationError]): Collected errors.
 
     Returns:
-        Validation[tuple[ValidationError, ...], None]: ``Valid(None)`` when empty else ``Invalid(tuple(errs))``.
+        Validation[NonEmpty[ValidationError], None]: ``Valid(None)`` when empty else ``Invalid(NonEmpty(...))``.
     """
-    frozen = tuple(errs)
-    return Invalid(frozen) if frozen else Valid(None)
+    return from_error_sequence(tuple(errs), None)
 
 
 def _rdna_dst_tuple(node: LogicalNode) -> tuple[str | int, ...]:
@@ -710,7 +710,7 @@ def _rdna_dst_tuple(node: LogicalNode) -> tuple[str | int, ...]:
 def _validate_rdna_sequence(
     nodes: Sequence[LogicalNode],
     _level: ValidationLevel,
-) -> Validation[tuple[ValidationError, ...], None]:
+) -> Validation[NonEmpty[ValidationError], None]:
     """Validate consecutive VOPD dual-issue pairs in an RDNA instruction sequence.
 
     Args:
@@ -718,7 +718,7 @@ def _validate_rdna_sequence(
         _level (ValidationLevel): Active validation level.
 
     Returns:
-        Validation[tuple[ValidationError, ...], None]: Accumulated VOPD pairing diagnostics.
+        Validation[NonEmpty[ValidationError], None]: Accumulated VOPD pairing diagnostics.
     """
     errs: list[ValidationError] = []
     for idx in range(len(nodes) - 1):
@@ -744,8 +744,8 @@ class HardwareDialectSemantics:
     allowed_attributes: frozenset[str]
     extract_src_operands: Callable[[LogicalNode], tuple[str | int, ...]]
     extract_dst_operands: Callable[[LogicalNode], tuple[str | int, ...]]
-    validate_instruction: Callable[[LogicalNode, ValidationLevel], Validation[tuple[ValidationError, ...], None]]
-    validate_sequence: Callable[[Sequence[LogicalNode], ValidationLevel], Validation[tuple[ValidationError, ...], None]]
+    validate_instruction: Callable[[LogicalNode, ValidationLevel], Validation[NonEmpty[ValidationError], None]]
+    validate_sequence: Callable[[Sequence[LogicalNode], ValidationLevel], Validation[NonEmpty[ValidationError], None]]
 
 
 RDNA_ISA_SEMANTICS: typing.Final[HardwareDialectSemantics] = HardwareDialectSemantics(

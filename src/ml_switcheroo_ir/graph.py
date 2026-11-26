@@ -11,9 +11,10 @@ import typing
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 
 import pydantic
 import pydantic_core
@@ -26,7 +27,14 @@ from ml_switcheroo_ir.distributed import (
     PartitionSpec,
     PipelineTopologyConfig,
 )
-from ml_switcheroo_ir.identifiers import PortRef, is_non_bool_int
+from ml_switcheroo_ir.identifiers import (
+    DialectDomain,
+    NodeId,
+    OpName,
+    PortRef,
+    SsaValueName,
+    is_non_bool_int,
+)
 from ml_switcheroo_ir.protocols import (
     DeviceLikeProtocol,
     DTypeLikeProtocol,
@@ -58,9 +66,11 @@ from ml_switcheroo_ir.serialization import (
     zstandard,
 )
 from ml_switcheroo_ir.shapes import DimensionType
-from ml_switcheroo_ir.typeclasses import CodecError, Result
+from ml_switcheroo_ir.typeclasses import CodecError, Eq, HashableWitness, Result
 from ml_switcheroo_ir.types import (
     AttributeValue,
+    AttrNone,
+    AttrTerm,
     DType,
     InitializerValue,
     JsonValue,
@@ -73,20 +83,32 @@ from ml_switcheroo_ir.types import (
     _validate_attribute_value,
     _validate_dimension_tuple,
     describe_value_type,
+    embed_attribute_value,
     is_dynamic_dimension,
     is_valid_device_protocol,
     is_valid_loop_options_protocol,
     normalize_optional_dtype,
+    project_attribute_value,
 )
 
 __all__ = [
+    "AcyclicAndSchemaPhase",
+    "AcyclicSchemaShardingPhase",
+    "AcyclicSortedPhase",
     "BaseFrontend",
     "CloneOverrideValue",
     "CompiledArtifactT",
     "CompilerBackend",
     "CyclicGraphError",
     "EdgeList",
+    "FROZEN_LOGICAL_GRAPH_EQ",
+    "FROZEN_LOGICAL_GRAPH_HASH",
+    "FrozenLogicalEdge",
+    "FrozenLogicalGraph",
+    "FrozenLogicalNode",
+    "FullyVerifiedPhase",
     "GraphFrontend",
+    "GroundedPhase",
     "IRGraph",
     "IRNode",
     "LogicalAxis",
@@ -98,6 +120,9 @@ __all__ = [
     "LogicalNodeKwargs",
     "NodeDict",
     "PartitionSpec",
+    "ProvenGraph",
+    "SchemaValidPhase",
+    "ShardingValidPhase",
     "VersionedOutputList",
     "_apply_edges_list",
     "_build_graph_from_parsed_sections",
@@ -114,6 +139,8 @@ __all__ = [
     "_stream_parse_graph",
     "_stream_parse_nodes_section",
     "_stream_write_graph",
+    "freeze_graph",
+    "thaw_graph",
     "topological_sort",
     "zstandard",
 ]
@@ -2944,7 +2971,386 @@ LogicalGraph.model_rebuild()
 IRNode: typing_extensions.TypeAlias = LogicalNode
 IRGraph: typing_extensions.TypeAlias = LogicalGraph
 
-_ProofPhaseT = typing.TypeVar("_ProofPhaseT")
+
+def _empty_frozen_node_index() -> Mapping[str, FrozenLogicalNode]:
+    """Return an empty read-only ``MappingProxyType`` index for ``FrozenLogicalGraph``.
+
+    Returns:
+        Mapping[str, FrozenLogicalNode]: Empty read-only node lookup proxy.
+    """
+    empty_dict: dict[str, FrozenLogicalNode] = {}
+    return MappingProxyType(empty_dict)
+
+
+@dataclass(frozen=True)
+class FrozenLogicalEdge:
+    """Deeply immutable directed data-flow edge representation.
+
+    Attributes:
+        source (NodeId): Source node identifier emitting data.
+        target (NodeId): Target node identifier consuming data.
+        source_idx (int | None): Output port index on ``source``.
+        target_idx (int): Input operand index on ``target``.
+        value_name (SsaValueName | None): Optional SSA value name override.
+    """
+
+    source: NodeId
+    target: NodeId
+    source_idx: int | None = 0
+    target_idx: int = 0
+    value_name: SsaValueName | None = None
+
+
+@dataclass(frozen=True)
+class FrozenLogicalNode:
+    """Deeply immutable computation node backed by tuples and closed ``AttrTerm`` values.
+
+    Attributes:
+        id (NodeId): Unique node identifier.
+        op_type (OpName): Operator opcode or instruction mnemonic.
+        domain (DialectDomain): Dialect namespace (default: ``'ai.onnx'``).
+        version (int): Operator schema version.
+        attributes (tuple[tuple[str, AttrTerm], ...]): Ordered immutable attribute pairs.
+        inputs (tuple[str, ...]): Ordered input SSA identifiers.
+        outputs (tuple[SsaValueName, ...]): Ordered output SSA identifiers.
+        shape_metadata (tuple[DimensionType, ...] | None): Optional shape dimension tuple.
+        source_ast_ref (str | int | None): Optional source AST location token.
+        sharding (PartitionSpec | str | AttrTerm | None): Optional SPMD sharding layout.
+        dtype (DType | None): Optional primary scalar dtype.
+        output_specs (tuple[TensorSpec, ...]): Per-output tensor descriptors.
+        subgraphs (tuple[tuple[str, FrozenLogicalGraph | AttrTerm], ...]): Nested frozen subgraphs.
+        device (str | DeviceLikeProtocol | None): Optional device placement descriptor.
+        stream (str | int | None): Optional execution stream identifier.
+        strides (tuple[int, ...] | None): Optional physical memory strides.
+    """
+
+    id: NodeId
+    op_type: OpName
+    domain: DialectDomain = DialectDomain("ai.onnx")
+    version: int = 1
+    attributes: tuple[tuple[str, AttrTerm], ...] = ()
+    inputs: tuple[str, ...] = ()
+    outputs: tuple[SsaValueName, ...] = ()
+    shape_metadata: tuple[DimensionType, ...] | None = None
+    source_ast_ref: str | int | None = None
+    sharding: PartitionSpec | str | AttrTerm | None = None
+    dtype: DType | None = None
+    output_specs: tuple[TensorSpec, ...] = ()
+    subgraphs: tuple[tuple[str, FrozenLogicalGraph | AttrTerm], ...] = ()
+    device: str | DeviceLikeProtocol | None = None
+    stream: str | int | None = None
+    strides: tuple[int, ...] | None = None
+
+
+@dataclass(frozen=True)
+class FrozenLogicalGraph:
+    """Deeply immutable computation graph snapshot for proof-carrying IR witnesses.
+
+    Attributes:
+        name (str): Graph or model identifier.
+        nodes (tuple[tuple[NodeId, FrozenLogicalNode], ...]): Ordered immutable ``(NodeId, FrozenLogicalNode)`` pairs.
+        inputs (tuple[str, ...]): Ordered graph input SSA names.
+        input_specs (tuple[tuple[str, TensorSpec], ...]): Input tensor specifications.
+        outputs (tuple[str, ...]): Ordered graph output SSA names.
+        initializers (tuple[tuple[str, InitializerValue], ...]): Constant parameter initializers.
+        edges (tuple[FrozenLogicalEdge, ...]): Explicit directed data-flow edges.
+        edge_value_names (tuple[tuple[tuple[NodeId, int], SsaValueName], ...]): Explicit edge SSA overrides.
+        mesh (LogicalMesh | MeshLikeProtocol | AttrTerm): Optional logical device mesh.
+        pipeline_topology (PipelineTopologyConfig | None): Optional distributed pipeline topology.
+        attributes (tuple[tuple[str, AttrTerm], ...]): Graph-level immutable attributes.
+        annotations (tuple[tuple[str, AttrTerm], ...]): Compiler pass immutable annotations.
+        metadata (tuple[tuple[str, LoopOptionsProtocol | AttrTerm], ...]): Auxiliary graph metadata.
+        loop_options (AttrTerm | LoopOptionsProtocol | None): Optional compiler loop options.
+    """
+
+    name: str = "Model"
+    nodes: tuple[tuple[NodeId, FrozenLogicalNode], ...] = ()
+    inputs: tuple[str, ...] = ()
+    input_specs: tuple[tuple[str, TensorSpec], ...] = ()
+    outputs: tuple[str, ...] = ()
+    initializers: tuple[tuple[str, InitializerValue], ...] = ()
+    edges: tuple[FrozenLogicalEdge, ...] = ()
+    edge_value_names: tuple[tuple[tuple[NodeId, int], SsaValueName], ...] = ()
+    mesh: LogicalMesh | MeshLikeProtocol | AttrTerm = field(default_factory=AttrNone)
+    pipeline_topology: PipelineTopologyConfig | None = None
+    attributes: tuple[tuple[str, AttrTerm], ...] = ()
+    annotations: tuple[tuple[str, AttrTerm], ...] = ()
+    metadata: tuple[tuple[str, LoopOptionsProtocol | AttrTerm], ...] = ()
+    loop_options: AttrTerm | LoopOptionsProtocol | None = None
+    _node_index: Mapping[str, FrozenLogicalNode] = field(
+        default_factory=_empty_frozen_node_index,
+        repr=False,
+        compare=False,
+        hash=False,
+    )
+
+    def get_node(self, node_id: NodeId | str) -> FrozenLogicalNode | None:
+        """Look up a ``FrozenLogicalNode`` by ``node_id`` in O(1) when indexed.
+
+        Args:
+            node_id (NodeId | str): Target node identifier.
+
+        Returns:
+            FrozenLogicalNode | None: Matching frozen node or ``None`` if absent.
+        """
+        key = str(node_id)
+        if self._node_index:
+            return self._node_index.get(key)
+        for nid, fnode in self.nodes:
+            if str(nid) == key:
+                return fnode
+        return None
+
+
+def _freeze_node(node: LogicalNode) -> FrozenLogicalNode:
+    """Convert a mutable ``LogicalNode`` into a deeply immutable ``FrozenLogicalNode``.
+
+    Args:
+        node (LogicalNode): Source mutable node.
+
+    Returns:
+        FrozenLogicalNode: Deeply frozen node representation.
+    """
+    frozen_sharding: PartitionSpec | str | AttrTerm | None
+    if node.sharding is None or isinstance(node.sharding, str):
+        frozen_sharding = node.sharding
+    elif isinstance(node.sharding, PartitionSpec):
+        frozen_sharding = node.sharding.model_copy(deep=True)
+    else:
+        frozen_sharding = project_attribute_value(node.sharding)
+
+    frozen_subgraphs: list[tuple[str, FrozenLogicalGraph | AttrTerm]] = []
+    for k, sub in node.subgraphs.items():
+        if isinstance(sub, LogicalGraph):
+            frozen_subgraphs.append((k, freeze_graph(sub)))
+        else:
+            frozen_subgraphs.append((k, project_attribute_value(sub)))
+
+    return FrozenLogicalNode(
+        id=NodeId(node.id),
+        op_type=OpName(node.op_type),
+        domain=DialectDomain(node.domain),
+        version=node.version,
+        attributes=tuple((k, project_attribute_value(v)) for k, v in node.attributes.items()),
+        inputs=tuple(node.inputs),
+        outputs=tuple(SsaValueName(o) for o in node.outputs),
+        shape_metadata=node.shape_metadata,
+        source_ast_ref=node.source_ast_ref,
+        sharding=frozen_sharding,
+        dtype=node.dtype,
+        output_specs=tuple(spec.model_copy(deep=True) for spec in node.output_specs),
+        subgraphs=tuple(frozen_subgraphs),
+        device=node.device,
+        stream=node.stream,
+        strides=node.strides,
+    )
+
+
+def _thaw_node(fnode: FrozenLogicalNode) -> LogicalNode:
+    """Reconstruct a fresh mutable ``LogicalNode`` from ``FrozenLogicalNode``.
+
+    Args:
+        fnode (FrozenLogicalNode): Source frozen node.
+
+    Returns:
+        LogicalNode: Fresh mutable ``LogicalNode`` copy.
+    """
+    thawed_sharding: PartitionSpec | str | dict[str, AttributeValue] | None
+    if fnode.sharding is None or isinstance(fnode.sharding, str):
+        thawed_sharding = fnode.sharding
+    elif isinstance(fnode.sharding, PartitionSpec):
+        thawed_sharding = fnode.sharding.model_copy(deep=True)
+    else:
+        raw_sharding = embed_attribute_value(fnode.sharding)
+        thawed_sharding = raw_sharding if isinstance(raw_sharding, dict) else None
+
+    thawed_subgraphs: dict[str, LogicalGraph | AttributeValue] = {}
+    for k, sub in fnode.subgraphs:
+        if isinstance(sub, FrozenLogicalGraph):
+            thawed_subgraphs[k] = thaw_graph(sub)
+        else:
+            thawed_subgraphs[k] = embed_attribute_value(sub)
+
+    return LogicalNode(
+        id=str(fnode.id),
+        op_type=str(fnode.op_type),
+        domain=str(fnode.domain),
+        version=fnode.version,
+        attributes={k: embed_attribute_value(v) for k, v in fnode.attributes},
+        inputs=list(fnode.inputs),
+        outputs=[str(o) for o in fnode.outputs],
+        shape_metadata=fnode.shape_metadata,
+        source_ast_ref=fnode.source_ast_ref,
+        sharding=thawed_sharding,
+        dtype=fnode.dtype,
+        output_specs=[spec.model_copy(deep=True) for spec in fnode.output_specs],
+        subgraphs=thawed_subgraphs,
+        device=fnode.device,
+        stream=fnode.stream,
+        strides=fnode.strides,
+    )
+
+
+def freeze_graph(graph: LogicalGraph) -> FrozenLogicalGraph:
+    """Convert a mutable ``LogicalGraph`` into a deeply immutable ``FrozenLogicalGraph``.
+
+    Args:
+        graph (LogicalGraph): Source mutable computation graph.
+
+    Returns:
+        FrozenLogicalGraph: Deeply immutable snapshot with O(1) ``_node_index``.
+    """
+    frozen_nodes = tuple((NodeId(nid), _freeze_node(node)) for nid, node in graph.nodes.items())
+    index_map = MappingProxyType({str(nid): fnode for nid, fnode in frozen_nodes})
+
+    frozen_edges = tuple(
+        FrozenLogicalEdge(
+            source=NodeId(edge.source),
+            target=NodeId(edge.target),
+            source_idx=edge.source_idx,
+            target_idx=edge.target_idx,
+            value_name=SsaValueName(edge.value_name) if edge.value_name is not None else None,
+        )
+        for edge in graph.edges
+    )
+    frozen_edge_names = tuple(
+        sorted(
+            (((NodeId(t), idx), SsaValueName(vn)) for (t, idx), vn in graph._edge_value_names.items()),
+            key=lambda item: (str(item[0][0]), item[0][1]),
+        )
+    )
+
+    frozen_mesh: LogicalMesh | MeshLikeProtocol | AttrTerm
+    if isinstance(graph.mesh, LogicalMesh):
+        frozen_mesh = graph.mesh.model_copy(deep=True)
+    elif isinstance(graph.mesh, MeshLikeProtocol):
+        frozen_mesh = graph.mesh
+    else:
+        frozen_mesh = project_attribute_value(graph.mesh)
+
+    frozen_meta = tuple(
+        (
+            k,
+            v if isinstance(v, LoopOptionsProtocol) else project_attribute_value(v),
+        )
+        for k, v in graph.metadata.items()
+    )
+
+    frozen_loop: AttrTerm | LoopOptionsProtocol | None
+    if graph.loop_options is None or isinstance(graph.loop_options, LoopOptionsProtocol):
+        frozen_loop = graph.loop_options
+    else:
+        frozen_loop = project_attribute_value(graph.loop_options)
+
+    return FrozenLogicalGraph(
+        name=graph.name,
+        nodes=frozen_nodes,
+        inputs=tuple(graph.inputs),
+        input_specs=tuple((k, spec.model_copy(deep=True)) for k, spec in graph.input_specs.items()),
+        outputs=tuple(graph.outputs),
+        initializers=tuple((k, copy.deepcopy(v)) for k, v in graph.initializers.items()),
+        edges=frozen_edges,
+        edge_value_names=frozen_edge_names,
+        mesh=frozen_mesh,
+        pipeline_topology=(
+            graph.pipeline_topology.model_copy(deep=True) if graph.pipeline_topology is not None else None
+        ),
+        attributes=tuple((k, project_attribute_value(v)) for k, v in graph.attributes.items()),
+        annotations=tuple((k, project_attribute_value(v)) for k, v in graph.annotations.items()),
+        metadata=frozen_meta,
+        loop_options=frozen_loop,
+        _node_index=index_map,
+    )
+
+
+def thaw_graph(frozen: FrozenLogicalGraph) -> LogicalGraph:
+    """Materialize a fresh mutable ``LogicalGraph`` from ``FrozenLogicalGraph``.
+
+    Args:
+        frozen (FrozenLogicalGraph): Source immutable graph snapshot.
+
+    Returns:
+        LogicalGraph: Fresh mutable ``LogicalGraph`` copy isolated from ``frozen``.
+    """
+    thawed_mesh: LogicalMesh | MeshLikeProtocol | AttributeValue
+    if isinstance(frozen.mesh, LogicalMesh):
+        thawed_mesh = frozen.mesh.model_copy(deep=True)
+    elif isinstance(frozen.mesh, MeshLikeProtocol):
+        thawed_mesh = frozen.mesh
+    else:
+        thawed_mesh = embed_attribute_value(frozen.mesh)
+
+    thawed_meta: dict[str, AttributeValue | LoopOptionsProtocol | None] = {
+        k: (v if isinstance(v, LoopOptionsProtocol) else embed_attribute_value(v)) for k, v in frozen.metadata
+    }
+
+    thawed_loop: dict[str, AttributeValue] | LoopOptionsProtocol | None
+    if frozen.loop_options is None or isinstance(frozen.loop_options, LoopOptionsProtocol):
+        thawed_loop = frozen.loop_options
+    else:
+        embedded_loop = embed_attribute_value(frozen.loop_options)
+        thawed_loop = embedded_loop if isinstance(embedded_loop, dict) else None
+
+    thawed = LogicalGraph(
+        name=frozen.name,
+        nodes={str(nid): _thaw_node(fnode) for nid, fnode in frozen.nodes},
+        inputs=list(frozen.inputs),
+        input_specs={k: spec.model_copy(deep=True) for k, spec in frozen.input_specs},
+        outputs=list(frozen.outputs),
+        initializers={k: copy.deepcopy(v) for k, v in frozen.initializers},
+        mesh=thawed_mesh,
+        pipeline_topology=(
+            frozen.pipeline_topology.model_copy(deep=True) if frozen.pipeline_topology is not None else None
+        ),
+        attributes={k: embed_attribute_value(v) for k, v in frozen.attributes},
+        annotations={k: embed_attribute_value(v) for k, v in frozen.annotations},
+        metadata=thawed_meta,
+        loop_options=thawed_loop,
+    )
+    thawed._edge_value_names = {
+        (str(target_id), idx): str(vname) for (target_id, idx), vname in frozen.edge_value_names
+    }
+    return thawed
+
+
+def _frozen_graph_canonical_key(
+    frozen: FrozenLogicalGraph,
+) -> tuple[str, tuple[tuple[tuple[NodeId, int], SsaValueName], ...]]:
+    """Compute a canonical structural key for ``FrozenLogicalGraph`` equality and hashing.
+
+    Args:
+        frozen (FrozenLogicalGraph): Immutable graph snapshot.
+
+    Returns:
+        tuple[str, tuple[tuple[tuple[NodeId, int], SsaValueName], ...]]: Canonical JSON and edge SSA names.
+    """
+    canonical_json = json.dumps(graph_to_dict(thaw_graph(frozen)), sort_keys=True, separators=(",", ":"))
+    return (canonical_json, frozen.edge_value_names)
+
+
+def _hash_frozen_logical_graph(frozen: FrozenLogicalGraph) -> int:
+    """Compute a deterministic structural hash for ``FrozenLogicalGraph``.
+
+    Args:
+        frozen (FrozenLogicalGraph): Immutable graph snapshot to hash.
+
+    Returns:
+        int: Coherent structural hash value.
+    """
+    return hash(_frozen_graph_canonical_key(frozen))
+
+
+FROZEN_LOGICAL_GRAPH_EQ: Eq[FrozenLogicalGraph] = Eq(
+    eq=lambda lhs, rhs: _frozen_graph_canonical_key(lhs) == _frozen_graph_canonical_key(rhs)
+)
+
+FROZEN_LOGICAL_GRAPH_HASH: HashableWitness[FrozenLogicalGraph] = HashableWitness(
+    eq_witness=FROZEN_LOGICAL_GRAPH_EQ,
+    hash_value=_hash_frozen_logical_graph,
+)
+
+
+_ProofPhaseT_co = typing.TypeVar("_ProofPhaseT_co", covariant=True)
 
 
 class AcyclicSortedPhase:
@@ -2963,17 +3369,96 @@ class GroundedPhase:
     """Phantom phase tag witnessing 100% anti-hallucination snapshot grounding."""
 
 
-@dataclass(frozen=True)
-class ProvenGraph(typing.Generic[_ProofPhaseT]):
-    """Immutable proof-carrying graph snapshot parameterized by phantom witness ``_ProofPhaseT``.
+class AcyclicAndSchemaPhase(AcyclicSortedPhase, SchemaValidPhase):
+    """Cumulative phantom phase witnessing both ``AcyclicSortedPhase`` and ``SchemaValidPhase``."""
 
-    Clones the input ``LogicalGraph`` at proof-minting time so subsequent caller mutations
-    to the original ``LogicalGraph`` cannot invalidate the proven invariant.
+
+class AcyclicSchemaShardingPhase(AcyclicAndSchemaPhase, ShardingValidPhase):
+    """Cumulative phantom phase witnessing ``AcyclicSortedPhase``, ``SchemaValidPhase``, and ``ShardingValidPhase``."""
+
+
+class FullyVerifiedPhase(AcyclicSchemaShardingPhase, GroundedPhase):
+    """Cumulative phantom phase witnessing all four static IR verification invariants."""
+
+
+@dataclass(frozen=True)
+class ProvenGraph(typing.Generic[_ProofPhaseT_co]):
+    """Deeply immutable, covariant proof-carrying graph witness ``ProvenGraph[_ProofPhaseT_co]``.
+
+    Stores a ``FrozenLogicalGraph`` so neither pre-mint nor post-mint mutations to any
+    mutable ``LogicalGraph`` view can ever corrupt a proven invariant. Covariant phase
+    subtyping allows ``ProvenGraph[FullyVerifiedPhase]`` to satisfy functions expecting
+    ``ProvenGraph[AcyclicSortedPhase]``, ``ProvenGraph[SchemaValidPhase]``,
+    ``ProvenGraph[ShardingValidPhase]``, or ``ProvenGraph[GroundedPhase]``.
 
     Attributes:
-        graph (LogicalGraph): Deep-cloned snapshot of the verified computation graph.
-        ordered_nodes (tuple[LogicalNode, ...]): Deterministic node sequence captured at verification.
+        frozen_graph (FrozenLogicalGraph): Deeply immutable canonical graph snapshot.
+        ordered_node_ids (tuple[NodeId, ...]): Deterministic node identifier ordering captured at proof time.
     """
 
-    graph: LogicalGraph
-    ordered_nodes: tuple[LogicalNode, ...]
+    frozen_graph: FrozenLogicalGraph
+    ordered_node_ids: tuple[NodeId, ...] = ()
+
+    @classmethod
+    def mint(
+        cls,
+        graph: LogicalGraph,
+        ordered_nodes: Sequence[LogicalNode] | None = None,
+    ) -> ProvenGraph[_ProofPhaseT_co]:
+        """Freeze ``graph`` and mint a ``ProvenGraph[_ProofPhaseT_co]`` witness.
+
+        Args:
+            graph (LogicalGraph): Verified computation graph to freeze.
+            ordered_nodes (Sequence[LogicalNode] | None): Optional explicit node ordering.
+
+        Returns:
+            ProvenGraph[_ProofPhaseT_co]: Deeply immutable proof-carrying graph witness.
+        """
+        frozen = freeze_graph(graph)
+        ids = (
+            tuple(NodeId(n.id) for n in ordered_nodes)
+            if ordered_nodes is not None
+            else tuple(k for k, _ in frozen.nodes)
+        )
+        return cls(frozen_graph=frozen, ordered_node_ids=ids)
+
+    def thaw(self) -> LogicalGraph:
+        """Return a fresh, defensive mutable ``LogicalGraph`` copy of ``self.frozen_graph``.
+
+        Returns:
+            LogicalGraph: Isolated mutable ``LogicalGraph`` instance.
+        """
+        return thaw_graph(self.frozen_graph)
+
+    @property
+    def graph(self) -> LogicalGraph:
+        """Return a fresh mutable ``LogicalGraph`` view without exposing internal state to mutation.
+
+        Returns:
+            LogicalGraph: Freshly thawed ``LogicalGraph`` copy.
+        """
+        return self.thaw()
+
+    @property
+    def ordered_nodes(self) -> tuple[LogicalNode, ...]:
+        """Materialize freshly thawed ``LogicalNode`` instances in ``ordered_node_ids`` order.
+
+        Returns:
+            tuple[LogicalNode, ...]: Ordered ``LogicalNode`` tuple.
+        """
+        thawed = self.thaw()
+        return tuple(thawed.nodes[str(nid)] for nid in self.ordered_node_ids if str(nid) in thawed.nodes)
+
+    @property
+    def ordered_frozen_nodes(self) -> tuple[FrozenLogicalNode, ...]:
+        """Return zero-copy ``FrozenLogicalNode`` instances in ``ordered_node_ids`` order.
+
+        Returns:
+            tuple[FrozenLogicalNode, ...]: Ordered ``FrozenLogicalNode`` tuple.
+        """
+        resolved: list[FrozenLogicalNode] = []
+        for nid in self.ordered_node_ids:
+            fnode = self.frozen_graph.get_node(nid)
+            if fnode is not None:
+                resolved.append(fnode)
+        return tuple(resolved)

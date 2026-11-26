@@ -3,7 +3,25 @@
 from __future__ import annotations
 
 from ml_switcheroo_ir.distributed import PartitionSpec
+from ml_switcheroo_ir.errors import (
+    IR_DOMAIN_ERROR_EQ,
+    IR_DOMAIN_ERROR_PRETTY,
+    GraphCycleDiagnosticError,
+    GroundingAuditBatchError,
+    IdentifierKind,
+    IdentifierParseError,
+    IrBoundaryException,
+    IrCodecDecodeError,
+    IrDomainError,
+    SchemaValidationBatchError,
+    ShapeUnificationError,
+    ShardingValidationBatchError,
+    TranslationIsoError,
+    format_ir_domain_error,
+    to_boundary_exception,
+)
 from ml_switcheroo_ir.graph import LogicalGraph, LogicalNode
+from ml_switcheroo_ir.identifiers import NodeId
 from ml_switcheroo_ir.schema.base import AttributeType, describe_attribute_type
 from ml_switcheroo_ir.shapes import (
     SYM_EXPR_EQ,
@@ -29,6 +47,7 @@ from ml_switcheroo_ir.shapes import (
     sym_expr_free_vars,
     sym_expr_simplify,
 )
+from ml_switcheroo_ir.typeclasses import CodecError, NonEmpty
 from ml_switcheroo_ir.types import (
     AttrBool,
     AttrBytes,
@@ -52,7 +71,7 @@ from ml_switcheroo_ir.types import (
     embed_attribute_value,
     project_attribute_value,
 )
-from ml_switcheroo_ir.validation.core import ValidationLevel, validation_level_rank
+from ml_switcheroo_ir.validation.core import ValidationError, ValidationLevel, validation_level_rank
 from ml_switcheroo_ir.validation.grounding import DiagnosticSeverity, GroundingDiagnostic
 from ml_switcheroo_ir.validation.schema_validator import check_attribute_type_value
 
@@ -244,3 +263,33 @@ def test_exhaustive_attribute_type_and_validation_level_dispatch() -> None:
     assert d_err.level is ValidationLevel.ERROR
     assert d_warn.level is ValidationLevel.WARNING
     assert d_info.level is ValidationLevel.WARNING
+
+
+def test_ir_domain_error_closed_adt_exhaustiveness() -> None:
+    """Test all 8 IrDomainError variants, EQ/PRETTY witnesses, and IrBoundaryException."""
+    v_err = ValidationError(node_id="n1", attribute="op_type", message="bad op", level=ValidationLevel.ERROR)
+    g_diag = GroundingDiagnostic(field="op_type", message="ungrounded", severity=DiagnosticSeverity.ERROR)
+    c_err = CodecError(path=("nodes", 0), expected="str", actual_description="int", message="expected str")
+
+    variants: tuple[IrDomainError, ...] = (
+        IdentifierParseError(kind=IdentifierKind.NODE_ID, raw_value="", reason="empty"),
+        GraphCycleDiagnosticError(cycle_nodes=(NodeId("a"), NodeId("b")), message="cycle"),
+        SchemaValidationBatchError(diagnostics=NonEmpty.singleton(v_err)),
+        ShardingValidationBatchError(diagnostics=NonEmpty.singleton(v_err)),
+        GroundingAuditBatchError(diagnostics=NonEmpty(head=g_diag, tail=(v_err,))),
+        TranslationIsoError(op_name="conv_layout", direction="forward", parameter="OIHW->HWIO", reason="bad rank"),
+        TranslationIsoError(op_name="softmax", direction="backward", parameter=None, reason="unmapped"),
+        IrCodecDecodeError(codec_error=c_err),
+        ShapeUnificationError(lhs=TensorShape(dims=(2, 4)), rhs=TensorShape(dims=(3, 4)), reason="dim 0"),
+    )
+
+    for item in variants:
+        rendered = format_ir_domain_error(item)
+        assert rendered == IR_DOMAIN_ERROR_PRETTY.render(item)
+        assert len(rendered) > 0
+        assert IR_DOMAIN_ERROR_EQ.eq(item, item) is True
+        exc = to_boundary_exception(item)
+        assert isinstance(exc, IrBoundaryException)
+        assert exc.error == item
+        assert str(exc) == rendered
+    assert IR_DOMAIN_ERROR_EQ.neq(variants[0], variants[1]) is True

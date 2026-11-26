@@ -2,10 +2,35 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
-from ml_switcheroo_ir.distributed import LogicalMesh, PartitionSpec
-from ml_switcheroo_ir.graph import CyclicGraphError, LogicalGraph, LogicalNode
+from ml_switcheroo_ir.distributed import (
+    LogicalMesh,
+    MeshMappingConfig,
+    MicrobatchSplittingConfig,
+    PartitionSpec,
+    PipelineTopologyConfig,
+    StageCommunicationConfig,
+)
+from ml_switcheroo_ir.errors import (
+    GraphCycleDiagnosticError,
+    GroundingAuditBatchError,
+    SchemaValidationBatchError,
+    ShardingValidationBatchError,
+)
+from ml_switcheroo_ir.graph import (
+    FROZEN_LOGICAL_GRAPH_EQ,
+    FROZEN_LOGICAL_GRAPH_HASH,
+    CyclicGraphError,
+    FrozenLogicalGraph,
+    FrozenLogicalNode,
+    LogicalGraph,
+    LogicalNode,
+    freeze_graph,
+    thaw_graph,
+)
 from ml_switcheroo_ir.identifiers import (
     DIALECT_DOMAIN_EQ,
     DIALECT_DOMAIN_HASH,
@@ -32,6 +57,7 @@ from ml_switcheroo_ir.identifiers import (
     SSA_VALUE_NAME_HASH,
     SSA_VALUE_NAME_ORD,
     DialectDomain,
+    NodeId,
     OpName,
     PortRef,
     QualifiedOpKey,
@@ -46,13 +72,24 @@ from ml_switcheroo_ir.identifiers import (
     require_non_bool_int,
 )
 from ml_switcheroo_ir.proofs import (
+    AcyclicAndSchemaPhase,
+    AcyclicSchemaShardingPhase,
+    AcyclicSortedPhase,
+    FullyVerifiedPhase,
+    GroundedPhase,
+    ProvenGraph,
+    SchemaValidPhase,
+    ShardingValidPhase,
     prove_acyclic_sorted,
+    prove_fully_verified,
     prove_grounded,
     prove_schema_valid,
     prove_sharding_valid,
 )
+from ml_switcheroo_ir.protocols import LoopOptionsProtocol, MeshLikeProtocol
 from ml_switcheroo_ir.typeclasses import Err, Invalid, Ok, Valid
-from ml_switcheroo_ir.validation.grounding import SnapshotManifestType
+from ml_switcheroo_ir.types import DType, TensorSpec
+from ml_switcheroo_ir.validation.grounding import GroundingAuditReport, SnapshotManifestType
 from ml_switcheroo_ir.validation.schema_validator import Validator
 
 
@@ -218,3 +255,246 @@ def test_proven_graph_sharding_and_grounding_witnesses() -> None:
         outputs=["y"],
     )
     assert isinstance(prove_grounded(g_ground_bad, snapshots_path=manifest), Invalid)
+
+
+def test_frozen_logical_graph_roundtrip_eq_hash_and_immutability() -> None:
+    """Test freeze_graph/thaw_graph across rich node/graph variants, get_node, EQ/HASH, and immutability."""
+
+    class _DummyMesh:
+        """Minimal MeshLikeProtocol implementation for freeze/thaw testing."""
+
+        @property
+        def shape(self) -> dict[str, int]:
+            """Return mesh axis sizes.
+
+            Returns:
+                dict[str, int]: Axis map.
+            """
+            return {"tp": 2}
+
+        @property
+        def axis_names(self) -> tuple[str, ...]:
+            """Return mesh axis names.
+
+            Returns:
+                tuple[str, ...]: Axis tuple.
+            """
+            return ("tp",)
+
+    class _DummyLoopOpts:
+        """Minimal LoopOptionsProtocol implementation for freeze/thaw testing."""
+
+        @property
+        def parallel_iterations(self) -> int | None:
+            """Return parallel iteration count.
+
+            Returns:
+                int | None: Parallel count.
+            """
+            return 4
+
+        @property
+        def swap_memory(self) -> bool | None:
+            """Return memory swap flag.
+
+            Returns:
+                bool | None: Swap flag.
+            """
+            return False
+
+        @property
+        def maximum_iterations(self) -> int | None:
+            """Return maximum iteration count.
+
+            Returns:
+                int | None: Max iterations.
+            """
+            return 16
+
+    assert isinstance(_DummyMesh(), MeshLikeProtocol)
+    assert isinstance(_DummyLoopOpts(), LoopOptionsProtocol)
+
+    sub_g = LogicalGraph(name="Sub", nodes={"s1": LogicalNode(id="s1", op_type="Relu", sharding="replicated")})
+    topo = PipelineTopologyConfig(
+        microbatch_splitting=MicrobatchSplittingConfig(num_microbatches=2),
+        mesh_mapping=MeshMappingConfig(devices_per_stage=1),
+        stage_communication=StageCommunicationConfig(),
+    )
+    rich_g = LogicalGraph(
+        name="Rich",
+        nodes={
+            "n1": LogicalNode(
+                id="n1",
+                op_type="If",
+                attributes={"k": [1, 2]},
+                outputs=["n1_out"],
+                sharding={"custom": 1},
+                dtype=DType.float32,
+                output_specs=[TensorSpec(shape=(2, 4), dtype=DType.float32)],
+                subgraphs={"then": sub_g, "meta": {"tag": "v"}},
+                strides=(4, 1),
+            ),
+            "n2": LogicalNode(
+                id="n2",
+                op_type="Relu",
+                inputs=["n1_out"],
+                outputs=["out"],
+                sharding=PartitionSpec(("dp", None)),
+            ),
+        },
+        inputs=["in0"],
+        input_specs={"in0": TensorSpec(shape=(2, 4), dtype=DType.float32)},
+        outputs=["out"],
+        initializers={"w": [1.0, 2.0]},
+        mesh=LogicalMesh(shape={"dp": 2}),
+        pipeline_topology=topo,
+        attributes={"ga": 1},
+        annotations={"ann": "ok"},
+        metadata={"m_dict": {"x": 1}, "m_loop": _DummyLoopOpts()},
+        loop_options={"max_iter": 8},
+    )
+    rich_g.add_edge("n1", "n2", source_idx=0, target_idx=0, value_name="n1_out")
+
+    frozen = freeze_graph(rich_g)
+    assert frozen.get_node("n1") is not None
+    assert frozen.get_node("missing") is None
+    thawed = thaw_graph(frozen)
+    assert thawed == rich_g
+    assert FROZEN_LOGICAL_GRAPH_EQ.eq(frozen, freeze_graph(thawed))
+    assert FROZEN_LOGICAL_GRAPH_HASH.hash_value(frozen) == FROZEN_LOGICAL_GRAPH_HASH.hash_value(freeze_graph(thawed))
+
+    init_int_f = freeze_graph(LogicalGraph(name="I", initializers={"w": [1]}))
+    init_bool_f = freeze_graph(LogicalGraph(name="I", initializers={"w": [True]}))
+    assert FROZEN_LOGICAL_GRAPH_EQ.neq(init_int_f, init_bool_f)
+
+    alt_edge_g = rich_g.clone()
+    alt_edge_g.add_edge("n1", "n2", source_idx=0, target_idx=0, value_name="alt_ssa_name")
+    assert FROZEN_LOGICAL_GRAPH_EQ.neq(frozen, freeze_graph(alt_edge_g))
+
+    # Protocol mesh & loop_options + None mesh/loop_options branches + unindexed get_node fallback
+    proto_g = LogicalGraph(name="Proto", mesh=_DummyMesh(), loop_options=_DummyLoopOpts())
+    assert thaw_graph(freeze_graph(proto_g)).name == "Proto"
+    plain_g = LogicalGraph(name="Plain")
+    assert thaw_graph(freeze_graph(plain_g)) == plain_g
+
+    fn_direct = FrozenLogicalNode(id=NodeId("d1"), op_type=OpName("Relu"))
+    fg_unindexed = FrozenLogicalGraph(nodes=((NodeId("d1"), fn_direct),))
+    assert fg_unindexed.get_node("d1") == fn_direct
+    assert fg_unindexed.get_node("d2") is None
+
+    mp = pytest.MonkeyPatch()
+    with pytest.raises(FrozenInstanceError):
+        mp.setattr(frozen, "name", "Mutated")
+    with pytest.raises(FrozenInstanceError):
+        mp.setattr(fn_direct, "version", 99)
+
+
+def test_cumulative_proven_graph_covariance_and_full_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test ProvenGraph covariance, defensive .graph/.ordered_frozen_nodes, upgrade_to_*, and prove_fully_verified.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture.
+    """
+    manifest: SnapshotManifestType = {"operations": {"Relu": {"params": []}}}
+    mesh = LogicalMesh(shape={"dp": 2})
+    g_ok = LogicalGraph(
+        name="FullOk",
+        nodes={
+            "r1": LogicalNode(
+                id="r1",
+                op_type="Relu",
+                domain="onnx",
+                inputs=["x"],
+                outputs=["h"],
+                sharding=PartitionSpec(("dp",)),
+            ),
+            "r2": LogicalNode(
+                id="r2",
+                op_type="Relu",
+                domain="onnx",
+                inputs=["h"],
+                outputs=["y"],
+                sharding=PartitionSpec(("dp",)),
+            ),
+        },
+        inputs=["x"],
+        mesh=mesh,
+        outputs=["y"],
+    )
+
+    full_res = prove_fully_verified(g_ok, snapshots_path=manifest)
+    assert isinstance(full_res, Ok)
+    proven_full: ProvenGraph[FullyVerifiedPhase] = full_res.value
+
+    # Covariant assignment across all 4 base and intermediate phase types
+    as_acyclic: ProvenGraph[AcyclicSortedPhase] = proven_full
+    as_schema: ProvenGraph[SchemaValidPhase] = proven_full
+    as_sharding: ProvenGraph[ShardingValidPhase] = proven_full
+    as_grounded: ProvenGraph[GroundedPhase] = proven_full
+    as_a_s: ProvenGraph[AcyclicAndSchemaPhase] = proven_full
+    as_a_s_sh: ProvenGraph[AcyclicSchemaShardingPhase] = proven_full
+    assert len(as_acyclic.ordered_frozen_nodes) == 2
+    assert as_schema.ordered_node_ids == as_sharding.ordered_node_ids == as_grounded.ordered_node_ids
+    assert as_a_s.frozen_graph == as_a_s_sh.frozen_graph
+
+    # Cover ordered_frozen_nodes skipping unknown node IDs
+    sparse_proven: ProvenGraph[AcyclicSortedPhase] = ProvenGraph(
+        frozen_graph=proven_full.frozen_graph,
+        ordered_node_ids=(NodeId("r1"), NodeId("nonexistent")),
+    )
+    assert len(sparse_proven.ordered_frozen_nodes) == 1
+    assert len(sparse_proven.ordered_nodes) == 1
+
+    # Mutating proven_full.graph view must never corrupt proven_full
+    mut_view = proven_full.graph
+    mut_view.nodes.clear()
+    assert len(proven_full.graph.nodes) == 2
+    mp_local = pytest.MonkeyPatch()
+    with pytest.raises(FrozenInstanceError):
+        mp_local.setattr(proven_full, "ordered_node_ids", ())
+
+    # Mint without explicit ordered_nodes defaults to frozen.nodes order
+    minted_default: ProvenGraph[AcyclicSortedPhase] = ProvenGraph.mint(g_ok)
+    assert len(minted_default.ordered_node_ids) == 2
+
+    # Failure branches of prove_fully_verified across all 4 stages
+    cyc_g = LogicalGraph(
+        nodes={
+            "a": LogicalNode(id="a", op_type="Relu", inputs=["b"], outputs=["a"]),
+            "b": LogicalNode(id="b", op_type="Relu", inputs=["a"], outputs=["b"]),
+        }
+    )
+    cyc_full = prove_fully_verified(cyc_g, snapshots_path=manifest)
+    assert isinstance(cyc_full, Err) and isinstance(cyc_full.error, GraphCycleDiagnosticError)
+
+    bad_schema_g = LogicalGraph(
+        nodes={"c": LogicalNode(id="c", op_type="Concat", inputs=["x"], attributes={"axis": "bad"}, outputs=["y"])},
+        inputs=["x"],
+        outputs=["y"],
+    )
+    sch_full = prove_fully_verified(bad_schema_g, snapshots_path=manifest)
+    assert isinstance(sch_full, Err) and isinstance(sch_full.error, SchemaValidationBatchError)
+
+    bad_shard_g = LogicalGraph(
+        nodes={
+            "in": LogicalNode(id="in", op_type="Input", outputs=["x"], sharding=PartitionSpec(("dp",))),
+            "r": LogicalNode(id="r", op_type="Relu", inputs=["x"], outputs=["y"], sharding=PartitionSpec((None,))),
+        },
+        mesh=mesh,
+        outputs=["y"],
+    )
+    shd_full = prove_fully_verified(bad_shard_g, snapshots_path=manifest)
+    assert isinstance(shd_full, Err) and isinstance(shd_full.error, ShardingValidationBatchError)
+
+    # Test _extract_grounding_failures fallback + GroundingAuditBatchError in prove_fully_verified
+    import ml_switcheroo_ir.proofs as proofs_mod
+
+    monkeypatch.setattr(
+        proofs_mod,
+        "audit_graph_grounding",
+        lambda _g, snapshots_path=None: GroundingAuditReport(is_grounded=False, diagnostics=[]),
+    )
+    empty_diag_res = prove_grounded(g_ok, snapshots_path=manifest)
+    assert isinstance(empty_diag_res, Invalid) and len(empty_diag_res.errors) == 1
+    grd_full = prove_fully_verified(g_ok, snapshots_path=manifest)
+    assert isinstance(grd_full, Err) and isinstance(grd_full.error, GroundingAuditBatchError)

@@ -16,12 +16,14 @@ import typing_extensions
 
 from ml_switcheroo_ir.distributed import PartitionSpec
 from ml_switcheroo_ir.graph import (
+    AcyclicSortedPhase,
     LogicalEdge,
     LogicalGraph,
     LogicalNode,
+    ProvenGraph,
     topological_sort,
 )
-from ml_switcheroo_ir.identifiers import PortRef, is_non_bool_int
+from ml_switcheroo_ir.identifiers import NodeId, PortRef, is_non_bool_int
 from ml_switcheroo_ir.protocols import DeviceLikeProtocol
 from ml_switcheroo_ir.schema.custom_ops import (
     COLLECTIVE_OPS_REGISTRY,
@@ -35,8 +37,18 @@ from ml_switcheroo_ir.shapes import (
     infer_op_output_shape,
     normalize_axis,
 )
-from ml_switcheroo_ir.typeclasses import Endo, Eq, HashableWitness, Monoid, endo_monoid
+from ml_switcheroo_ir.typeclasses import (
+    Endo,
+    EndoRewrite,
+    Eq,
+    HashableWitness,
+    Monoid,
+    Pretty,
+    endo_monoid,
+)
 from ml_switcheroo_ir.types import AttributeValue, DType, InitializerValue, TensorShape, TensorSpec
+
+_FoldAccT = typing.TypeVar("_FoldAccT")
 
 HashableAttrKey: typing_extensions.TypeAlias = typing.Union[
     str,
@@ -96,7 +108,12 @@ NON_DETERMINISTIC_OPS: set[str] = {
 }
 
 __all__ = [
+    "ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE",
+    "ACYCLIC_CSE_PASS",
+    "ACYCLIC_DCE_PASS",
+    "ACYCLIC_SHAPE_CONSTANT_PROP_PASS",
     "ATTR_HASH_WITNESS",
+    "AcyclicGraphPass",
     "CANONICAL_OPTIMIZE_PIPELINE",
     "COMMUTATIVE_OPS",
     "CSE_PASS",
@@ -104,14 +121,22 @@ __all__ = [
     "GraphTransformPass",
     "HashableAttrKey",
     "LOGICAL_GRAPH_EQ",
+    "LOGICAL_GRAPH_PRETTY",
+    "LOGICAL_NODE_EQ",
+    "LOGICAL_NODE_REWRITE",
     "NODE_CSE_WITNESS",
     "NodeCseSignatureKey",
     "SHAPE_CONSTANT_PROP_PASS",
+    "compose_acyclic_passes",
     "compose_passes",
     "eliminate_common_subexpressions",
     "eliminate_dead_nodes",
+    "fixpoint_acyclic_pass",
     "fixpoint_graph_pass",
+    "fold_logical_graph",
+    "lift_acyclic_pass",
     "propagate_shapes_and_constants",
+    "rewrite_logical_graph_bottom_up",
 ]
 
 COMMUTATIVE_OPS: frozenset[str] = frozenset(
@@ -1745,17 +1770,119 @@ def _node_cse_hash(node: LogicalNode) -> int:
     return hash(_standalone_node_cse_key(node))
 
 
+def _subgraphs_structural_eq(
+    lhs_subs: Mapping[str, LogicalGraph | AttributeValue],
+    rhs_subs: Mapping[str, LogicalGraph | AttributeValue],
+) -> bool:
+    """Compare two node ``subgraphs`` mappings recursively across nested ``LogicalGraph`` regions.
+
+    Args:
+        lhs_subs (Mapping[str, LogicalGraph | AttributeValue]): Left subgraphs mapping.
+        rhs_subs (Mapping[str, LogicalGraph | AttributeValue]): Right subgraphs mapping.
+
+    Returns:
+        bool: True iff keys match and every corresponding subgraph/attribute entry is structurally equal.
+    """
+    if lhs_subs.keys() != rhs_subs.keys():
+        return False
+    for key, lhs_val in lhs_subs.items():
+        rhs_val = rhs_subs[key]
+        if isinstance(lhs_val, LogicalGraph) and isinstance(rhs_val, LogicalGraph):
+            if not _graph_eq(lhs_val, rhs_val):
+                return False
+        elif isinstance(lhs_val, LogicalGraph) or isinstance(rhs_val, LogicalGraph):
+            return False
+        elif not _attr_cse_eq(lhs_val, rhs_val):
+            return False
+    return True
+
+
+def _node_structural_eq(lhs: LogicalNode, rhs: LogicalNode) -> bool:
+    """Compare two ``LogicalNode`` instances structurally including ``subgraphs`` and ``sharding``.
+
+    Args:
+        lhs (LogicalNode): Left node.
+        rhs (LogicalNode): Right node.
+
+    Returns:
+        bool: True iff all structural fields, attributes, sharding, and nested subgraphs match.
+    """
+    scalar_match = (
+        lhs.id == rhs.id
+        and lhs.op_type == rhs.op_type
+        and lhs.domain == rhs.domain
+        and lhs.version == rhs.version
+        and lhs.inputs == rhs.inputs
+        and lhs.outputs == rhs.outputs
+        and lhs.shape_metadata == rhs.shape_metadata
+        and lhs.source_ast_ref == rhs.source_ast_ref
+        and lhs.sharding == rhs.sharding
+        and lhs.dtype == rhs.dtype
+        and lhs.output_specs == rhs.output_specs
+        and lhs.device == rhs.device
+        and lhs.stream == rhs.stream
+        and lhs.strides == rhs.strides
+    )
+    if not scalar_match or lhs.attributes.keys() != rhs.attributes.keys():
+        return False
+    if not all(_attr_cse_eq(lhs.attributes[k], rhs.attributes[k]) for k in lhs.attributes):
+        return False
+    return _subgraphs_structural_eq(lhs.subgraphs, rhs.subgraphs)
+
+
 def _graph_eq(lhs: LogicalGraph, rhs: LogicalGraph) -> bool:
-    """Check semantic equality of two ``LogicalGraph`` instances.
+    """Check recursive structural equality of two ``LogicalGraph`` instances.
 
     Args:
         lhs (LogicalGraph): Left graph.
         rhs (LogicalGraph): Right graph.
 
     Returns:
-        bool: True iff ``lhs == rhs``.
+        bool: True iff envelope metadata, mesh, pipeline_topology, and all recursive nodes match.
     """
-    return lhs == rhs
+    envelope_match = (
+        lhs.name == rhs.name
+        and lhs.inputs == rhs.inputs
+        and lhs.input_specs == rhs.input_specs
+        and lhs.outputs == rhs.outputs
+        and lhs.initializers == rhs.initializers
+        and lhs.edges == rhs.edges
+        and lhs.mesh == rhs.mesh
+        and lhs.pipeline_topology == rhs.pipeline_topology
+        and lhs.attributes == rhs.attributes
+        and lhs.annotations == rhs.annotations
+        and lhs.metadata == rhs.metadata
+        and lhs.loop_options == rhs.loop_options
+        and list(lhs.nodes.keys()) == list(rhs.nodes.keys())
+    )
+    if not envelope_match:
+        return False
+    return all(_node_structural_eq(lhs.nodes[nid], rhs.nodes[nid]) for nid in lhs.nodes)
+
+
+def _render_logical_graph(graph: LogicalGraph, indent: int = 0) -> str:
+    """Deterministically pretty-print ``graph`` and any nested ``LogicalGraph`` subgraphs.
+
+    Args:
+        graph (LogicalGraph): Computation graph to format.
+        indent (int): Current indentation space count.
+
+    Returns:
+        str: Multi-line human-readable IR listing.
+    """
+    pad = " " * indent
+    header = f"{pad}graph {graph.name}({', '.join(graph.inputs)}) -> ({', '.join(graph.outputs)}) {{"
+    lines = [header]
+    for node in graph.nodes.values():
+        outs = ", ".join(node.outputs) if node.outputs else node.id
+        inps = ", ".join(node.inputs)
+        lines.append(f"{pad}  {outs} = {node.domain}.{node.op_type}({inps}) [id={node.id}]")
+        for sub_name, sub_val in sorted(node.subgraphs.items()):
+            if isinstance(sub_val, LogicalGraph):
+                lines.append(f"{pad}    region {sub_name}:")
+                lines.append(_render_logical_graph(sub_val, indent=indent + 6))
+    lines.append(f"{pad}}}")
+    return "\n".join(lines)
 
 
 ATTR_HASH_WITNESS: typing.Final[HashableWitness[AttributeValue]] = HashableWitness(
@@ -1766,7 +1893,157 @@ NODE_CSE_WITNESS: typing.Final[HashableWitness[LogicalNode]] = HashableWitness(
     eq_witness=Eq(eq=_node_cse_eq),
     hash_value=_node_cse_hash,
 )
+LOGICAL_NODE_EQ: typing.Final[Eq[LogicalNode]] = Eq(eq=_node_structural_eq)
 LOGICAL_GRAPH_EQ: typing.Final[Eq[LogicalGraph]] = Eq(eq=_graph_eq)
+LOGICAL_GRAPH_PRETTY: typing.Final[Pretty[LogicalGraph]] = Pretty(render=_render_logical_graph)
+
+
+def _map_node_subgraph_children(
+    node: LogicalNode,
+    child_fn: Callable[[LogicalNode], LogicalNode],
+) -> LogicalNode:
+    """Apply ``child_fn`` to every child ``LogicalNode`` inside ``node.subgraphs``.
+
+    Args:
+        node (LogicalNode): Parent node whose nested subgraphs are mapped.
+        child_fn (Callable[[LogicalNode], LogicalNode]): Child node transformation function.
+
+    Returns:
+        LogicalNode: Cloned parent node containing transformed subgraphs.
+    """
+    if not node.subgraphs:
+        return node.clone()
+    updated_subs: dict[str, LogicalGraph | AttributeValue] = {}
+    for key, sub in node.subgraphs.items():
+        if isinstance(sub, LogicalGraph):
+            mapped_nodes = {nid: child_fn(snode) for nid, snode in sub.nodes.items()}
+            updated_subs[key] = _clone_graph_envelope(
+                sub,
+                nodes=mapped_nodes,
+                outputs=list(sub.outputs),
+                initializers=dict(sub.initializers),
+                edges=None,
+            )
+        else:
+            updated_subs[key] = copy.deepcopy(sub)
+    return node.clone(subgraphs=updated_subs)
+
+
+LOGICAL_NODE_REWRITE: typing.Final[EndoRewrite[LogicalNode]] = EndoRewrite(
+    map_children=_map_node_subgraph_children,
+)
+
+
+def fold_logical_graph(
+    monoid: Monoid[_FoldAccT],
+    node_fn: Callable[[LogicalNode], _FoldAccT],
+    graph: LogicalGraph,
+) -> _FoldAccT:
+    """Recursively fold ``node_fn`` across ``graph`` and all nested ``LogicalGraph`` subgraphs.
+
+    Args:
+        monoid (Monoid[_FoldAccT]): Target accumulation ``Monoid`` witness.
+        node_fn (Callable[[LogicalNode], _FoldAccT]): Per-node projection into ``_FoldAccT``.
+        graph (LogicalGraph): Root computation graph to fold.
+
+    Returns:
+        _FoldAccT: Monoidally combined summary across the entire recursive graph tree.
+    """
+    acc = monoid.empty()
+    for node in graph.nodes.values():
+        acc = monoid.combine(acc, node_fn(node))
+        for sub in node.subgraphs.values():
+            if isinstance(sub, LogicalGraph):
+                acc = monoid.combine(acc, fold_logical_graph(monoid, node_fn, sub))
+    return acc
+
+
+def rewrite_logical_graph_bottom_up(
+    rule: Endo[LogicalNode] | Callable[[LogicalNode], LogicalNode],
+    graph: LogicalGraph,
+    *,
+    rewrite_witness: EndoRewrite[LogicalNode] = LOGICAL_NODE_REWRITE,
+) -> LogicalGraph:
+    """Bottom-up rewrite every ``LogicalNode`` across ``graph`` and nested ``subgraphs``.
+
+    Rewrites inner subgraph nodes before outer parent nodes via ``rewrite_witness.bottom_up``
+    without mutating the input ``graph``.
+
+    Args:
+        rule (Endo[LogicalNode] | Callable[[LogicalNode], LogicalNode]): Node endomorphism rule.
+        graph (LogicalGraph): Input computation graph.
+        rewrite_witness (EndoRewrite[LogicalNode]): Structural child-traversal witness.
+
+    Returns:
+        LogicalGraph: Freshly constructed rewritten ``LogicalGraph``.
+    """
+    fn: Callable[[LogicalNode], LogicalNode] = rule.app if isinstance(rule, Endo) else rule
+    cloned = graph.clone()
+    rewritten_nodes = {nid: rewrite_witness.bottom_up(node, fn) for nid, node in cloned.nodes.items()}
+    return _clone_graph_envelope(
+        cloned,
+        nodes=rewritten_nodes,
+        outputs=list(cloned.outputs),
+        initializers=dict(cloned.initializers),
+        edges=None,
+    )
+
+
+def _is_valid_topological_order(graph: LogicalGraph, candidate_ids: tuple[NodeId, ...]) -> bool:
+    """Verify in O(V + E) whether ``candidate_ids`` forms a valid topological order for ``graph``.
+
+    Args:
+        graph (LogicalGraph): Transformed computation graph.
+        candidate_ids (tuple[NodeId, ...]): Filtered node ordering from upstream proof.
+
+    Returns:
+        bool: True iff ``candidate_ids`` covers ``graph.nodes`` with every producer before its consumer.
+    """
+    if len(candidate_ids) != len(graph.nodes):
+        return False
+    rank_by_id: dict[str, int] = {}
+    for idx, nid in enumerate(candidate_ids):
+        key = str(nid)
+        if key not in graph.nodes or key in rank_by_id:
+            return False
+        rank_by_id[key] = idx
+
+    for consumer_id, node in graph.nodes.items():
+        consumer_rank = rank_by_id[consumer_id]
+        for inp in node.inputs:
+            producer_id: str | None = inp if inp in rank_by_id else None
+            if producer_id is None:
+                producer = graph.get_output_producer(inp)
+                if producer is not None and producer.id in rank_by_id:
+                    producer_id = producer.id
+            if producer_id is not None and rank_by_id[producer_id] >= consumer_rank:
+                return False
+    return True
+
+
+@dataclass(frozen=True)
+class AcyclicGraphPass:
+    """Proof-preserving optimization pass witness over ``ProvenGraph[AcyclicSortedPhase]``.
+
+    Attributes:
+        name (str): Human-readable pass identifier.
+        apply_acyclic (Callable[[ProvenGraph[AcyclicSortedPhase]], ProvenGraph[AcyclicSortedPhase]]):
+            Total proof-preserving transformation over acyclic sorted graphs.
+    """
+
+    name: str
+    apply_acyclic: Callable[[ProvenGraph[AcyclicSortedPhase]], ProvenGraph[AcyclicSortedPhase]]
+
+    def __call__(self, proven: ProvenGraph[AcyclicSortedPhase]) -> ProvenGraph[AcyclicSortedPhase]:
+        """Execute ``self.apply_acyclic(proven)``.
+
+        Args:
+            proven (ProvenGraph[AcyclicSortedPhase]): Input acyclic proven graph.
+
+        Returns:
+            ProvenGraph[AcyclicSortedPhase]: Transformed acyclic proven graph.
+        """
+        return self.apply_acyclic(proven)
 
 
 @dataclass(frozen=True)
@@ -1791,6 +2068,106 @@ class GraphTransformPass:
             LogicalGraph: Transformed computation graph.
         """
         return self.apply(graph)
+
+    def apply_acyclic(
+        self,
+        proven: ProvenGraph[AcyclicSortedPhase],
+    ) -> ProvenGraph[AcyclicSortedPhase]:
+        """Execute ``self`` on ``proven`` while preserving ``AcyclicSortedPhase`` without redundant re-sorting.
+
+        Args:
+            proven (ProvenGraph[AcyclicSortedPhase]): Verified acyclic graph witness.
+
+        Returns:
+            ProvenGraph[AcyclicSortedPhase]: Updated acyclic graph witness.
+        """
+        return lift_acyclic_pass(self).apply_acyclic(proven)
+
+
+def lift_acyclic_pass(pass_obj: GraphTransformPass) -> AcyclicGraphPass:
+    """Lift a DAG-preserving ``GraphTransformPass`` into an ``AcyclicGraphPass``.
+
+    Reuses the filtered upstream topological ordering in O(V + E) whenever all surviving
+    nodes preserve topological rank, falling back to ``topological_sort(..., strict=True)``
+    only when new nodes or reordered edges are introduced.
+
+    Args:
+        pass_obj (GraphTransformPass): Pure graph transformation pass.
+
+    Returns:
+        AcyclicGraphPass: Proof-preserving acyclic pass witness.
+    """
+
+    def _run_acyclic(proven: ProvenGraph[AcyclicSortedPhase]) -> ProvenGraph[AcyclicSortedPhase]:
+        """Transform ``proven`` while preserving ``AcyclicSortedPhase``.
+
+        Args:
+            proven (ProvenGraph[AcyclicSortedPhase]): Verified acyclic graph witness.
+
+        Returns:
+            ProvenGraph[AcyclicSortedPhase]: Updated acyclic graph witness.
+        """
+        transformed = pass_obj.apply(proven.thaw())
+        preserved_ids = tuple(nid for nid in proven.ordered_node_ids if str(nid) in transformed.nodes)
+        if _is_valid_topological_order(transformed, preserved_ids):
+            ordered_nodes = tuple(transformed.nodes[str(nid)] for nid in preserved_ids)
+        else:
+            ordered_nodes = tuple(topological_sort(transformed, strict=True))
+        return ProvenGraph.mint(transformed, ordered_nodes=ordered_nodes)
+
+    return AcyclicGraphPass(name=pass_obj.name, apply_acyclic=_run_acyclic)
+
+
+def compose_acyclic_passes(*passes: AcyclicGraphPass) -> AcyclicGraphPass:
+    """Sequentially compose ``AcyclicGraphPass`` witnesses left-to-right via ``endo_monoid()``.
+
+    Args:
+        *passes (AcyclicGraphPass): Ordered proof-preserving passes.
+
+    Returns:
+        AcyclicGraphPass: Composed proof-preserving pipeline pass.
+    """
+    endo_m: Monoid[Endo[ProvenGraph[AcyclicSortedPhase]]] = endo_monoid()
+    if not passes:
+        return AcyclicGraphPass(name="identity", apply_acyclic=endo_m.empty().app)
+    composed = endo_m.mconcat(Endo(app=p.apply_acyclic) for p in reversed(passes))
+    return AcyclicGraphPass(name=" -> ".join(p.name for p in passes), apply_acyclic=composed.app)
+
+
+def fixpoint_acyclic_pass(pass_obj: AcyclicGraphPass, max_iterations: int = 16) -> AcyclicGraphPass:
+    """Repeat ``pass_obj`` on ``ProvenGraph[AcyclicSortedPhase]`` until stabilization or ``max_iterations``.
+
+    Args:
+        pass_obj (AcyclicGraphPass): Inner proof-preserving pass.
+        max_iterations (int): Non-negative iteration cap.
+
+    Returns:
+        AcyclicGraphPass: Fixpoint-iterated proof-preserving pass.
+
+    Raises:
+        ValueError: If ``max_iterations`` is boolean or negative.
+    """
+    if not is_non_bool_int(max_iterations) or max_iterations < 0:
+        raise ValueError(f"fixpoint_acyclic_pass requires non-negative int max_iterations, got {max_iterations!r}.")
+
+    def _iterate_acyclic(proven: ProvenGraph[AcyclicSortedPhase]) -> ProvenGraph[AcyclicSortedPhase]:
+        """Iterate ``pass_obj`` until ``LOGICAL_GRAPH_EQ`` stabilizes.
+
+        Args:
+            proven (ProvenGraph[AcyclicSortedPhase]): Input acyclic proven graph.
+
+        Returns:
+            ProvenGraph[AcyclicSortedPhase]: Stabilized acyclic proven graph.
+        """
+        curr = proven
+        for _ in range(max_iterations):
+            nxt = pass_obj.apply_acyclic(curr)
+            if LOGICAL_GRAPH_EQ.eq(curr.thaw(), nxt.thaw()):
+                return nxt
+            curr = nxt
+        return curr
+
+    return AcyclicGraphPass(name=f"fixpoint({pass_obj.name})", apply_acyclic=_iterate_acyclic)
 
 
 def compose_passes(*passes: GraphTransformPass) -> GraphTransformPass:
@@ -1864,5 +2241,17 @@ SHAPE_CONSTANT_PROP_PASS: typing.Final[GraphTransformPass] = GraphTransformPass(
 )
 CANONICAL_OPTIMIZE_PIPELINE: typing.Final[GraphTransformPass] = fixpoint_graph_pass(
     compose_passes(SHAPE_CONSTANT_PROP_PASS, CSE_PASS, DCE_PASS),
+    max_iterations=8,
+)
+
+ACYCLIC_DCE_PASS: typing.Final[AcyclicGraphPass] = lift_acyclic_pass(DCE_PASS)
+ACYCLIC_CSE_PASS: typing.Final[AcyclicGraphPass] = lift_acyclic_pass(CSE_PASS)
+ACYCLIC_SHAPE_CONSTANT_PROP_PASS: typing.Final[AcyclicGraphPass] = lift_acyclic_pass(SHAPE_CONSTANT_PROP_PASS)
+ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE: typing.Final[AcyclicGraphPass] = fixpoint_acyclic_pass(
+    compose_acyclic_passes(
+        ACYCLIC_SHAPE_CONSTANT_PROP_PASS,
+        ACYCLIC_CSE_PASS,
+        ACYCLIC_DCE_PASS,
+    ),
     max_iterations=8,
 )

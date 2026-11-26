@@ -3268,6 +3268,12 @@ def test_lint_typing_assert_never_vs_bare_assert() -> None:
     assert len(violations) == 1
     assert "Forbidden bare 'assert'" in violations[0]
 
+    noqa_src = "def bad_noqa(x: int) -> int:  # noqa: PLR0913\n    return x\n"
+    noqa_violations = check_source(noqa_src, Path("src/ml_switcheroo_ir/sample.py"))
+    assert len(noqa_violations) == 1
+    assert "Forbidden '# noqa'" in noqa_violations[0]
+    assert check_source(noqa_src, Path("tests/test_sample.py")) == []
+
 
 def test_verify_catalog_witnesses_grounding_branches(tmp_path: Path) -> None:
     """Exercise all structural and strict-glob branches in verify_catalog_witnesses_grounding.
@@ -3308,3 +3314,15 @@ def test_verify_catalog_witnesses_grounding_branches(tmp_path: Path) -> None:
     assert any("listed 0 ops" in e for e in errs)
     assert any("lookup failed for listed op 'GhostOp'" in e for e in errs)
     assert any("missing_glob_*.json" in e for e in errs)
+
+    from scripts.verify_grounding import _resolve_ast_symbol_in_module
+
+    sub_py = tmp_path / "sub.py"
+    sub_py.write_text("STAR_SYM = 42\n", encoding="utf-8")
+    facade_py = tmp_path / "facade.py"
+    facade_py.write_text("from pkg.sub import *\n", encoding="utf-8")
+    file_map = {"pkg.facade": facade_py, "pkg.sub": sub_py}
+    with patch("scripts.verify_grounding._locate_package_module_file", side_effect=file_map.get):
+        hit = _resolve_ast_symbol_in_module("pkg.facade", "STAR_SYM")
+        assert hit is not None and hit[0] == "pkg.sub"
+        assert _resolve_ast_symbol_in_module("pkg.facade", "MISSING_SYM") is None

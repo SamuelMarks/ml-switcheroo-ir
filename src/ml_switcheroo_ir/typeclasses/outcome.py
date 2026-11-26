@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import typing
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
 import typing_extensions
 
-from ml_switcheroo_ir.typeclasses.algebra import Monoid, Semigroup
+from ml_switcheroo_ir.typeclasses.algebra import Monoid, NonEmpty, Semigroup, nonempty_semigroup
 
 _A = typing.TypeVar("_A")
 _B = typing.TypeVar("_B")
@@ -31,8 +31,11 @@ __all__ = [
     "and_then",
     "ap_validation",
     "collect_unit_validations",
+    "collect_unit_validations_ne",
     "fold_result",
     "fold_validation",
+    "from_error_sequence",
+    "invalid_one",
     "map_err",
     "map_result",
     "map_validation",
@@ -42,7 +45,10 @@ __all__ = [
     "result_to_validation",
     "traverse_result",
     "traverse_validation",
+    "traverse_validation_ne",
+    "validation_ne_to_tuple",
     "validation_to_result",
+    "validation_tuple_to_ne",
     "value_or",
     "value_or_else",
     "zip_validation2",
@@ -615,5 +621,122 @@ def validation_to_result(val: Validation[_E, _A]) -> Result[_E, _A]:
         return Ok(val.value)
     elif isinstance(val, Invalid):
         return Err(val.errors)
+    else:
+        typing_extensions.assert_never(val)
+
+
+def invalid_one(err: _E) -> Invalid[NonEmpty[_E]]:
+    """Construct a singleton ``Invalid[NonEmpty[_E]]`` failure from one error value.
+
+    Args:
+        err (_E): Single failure diagnostic.
+
+    Returns:
+        Invalid[NonEmpty[_E]]: Non-empty ``Invalid`` wrapper containing ``err``.
+    """
+    return Invalid(NonEmpty.singleton(err))
+
+
+def from_error_sequence(
+    errs: Sequence[_E],
+    value: _A,
+) -> Validation[NonEmpty[_E], _A]:
+    """Lift a collected error sequence into total ``Validation[NonEmpty[_E], _A]``.
+
+    Returns ``Valid(value)`` when ``errs`` is empty, or ``Invalid(NonEmpty(...))`` when
+    at least one error is present, making ``Invalid(())`` statically unrepresentable.
+
+    Args:
+        errs (Sequence[_E]): Sequence of zero or more collected error values.
+        value (_A): Success payload returned when ``errs`` is empty.
+
+    Returns:
+        Validation[NonEmpty[_E], _A]: ``Valid(value)`` or non-empty ``Invalid``.
+    """
+    non_empty = NonEmpty.from_sequence(errs)
+    if non_empty is None:
+        return Valid(value)
+    return Invalid(non_empty)
+
+
+def traverse_validation_ne(
+    items: Iterable[_A],
+    fn: Callable[[_A], Validation[NonEmpty[_E], _B]],
+) -> Validation[NonEmpty[_E], tuple[_B, ...]]:
+    """Applicatively traverse ``items`` accumulating errors via ``nonempty_semigroup()``.
+
+    Args:
+        items (Iterable[_A]): Input elements to validate.
+        fn (Callable[[_A], Validation[NonEmpty[_E], _B]]): Element validation function.
+
+    Returns:
+        Validation[NonEmpty[_E], tuple[_B, ...]]: ``Valid`` tuple or accumulated ``Invalid[NonEmpty[_E]]``.
+    """
+    sg: Semigroup[NonEmpty[_E]] = nonempty_semigroup()
+    return traverse_validation(sg, items, fn)
+
+
+def collect_unit_validations_ne(
+    checks: Iterable[Validation[NonEmpty[_E], None]],
+) -> Validation[NonEmpty[_E], None]:
+    """Accumulate unit checks ``Validation[NonEmpty[_E], None]`` without requiring an empty ``Monoid``.
+
+    Args:
+        checks (Iterable[Validation[NonEmpty[_E], None]]): Unit validation checks to fold.
+
+    Returns:
+        Validation[NonEmpty[_E], None]: ``Valid(None)`` if all checks pass, else combined ``Invalid``.
+    """
+    sg: Semigroup[NonEmpty[_E]] = nonempty_semigroup()
+    failures: list[NonEmpty[_E]] = []
+    for check in checks:
+        if isinstance(check, Valid):
+            continue
+        elif isinstance(check, Invalid):
+            failures.append(check.errors)
+        else:
+            typing_extensions.assert_never(check)
+    if failures:
+        return Invalid(sg.sconcat(failures[0], failures[1:]))
+    return Valid(None)
+
+
+def validation_ne_to_tuple(
+    val: Validation[NonEmpty[_E], _A],
+) -> Validation[tuple[_E, ...], _A]:
+    """Project ``Validation[NonEmpty[_E], _A]`` into legacy tuple-backed ``Validation[tuple[_E, ...], _A]``.
+
+    Args:
+        val (Validation[NonEmpty[_E], _A]): Non-empty validation outcome.
+
+    Returns:
+        Validation[tuple[_E, ...], _A]: Tuple-backed validation outcome.
+    """
+    return map_validation_err(val, lambda ne: ne.to_tuple())
+
+
+def validation_tuple_to_ne(
+    val: Validation[tuple[_E, ...], _A],
+    empty_fallback: Callable[[], _E],
+) -> Validation[NonEmpty[_E], _A]:
+    """Upgrade ``Validation[tuple[_E, ...], _A]`` into ``Validation[NonEmpty[_E], _A]`` totally.
+
+    If ``val`` is a degenerate ``Invalid(())``, ``empty_fallback()`` is invoked to mint a
+    guaranteed head error without raising exceptions.
+
+    Args:
+        val (Validation[tuple[_E, ...], _A]): Tuple-backed validation outcome.
+        empty_fallback (Callable[[], _E]): Thunk producing a fallback error if ``Invalid(())`` is encountered.
+
+    Returns:
+        Validation[NonEmpty[_E], _A]: Total non-empty validation outcome.
+    """
+    if isinstance(val, Valid):
+        return val
+    elif isinstance(val, Invalid):
+        ne = NonEmpty.from_sequence(val.errors)
+        if ne is None:
+            return Invalid(NonEmpty.singleton(empty_fallback()))
+        return Invalid(ne)
     else:
         typing_extensions.assert_never(val)

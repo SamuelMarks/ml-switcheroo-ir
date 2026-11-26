@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import pydantic
 import typing_extensions
 
+from ml_switcheroo_ir.typeclasses.algebra import NonEmpty
 from ml_switcheroo_ir.typeclasses.outcome import Err, Ok, Result
 
 JsonValue: typing_extensions.TypeAlias = pydantic.JsonValue
@@ -56,6 +57,7 @@ __all__ = [
     "dict_str_codec",
     "imap_codec",
     "list_codec",
+    "nonempty_pretty",
     "optional_codec",
     "refine_codec",
     "tuple_codec",
@@ -444,6 +446,31 @@ class Pretty(typing.Generic[_A]):
     """
 
     render: Callable[[_A], str]
+
+
+def nonempty_pretty(elem_pretty: Pretty[_A], separator: str = "; ") -> Pretty[NonEmpty[_A]]:
+    """Lift an element ``Pretty[_A]`` witness to ``Pretty[NonEmpty[_A]]``.
+
+    Args:
+        elem_pretty (Pretty[_A]): Pretty-printer witness for individual elements.
+        separator (str): Delimiter inserted between rendered elements.
+
+    Returns:
+        Pretty[NonEmpty[_A]]: Deterministic pretty-printer over ``NonEmpty[_A]``.
+    """
+
+    def _render_ne(items: NonEmpty[_A]) -> str:
+        """Render every element of ``items`` joined by ``separator``.
+
+        Args:
+            items (NonEmpty[_A]): Non-empty sequence to format.
+
+        Returns:
+            str: Joined human-readable string.
+        """
+        return separator.join(elem_pretty.render(x) for x in items)
+
+    return Pretty(render=_render_ne)
 
 
 @dataclass(frozen=True)

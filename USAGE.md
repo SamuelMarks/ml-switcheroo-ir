@@ -443,6 +443,17 @@ tf_attrs = engine.translate_attributes(
 )
 assert tf_attrs == {"epsilon": 1e-5, "gamma": 1.0}
 
+# Or use total Result[TranslationIsoError, ...] methods without raising exceptions
+from ml_switcheroo_ir import Ok
+
+tf_attrs_res = engine.translate_attributes_result(
+    operation="normalization",
+    attributes=torch_attrs,
+    source_framework="torch",
+    target_framework="tf",
+)
+assert isinstance(tf_attrs_res, Ok) and tf_attrs_res.value == {"epsilon": 1e-5, "gamma": 1.0}
+
 # 3. Translate weight tensor names across frameworks (e.g., PyTorch -> Keras 3)
 keras_weight = engine.translate_weight_name(
     layer_type="convolution",
@@ -605,53 +616,82 @@ export_schemas(out_dir="dist/schemas", include_typescript=True)
 
 ### Algebraic Typeclasses, Phantom Proofs & Total Outcomes
 
-`ml-switcheroo-ir` (`v0.0.8`) provides explicit GHC Core-inspired typeclass witness dictionaries (`ml_switcheroo_ir.typeclasses`), zero-cost refined identifiers (`ml_switcheroo_ir.identifiers`), closed ADTs (`SymExpr`, `AttrTerm`), and phantom-typed `ProvenGraph` witnesses (`ml_switcheroo_ir.proofs`):
+`ml-switcheroo-ir` (`v0.0.9`) provides explicit GHC Core-inspired typeclass witness dictionaries (`ml_switcheroo_ir.typeclasses`), zero-cost refined identifiers (`ml_switcheroo_ir.identifiers`), closed ADTs (`IrDomainError`, `SymExpr`, `AttrTerm`, `NonEmpty`), deeply immutable `FrozenLogicalGraph` snapshots (`freeze_graph` / `thaw_graph`), proof-preserving `AcyclicGraphPass` pipelines, extensible `ShapeInferenceRuleRegistry` (`DEFAULT_SHAPE_RULE_REGISTRY`), and covariant cumulative `ProvenGraph` witnesses (`ml_switcheroo_ir.proofs`):
 
 ```python
 from ml_switcheroo_ir import (
+    ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE,
     ALL_DIALECT_CATALOG_WITNESSES,
+    DEFAULT_SHAPE_RULE_REGISTRY,
+    FROZEN_LOGICAL_GRAPH_EQ,
+    AcyclicAndSchemaPhase,
     DType,
     LogicalGraph,
     LogicalNode,
+    NonEmpty,
     Ok,
     PortRef,
+    ProvenGraph,
     SymExpr,
     Valid,
+    ValidatorConfig,
+    format_ir_domain_error,
+    freeze_graph,
     graph_from_json_result,
     project_attribute_value,
     prove_acyclic_sorted,
     prove_schema_valid,
+    thaw_graph,
+    upgrade_to_schema_valid,
 )
+from ml_switcheroo_ir.identifiers import parse_node_id
 from ml_switcheroo_ir.shapes import broadcast_shapes_result, parse_symbolic_expr_result
 from ml_switcheroo_ir.translation import ParameterTranslationEngine
 from ml_switcheroo_ir.types import AttrDType
+from ml_switcheroo_ir.validator import Validator
 
-# 1. Closed ADTs & Total Symbolic Parsing / Shape Inference
+# 1. Closed ADTs, NonEmpty Semigroup & Total Symbolic Parsing / Shape Inference
 sym_res = parse_symbolic_expr_result("2 * B + 4")
 assert isinstance(sym_res, Ok)
 expr: SymExpr = sym_res.value
 
 bcast_res = broadcast_shapes_result((expr, 1), (1, 64))
 assert isinstance(bcast_res, Ok) and bcast_res.value == (expr, 64)
+assert "Add" in DEFAULT_SHAPE_RULE_REGISTRY
+assert NonEmpty.singleton("e1").to_tuple() == ("e1",)
 
-# 2. Normal-form AttrTerm projection & typed PortRef parsing
+# 2. Normal-form AttrTerm projection, typed PortRef & closed IrDomainError formatting
 term = project_attribute_value(DType.bfloat16)
 assert isinstance(term, AttrDType) and term.value == DType.bfloat16
 port = PortRef.parse("split_node:1")
 assert port.port_index == 1 and port.render() == "split_node:1"
+bad_id_res = parse_node_id("")
+assert not isinstance(bad_id_res, Ok) and "NodeId" in format_ir_domain_error(bad_id_res.error)
 
-# 3. Total JSON Codec deserialization & Phantom-Typed ProvenGraph minting
+# 3. Deeply Immutable FrozenLogicalGraph, Acyclic Optimization & Cumulative ProvenGraph Upgrades
 g = LogicalGraph(
     name="Verified",
-    nodes={"x": LogicalNode(id="x", op_type="Input"), "r": LogicalNode(id="r", op_type="Relu", inputs=["x"])},
+    nodes={
+        "x": LogicalNode(id="x", op_type="Input", shape_metadata=(2, 4), dtype=DType.float32),
+        "r": LogicalNode(id="r", op_type="Relu", inputs=["x"], shape_metadata=(2, 4), dtype=DType.float32),
+    },
     outputs=["r"],
 )
+frozen = freeze_graph(g)
+assert FROZEN_LOGICAL_GRAPH_EQ.eq(frozen, freeze_graph(thaw_graph(frozen)))
+
 decoded = graph_from_json_result(g.to_json())
 assert isinstance(decoded, Ok)
 
 sorted_proof = prove_acyclic_sorted(decoded.value)
-schema_proof = prove_schema_valid(decoded.value)
+schema_proof = prove_schema_valid(decoded.value, validator=Validator(ValidatorConfig(strict=True)))
 assert isinstance(sorted_proof, Ok) and isinstance(schema_proof, Valid)
+
+optimized_acyclic = ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE.apply_acyclic(sorted_proof.value)
+cumulative_res = upgrade_to_schema_valid(optimized_acyclic)
+assert isinstance(cumulative_res, Valid)
+verified_graph: ProvenGraph[AcyclicAndSchemaPhase] = cumulative_res.value
+assert len(verified_graph.ordered_nodes) == 2
 
 # 4. Partial Isomorphisms & Unified Dialect Catalog Witnesses (21 catalogs)
 assert len(ALL_DIALECT_CATALOG_WITNESSES) == 21
@@ -799,11 +839,14 @@ Node linear1:
 
 ### 2. Snapshot Grounding (`ground`)
 
-Audits an IR graph (`.json`, `.json.gz`, or `.json.zst`) against ground-truth framework snapshots from `../ml-framework-snapshots` (or configured via `ML_FRAMEWORK_SNAPSHOTS_DIR` / `ML_ECOSYSTEM_SNAPSHOTS_DIR`) to detect phantom operators and illegal parameters:
+Audits an IR graph (`.json`, `.json.gz`, or `.json.zst`) against ground-truth framework snapshots from `../ml-framework-snapshots` (or discovered automatically via `ML_ECOSYSTEM_SNAPSHOTS_DIR`, `ML_FRAMEWORK_SNAPSHOTS_DIR`, or sibling snapshot directories when `--snapshots-dir` is omitted) to detect phantom operators and illegal parameters:
 
 ```bash
 ml-switcheroo-ir ground model.json.zst --snapshots-dir ../ml-framework-snapshots
 ```
+
+**Options:**
+- `--snapshots-dir <path>` / `--snapshots <path>`: Optional path to a snapshot JSON manifest or directory.
 
 **Output:**
 ```text
@@ -928,6 +971,9 @@ Export all public package classes, functions, and all 21 built-in operator regis
 ml-switcheroo-ir dump-snapshot --output schemas_snapshot.json
 ```
 
+**Options:**
+- `--output <path.json>` / `-o <path.json>`: Required destination path for the `SnapshotEnvelope` JSON file.
+
 ### 8. Exporting JSON Schemas & TypeScript (`export-schema`)
 
 Export canonical JSON Schema definitions (`LogicalGraph`, `LogicalNode`, `SnapshotEnvelope`, `ZeroTangent`, `NoTangent`, `PipelineTopologyConfig`, `WebRTCSignalingTopology`, or `all`) and TypeScript interfaces:
@@ -936,12 +982,18 @@ Export canonical JSON Schema definitions (`LogicalGraph`, `LogicalNode`, `Snapsh
 # Export a specific JSON schema target to stdout
 ml-switcheroo-ir export-schema --target LogicalGraph
 
-# Export all JSON schemas to a directory
+# Export all JSON schemas to a directory (-o / --out-dir)
 ml-switcheroo-ir export-schema --out-dir schemas/
 
-# Export TypeScript definitions
+# Export TypeScript definitions (--ts / --typescript)
 ml-switcheroo-ir export-schema --typescript --ts-out types.ts
 ```
+
+**Options:**
+- `--target <name>`: Schema model name (`all` by default).
+- `--out-dir <dir>` / `-o <dir>`: Directory to write `<Model>.schema.json` files.
+- `--typescript` / `--ts`: Emit TypeScript interface definitions.
+- `--ts-out <path.ts>`: Optional file path to write TypeScript definitions (also implies TypeScript generation).
 
 ---
 
@@ -1061,19 +1113,24 @@ def optimize_for_lowering(raw_graph: LogicalGraph) -> LogicalGraph:
 
 ### Recipe F: Proof-Carrying Validation & Composable Transform Passes
 
-Compose pure `GraphTransformPass` witnesses into a fixpoint pipeline via `endo_monoid()` and verify the output with applicative `Validator.validate_graph_applicative`:
+Compose pure `GraphTransformPass` witnesses into a fixpoint pipeline via `endo_monoid()` and verify the output with non-empty applicative `Validator.validate_graph_applicative`, or preserve acyclicity across optimization passes via `ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE` and `upgrade_to_schema_valid`:
 
 ```python
 from ml_switcheroo_ir import (
+    ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE,
     CSE_PASS,
     DCE_PASS,
     SHAPE_CONSTANT_PROP_PASS,
+    AcyclicAndSchemaPhase,
     LogicalGraph,
+    Ok,
     ProvenGraph,
     SchemaValidPhase,
     Valid,
     compose_passes,
     fixpoint_graph_pass,
+    prove_acyclic_sorted,
+    upgrade_to_schema_valid,
 )
 from ml_switcheroo_ir.validator import Validator
 
@@ -1088,4 +1145,14 @@ def optimize_and_prove(raw_graph: LogicalGraph) -> ProvenGraph[SchemaValidPhase]
     opt_graph = pipeline.apply(raw_graph)
     outcome = Validator().validate_graph_applicative(opt_graph)
     return outcome.value if isinstance(outcome, Valid) else None
+
+
+def optimize_cumulative(raw_graph: LogicalGraph) -> ProvenGraph[AcyclicAndSchemaPhase] | None:
+    """Prove DAG acyclicity, optimize without losing proof, and upgrade to AcyclicAndSchemaPhase."""
+    acyclic_res = prove_acyclic_sorted(raw_graph)
+    if not isinstance(acyclic_res, Ok):
+        return None
+    optimized_acyclic = ACYCLIC_CANONICAL_OPTIMIZE_PIPELINE.apply_acyclic(acyclic_res.value)
+    upgraded = upgrade_to_schema_valid(optimized_acyclic)
+    return upgraded.value if isinstance(upgraded, Valid) else None
 ```

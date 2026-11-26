@@ -14,6 +14,7 @@ Enforces zero usage of:
 - ``typing.Any``, ``typing_extensions.Any``
 - ``typing.cast``, ``typing_extensions.cast``
 - ``# type: ignore`` comments
+- ``# noqa`` suppression comments inside ``src/`` production modules
 """
 
 from __future__ import annotations
@@ -330,8 +331,15 @@ def check_source(source: str, file_path: Path) -> list[str]:
 
     tokens = tokenize.generate_tokens(io.StringIO(source).readline)
     for tok in tokens:
-        if tok.type == tokenize.COMMENT and "type: ignore" in tok.string:
-            visitor._record(tok.start[0], tok.start[1], "Forbidden '# type: ignore' comment")
+        if tok.type == tokenize.COMMENT:
+            if "type: ignore" in tok.string:
+                visitor._record(tok.start[0], tok.start[1], "Forbidden '# type: ignore' comment")
+            if visitor.is_src_file and "noqa" in tok.string.lower():
+                visitor._record(
+                    tok.start[0],
+                    tok.start[1],
+                    "Forbidden '# noqa' suppression comment in production source",
+                )
 
     return visitor.violations
 

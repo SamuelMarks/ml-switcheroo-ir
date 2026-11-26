@@ -15,50 +15,88 @@ import typing_extensions
 
 from ml_switcheroo_ir.schema.ghost import StandardMap
 from ml_switcheroo_ir.snapshots import get_effective_snapshot_dir
-from ml_switcheroo_ir.typeclasses.outcome import Err, Ok, Result, and_then
+from ml_switcheroo_ir.typeclasses.outcome import Err, Ok, Result, and_then, map_err
 from ml_switcheroo_ir.types import AttributeValue, JsonValue
 
 _logger = logging.getLogger(__name__)
 
-_IsoA = typing.TypeVar("_IsoA")
-_IsoB = typing.TypeVar("_IsoB")
-_IsoC = typing.TypeVar("_IsoC")
+_IsoA = typing_extensions.TypeVar("_IsoA")
+_IsoB = typing_extensions.TypeVar("_IsoB")
+_IsoC = typing_extensions.TypeVar("_IsoC")
+
+
+@dataclass(frozen=True)
+class TranslationIsoError:
+    """Structured parameter/layout/weight partial-isomorphism failure variant of ``IrDomainError``.
+
+    Attributes:
+        op_name (str): Canonical or dialect operator identifier.
+        direction (typing.Literal["forward", "backward"]): Morphism direction where failure occurred.
+        parameter (str | None): Specific parameter/layout/axis name when applicable, else ``None``.
+        reason (str): Detailed failure diagnostic message.
+    """
+
+    op_name: str
+    direction: typing.Literal["forward", "backward"]
+    parameter: str | None
+    reason: str
+
+
+_IsoE = typing_extensions.TypeVar("_IsoE", default=TranslationIsoError)
+_IsoE2 = typing_extensions.TypeVar("_IsoE2")
 
 RoleFrameworkMap: typing_extensions.TypeAlias = dict[str, list[str]]
 
 
 @dataclass(frozen=True)
-class PartialIso(typing.Generic[_IsoA, _IsoB]):
+class PartialIso(typing_extensions.Generic[_IsoA, _IsoB, _IsoE]):
     """Bidirectional partial isomorphism witness between representations ``_IsoA`` and ``_IsoB``.
 
+    Defaults its error channel ``_IsoE`` to ``TranslationIsoError`` while remaining parametric
+    for custom domain error types via ``PartialIso[A, B, E]``.
+
     Attributes:
-        forward (Callable[[_IsoA], Result[str, _IsoB]]): Fallible forward morphism ``_IsoA -> Result[str, _IsoB]``.
-        backward (Callable[[_IsoB], Result[str, _IsoA]]): Fallible inverse morphism ``_IsoB -> Result[str, _IsoA]``.
+        forward (Callable[[_IsoA], Result[_IsoE, _IsoB]]): Fallible forward morphism ``_IsoA -> Result[_IsoE, _IsoB]``.
+        backward (Callable[[_IsoB], Result[_IsoE, _IsoA]]): Fallible inverse morphism ``_IsoB -> Result[_IsoE, _IsoA]``.
     """
 
-    forward: Callable[[_IsoA], Result[str, _IsoB]]
-    backward: Callable[[_IsoB], Result[str, _IsoA]]
+    forward: Callable[[_IsoA], Result[_IsoE, _IsoB]]
+    backward: Callable[[_IsoB], Result[_IsoE, _IsoA]]
 
-    def inverse(self) -> PartialIso[_IsoB, _IsoA]:
-        """Swap ``forward`` and ``backward`` to obtain the inverse ``PartialIso[_IsoB, _IsoA]``.
+    def inverse(self) -> PartialIso[_IsoB, _IsoA, _IsoE]:
+        """Swap ``forward`` and ``backward`` to obtain the inverse ``PartialIso[_IsoB, _IsoA, _IsoE]``.
 
         Returns:
-            PartialIso[_IsoB, _IsoA]: Inverted partial isomorphism witness.
+            PartialIso[_IsoB, _IsoA, _IsoE]: Inverted partial isomorphism witness.
         """
         return PartialIso(forward=self.backward, backward=self.forward)
 
-    def compose(self, other: PartialIso[_IsoB, _IsoC]) -> PartialIso[_IsoA, _IsoC]:
+    def compose(self, other: PartialIso[_IsoB, _IsoC, _IsoE]) -> PartialIso[_IsoA, _IsoC, _IsoE]:
         """Sequentially compose ``self`` (``_IsoA <-> _IsoB``) with ``other`` (``_IsoB <-> _IsoC``).
 
         Args:
-            other (PartialIso[_IsoB, _IsoC]): Downstream partial isomorphism.
+            other (PartialIso[_IsoB, _IsoC, _IsoE]): Downstream partial isomorphism sharing error type ``_IsoE``.
 
         Returns:
-            PartialIso[_IsoA, _IsoC]: Composed end-to-end partial isomorphism.
+            PartialIso[_IsoA, _IsoC, _IsoE]: Composed end-to-end partial isomorphism.
         """
         return PartialIso(
             forward=lambda a: and_then(self.forward(a), other.forward),
             backward=lambda c: and_then(other.backward(c), self.backward),
+        )
+
+    def map_error(self, fn: Callable[[_IsoE], _IsoE2]) -> PartialIso[_IsoA, _IsoB, _IsoE2]:
+        """Map the failure channel ``_IsoE -> _IsoE2`` across both directions functorially.
+
+        Args:
+            fn (Callable[[_IsoE], _IsoE2]): Error transformation morphism.
+
+        Returns:
+            PartialIso[_IsoA, _IsoB, _IsoE2]: Partial isomorphism with mapped error channel.
+        """
+        return PartialIso(
+            forward=lambda a: map_err(self.forward(a), fn),
+            backward=lambda b: map_err(self.backward(b), fn),
         )
 
 
@@ -390,6 +428,7 @@ __all__ = [
     "SplittableTensorProtocol",
     "TensorLike",
     "TensorLikeProtocol",
+    "TranslationIsoError",
     "TranslationMap",
     "TransposableTensorProtocol",
 ]
@@ -1318,8 +1357,8 @@ class ParameterTranslationEngine:
         param_name: str,
         source_framework: str,
         target_framework: str,
-    ) -> Result[str, str]:
-        """Total variant of ``translate_parameter`` returning ``Result[str, str]`` without raising.
+    ) -> Result[TranslationIsoError, str]:
+        """Total variant of ``translate_parameter`` returning ``Result[TranslationIsoError, str]``.
 
         Args:
             operation (str): Canonical operation name.
@@ -1328,12 +1367,19 @@ class ParameterTranslationEngine:
             target_framework (str): Target framework identifier.
 
         Returns:
-            Result[str, str]: ``Ok(target_param)`` or ``Err(diagnostic)``.
+            Result[TranslationIsoError, str]: ``Ok(target_param)`` or ``Err(TranslationIsoError)``.
         """
         try:
             return Ok(self.translate_parameter(operation, param_name, source_framework, target_framework))
         except (KeyError, ValueError) as exc:
-            return Err(str(exc))
+            return Err(
+                TranslationIsoError(
+                    op_name=operation,
+                    direction="forward",
+                    parameter=param_name,
+                    reason=str(exc),
+                )
+            )
 
     def translate_attributes_result(
         self,
@@ -1342,8 +1388,8 @@ class ParameterTranslationEngine:
         source_framework: str,
         target_framework: str,
         allow_passthrough: bool = False,
-    ) -> Result[str, dict[str, AttributeValue]]:
-        """Total variant of ``translate_attributes`` returning ``Result[str, dict[str, AttributeValue]]``.
+    ) -> Result[TranslationIsoError, dict[str, AttributeValue]]:
+        """Total variant of ``translate_attributes`` returning structured ``Result``.
 
         Args:
             operation (str): Canonical operation name.
@@ -1353,7 +1399,7 @@ class ParameterTranslationEngine:
             allow_passthrough (bool): Whether unmapped keys pass through unchanged.
 
         Returns:
-            Result[str, dict[str, AttributeValue]]: ``Ok(translated_dict)`` or ``Err(diagnostic)``.
+            Result[TranslationIsoError, dict[str, AttributeValue]]: ``Ok(translated_dict)`` or ``Err``.
         """
         try:
             return Ok(
@@ -1366,7 +1412,14 @@ class ParameterTranslationEngine:
                 )
             )
         except (KeyError, ValueError) as exc:
-            return Err(str(exc))
+            return Err(
+                TranslationIsoError(
+                    op_name=operation,
+                    direction="forward",
+                    parameter=None,
+                    reason=str(exc),
+                )
+            )
 
     def conv_layout_iso(
         self,
@@ -1382,39 +1435,68 @@ class ParameterTranslationEngine:
         Returns:
             PartialIso[TensorLike, TensorLike]: Bidirectional layout partial isomorphism.
         """
+        param_desc = f"{source_format}->{target_format}"
 
-        def _fwd(weights: TensorLike) -> Result[str, TensorLike]:
+        def _fwd(weights: TensorLike) -> Result[TranslationIsoError, TensorLike]:
             """Permute ``source_format -> target_format``.
 
             Args:
                 weights (TensorLike): Source kernel tensor or nested list.
 
             Returns:
-                Result[str, TensorLike]: Permuted target tensor or ``Err``.
+                Result[TranslationIsoError, TensorLike]: Permuted target tensor or ``Err``.
             """
             try:
                 permuted = self.permute_conv_weights(weights, source_format, target_format)
             except ValueError as exc:
-                return Err(str(exc))
+                return Err(
+                    TranslationIsoError(
+                        op_name="conv_layout",
+                        direction="forward",
+                        parameter=param_desc,
+                        reason=str(exc),
+                    )
+                )
             if isinstance(permuted, PermutedWeightDescriptor):
-                return Err("Symbolic PermutedWeightDescriptor requires concrete tensor for PartialIso.")
+                return Err(
+                    TranslationIsoError(
+                        op_name="conv_layout",
+                        direction="forward",
+                        parameter=param_desc,
+                        reason="Symbolic PermutedWeightDescriptor requires concrete tensor for PartialIso.",
+                    )
+                )
             return Ok(permuted)
 
-        def _bwd(weights: TensorLike) -> Result[str, TensorLike]:
+        def _bwd(weights: TensorLike) -> Result[TranslationIsoError, TensorLike]:
             """Permute ``target_format -> source_format``.
 
             Args:
                 weights (TensorLike): Target kernel tensor or nested list.
 
             Returns:
-                Result[str, TensorLike]: Restored source tensor or ``Err``.
+                Result[TranslationIsoError, TensorLike]: Restored source tensor or ``Err``.
             """
             try:
                 restored = self.permute_conv_weights(weights, target_format, source_format)
             except ValueError as exc:
-                return Err(str(exc))
+                return Err(
+                    TranslationIsoError(
+                        op_name="conv_layout",
+                        direction="backward",
+                        parameter=param_desc,
+                        reason=str(exc),
+                    )
+                )
             if isinstance(restored, PermutedWeightDescriptor):
-                return Err("Symbolic PermutedWeightDescriptor requires concrete tensor for PartialIso.")
+                return Err(
+                    TranslationIsoError(
+                        op_name="conv_layout",
+                        direction="backward",
+                        parameter=param_desc,
+                        reason="Symbolic PermutedWeightDescriptor requires concrete tensor for PartialIso.",
+                    )
+                )
             return Ok(restored)
 
         return PartialIso(forward=_fwd, backward=_bwd)
@@ -1438,15 +1520,16 @@ class ParameterTranslationEngine:
             PartialIso[TensorLike, tuple[TensorLike, TensorLike, TensorLike]]:
                 Bidirectional ``fused_qkv <-> (q, k, v)`` partial isomorphism.
         """
+        axis_label = f"dim={dim}"
 
-        def _split(fused: TensorLike) -> Result[str, tuple[TensorLike, TensorLike, TensorLike]]:
+        def _split(fused: TensorLike) -> Result[TranslationIsoError, tuple[TensorLike, TensorLike, TensorLike]]:
             """Split fused QKV weight into ``(q, k, v)``.
 
             Args:
                 fused (TensorLike): Fused QKV weight sequence/tensor.
 
             Returns:
-                Result[str, tuple[TensorLike, TensorLike, TensorLike]]: Split triple or ``Err``.
+                Result[TranslationIsoError, tuple[TensorLike, TensorLike, TensorLike]]: Split triple or ``Err``.
             """
             try:
                 q_w, k_w, v_w = self.split_qkv_weights(
@@ -1457,30 +1540,58 @@ class ParameterTranslationEngine:
                     num_kv_heads=num_kv_heads,
                 )
             except ValueError as exc:
-                return Err(str(exc))
+                return Err(
+                    TranslationIsoError(
+                        op_name="qkv_split_merge",
+                        direction="forward",
+                        parameter=axis_label,
+                        reason=str(exc),
+                    )
+                )
             if (
                 isinstance(q_w, SplitQKVSliceDescriptor)
                 or isinstance(k_w, SplitQKVSliceDescriptor)
                 or isinstance(v_w, SplitQKVSliceDescriptor)
             ):
-                return Err("Symbolic SplitQKVSliceDescriptor cannot be inverted without concrete slices.")
+                return Err(
+                    TranslationIsoError(
+                        op_name="qkv_split_merge",
+                        direction="forward",
+                        parameter=axis_label,
+                        reason="Symbolic SplitQKVSliceDescriptor cannot be inverted without concrete slices.",
+                    )
+                )
             return Ok((q_w, k_w, v_w))
 
-        def _merge(parts: tuple[TensorLike, TensorLike, TensorLike]) -> Result[str, TensorLike]:
+        def _merge(parts: tuple[TensorLike, TensorLike, TensorLike]) -> Result[TranslationIsoError, TensorLike]:
             """Merge ``(q, k, v)`` back into a fused QKV weight.
 
             Args:
                 parts (tuple[TensorLike, TensorLike, TensorLike]): ``(q, k, v)`` weight triple.
 
             Returns:
-                Result[str, TensorLike]: Merged QKV weight or ``Err``.
+                Result[TranslationIsoError, TensorLike]: Merged QKV weight or ``Err``.
             """
             try:
                 merged = self.merge_qkv_weights(parts[0], parts[1], parts[2], concat_dim=dim)
             except ValueError as exc:
-                return Err(str(exc))
+                return Err(
+                    TranslationIsoError(
+                        op_name="qkv_split_merge",
+                        direction="backward",
+                        parameter=axis_label,
+                        reason=str(exc),
+                    )
+                )
             if isinstance(merged, MergedQKVWeightDescriptor):
-                return Err("Symbolic MergedQKVWeightDescriptor cannot be inverted without concrete sequences.")
+                return Err(
+                    TranslationIsoError(
+                        op_name="qkv_split_merge",
+                        direction="backward",
+                        parameter=axis_label,
+                        reason="Symbolic MergedQKVWeightDescriptor cannot be inverted without concrete sequences.",
+                    )
+                )
             return Ok(merged)
 
         return PartialIso(forward=_split, backward=_merge)

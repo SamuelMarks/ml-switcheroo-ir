@@ -64,6 +64,7 @@ from ml_switcheroo_ir.typeclasses import (
     Err,
     Invalid,
     Monoid,
+    NonEmpty,
     Ok,
     Ordering,
     Result,
@@ -74,8 +75,13 @@ from ml_switcheroo_ir.typeclasses import (
     ap_validation,
     dict_monoid,
     endo_monoid,
+    nonempty_eq,
+    nonempty_hash,
+    nonempty_ord,
+    nonempty_semigroup,
     product_monoid,
     traverse_validation,
+    traverse_validation_ne,
     tuple_monoid,
 )
 from ml_switcheroo_ir.types import AttributeValue, DType, TensorShape, TensorSpec
@@ -91,6 +97,7 @@ from ml_switcheroo_ir.validation.distributed import (
     COMMUNICATION_VOLUME_MONOID,
     CommunicationVolumeReport,
 )
+from tests.conftest import seal_hypothesis_test
 
 # ---------------------------------------------------------------------------
 # Hypothesis Strategies
@@ -242,6 +249,7 @@ _LOGICAL_NODE_ST: st.SearchStrategy[LogicalNode] = st.builds(
 # ---------------------------------------------------------------------------
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(a=_POLYNOMIAL_ST, b=_POLYNOMIAL_ST, c=_POLYNOMIAL_ST)
 def test_polynomial_eq_and_hash_coherence_laws(a: Polynomial, b: Polynomial, c: Polynomial) -> None:
@@ -264,6 +272,7 @@ def test_polynomial_eq_and_hash_coherence_laws(a: Polynomial, b: Polynomial, c: 
         assert POLYNOMIAL_HASH.hash_value(a) == POLYNOMIAL_HASH.hash_value(b)
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(e1=_SYM_EXPR_ST, e2=_SYM_EXPR_ST, e3=_SYM_EXPR_ST, p1=_PORT_REF_ST, p2=_PORT_REF_ST)
 def test_sym_expr_and_port_ref_eq_and_hash_laws(
@@ -296,6 +305,7 @@ def test_sym_expr_and_port_ref_eq_and_hash_laws(
     assert PORT_REF_HASH.hash_value(p1) == PORT_REF_HASH.hash_value(p1_roundtrip)
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(attr1=_ATTR_VALUE_ST, attr2=_ATTR_VALUE_ST, n1=_LOGICAL_NODE_ST, n2=_LOGICAL_NODE_ST)
 def test_attr_and_node_cse_hash_coherence_laws(
@@ -332,6 +342,7 @@ def test_attr_and_node_cse_hash_coherence_laws(
 # ---------------------------------------------------------------------------
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     x=_SMALL_INT,
@@ -383,6 +394,7 @@ def test_ord_laws_totality_antisymmetry_transitivity_and_flip(
     assert Ordering.EQ.flip() == Ordering.EQ
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(a=_LEVEL_ST, b=_LEVEL_ST, c=_LEVEL_ST)
 def test_bounded_lattice_laws_on_validation_level(
@@ -416,6 +428,7 @@ def test_bounded_lattice_laws_on_validation_level(
 # ---------------------------------------------------------------------------
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     i1=_SMALL_INT,
@@ -455,6 +468,7 @@ def test_scalar_and_validation_monoid_laws(
     assert VALIDATION_ERRORS_MONOID.combine(e1, VALIDATION_ERRORS_MONOID.empty()) == e1
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     v1=_COMM_REPORT_ST,
@@ -494,6 +508,7 @@ def test_communication_and_compliance_monoid_laws(
     assert fc_monoid.combine(f1, fc_monoid.empty()) == f1
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     d1=st.dictionaries(st.sampled_from(["a", "b"]), _SMALL_INT, max_size=2),
@@ -545,6 +560,7 @@ def test_dict_product_and_endo_monoid_laws(
 # ---------------------------------------------------------------------------
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     i1=_SMALL_INT,
@@ -595,6 +611,7 @@ def test_int_and_polynomial_ring_laws(
     assert sr_p.add(p1, POLYNOMIAL_RING.neg(p1)) == sr_p.zero()
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(d1=_DIMENSION_ST, d2=_DIMENSION_ST, d3=_DIMENSION_ST)
 def test_dimension_semiring_laws(
@@ -639,6 +656,7 @@ def test_dimension_semiring_mixed_pow_and_abs_regressions() -> None:
 # ---------------------------------------------------------------------------
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     x=_SMALL_INT,
@@ -679,6 +697,7 @@ def test_result_monad_laws(x: int, res: Result[str, int]) -> None:
     assert and_then(and_then(res, f), g) == and_then(res, lambda a: and_then(f(a), g))
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     items=st.lists(
@@ -719,6 +738,7 @@ def test_applicative_validation_error_accumulation_law(
 # ---------------------------------------------------------------------------
 
 
+@seal_hypothesis_test
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     dt=_DTYPE_ST,
@@ -766,6 +786,7 @@ def test_json_codec_roundtrip_laws(
     assert LOGICAL_GRAPH_EQ.eq(decoded_graph.value, graph)
 
 
+@seal_hypothesis_test
 @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     vals=st.lists(
@@ -831,3 +852,69 @@ def test_generalized_dimension_equivalence_non_polynomial_atoms() -> None:
     pw = SymPiecewise(cases=[("B > 0", var_b)], default=SymConst(1))
     assert DIMENSION_EQ.eq(SymBinaryOp("+", SymConst(3), pw), SymBinaryOp("+", pw, SymConst(3)))
     assert DIMENSION_EQ.eq(SymBinaryOp("-", pw, SymConst(1)), SymBinaryOp("+", SymConst(-1), pw))
+
+
+_NONEMPTY_INT_ST: st.SearchStrategy[NonEmpty[int]] = st.builds(
+    NonEmpty,
+    head=_SMALL_INT,
+    tail=st.lists(_SMALL_INT, max_size=3).map(tuple),
+)
+
+
+@seal_hypothesis_test
+@settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    a=_NONEMPTY_INT_ST,
+    b=_NONEMPTY_INT_ST,
+    c=_NONEMPTY_INT_ST,
+    steps=st.lists(
+        st.one_of(
+            _SMALL_INT.map(Valid),
+            st.builds(
+                NonEmpty, head=_VALIDATION_ERROR_ST, tail=st.lists(_VALIDATION_ERROR_ST, max_size=2).map(tuple)
+            ).map(Invalid),
+        ),
+        max_size=5,
+    ),
+)
+def test_nonempty_algebraic_and_validation_laws(
+    a: NonEmpty[int],
+    b: NonEmpty[int],
+    c: NonEmpty[int],
+    steps: list[Validation[NonEmpty[ValidationError], int]],
+) -> None:
+    """Verify NonEmpty Semigroup associativity, Eq/Hash coherence, Ord total order, and Validation accumulation.
+
+    Args:
+        a (NonEmpty[int]): First non-empty sequence.
+        b (NonEmpty[int]): Second non-empty sequence.
+        c (NonEmpty[int]): Third non-empty sequence.
+        steps (list[Validation[NonEmpty[ValidationError], int]]): Mixed Valid/Invalid NonEmpty steps.
+    """
+    sg: Semigroup[NonEmpty[int]] = nonempty_semigroup()
+    assert sg.combine(sg.combine(a, b), c) == sg.combine(a, sg.combine(b, c))
+
+    ne_eq = nonempty_eq(INT_EQ)
+    ne_ord = nonempty_ord(INT_ORD)
+    ne_hash = nonempty_hash(INT_HASH)
+
+    assert ne_eq.eq(a, a)
+    assert ne_eq.eq(a, b) == ne_eq.eq(b, a)
+    if ne_eq.eq(a, b) and ne_eq.eq(b, c):
+        assert ne_eq.eq(a, c)
+    if ne_eq.eq(a, b):
+        assert ne_hash.hash_value(a) == ne_hash.hash_value(b)
+
+    assert ne_ord.compare(b, a) == ne_ord.compare(a, b).flip()
+    assert ne_ord.le(a, b) or ne_ord.le(b, a)
+    if ne_ord.le(a, b) and ne_ord.le(b, a):
+        assert ne_eq.eq(a, b)
+    if ne_ord.le(a, b) and ne_ord.le(b, c):
+        assert ne_ord.le(a, c)
+
+    traversed = traverse_validation_ne(steps, lambda v: v)
+    expected_errs = [err for step in steps if isinstance(step, Invalid) for err in step.errors]
+    if expected_errs:
+        assert traversed == Invalid(NonEmpty(head=expected_errs[0], tail=tuple(expected_errs[1:])))
+    else:
+        assert traversed == Valid(tuple(step.value for step in steps if isinstance(step, Valid)))

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
@@ -123,3 +123,15 @@ def _verify_global_state_isolation() -> Iterator[None]:
     assert after_keys == before_keys, "Global schema registry state leaked across test boundary!"
     assert after_meta == before_meta, "Global dialect metadata map leaked across test boundary!"
     assert cli_mod.tabulate is before_tabulate, "ml_switcheroo_ir.cli.tabulate binding leaked across test boundary!"
+
+
+def seal_hypothesis_test(fn: Callable[[], None]) -> Callable[[], None]:
+    """Narrow a Hypothesis ``@given`` zero-arg test callable from ``Callable[..., None]`` to ``Callable[[], None]``.
+
+    Args:
+        fn (Callable[[], None]): Hypothesis-wrapped zero-argument test function.
+
+    Returns:
+        Callable[[], None]: Identical test function with exact zero-argument static signature.
+    """
+    return fn

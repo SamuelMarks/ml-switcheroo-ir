@@ -413,6 +413,31 @@ def _normalize_op_attributes(
     return attr_dict
 
 
+@dataclass(frozen=True)
+class OpSchemaConfig:
+    """Frozen auxiliary metadata options for ``OpSchema`` construction.
+
+    Attributes:
+        schema_version (int | None): Optional upstream opset/schema version.
+        aliases (tuple[str, ...]): Secondary alias names resolving to the canonical schema.
+    """
+
+    schema_version: int | None = None
+    aliases: tuple[str, ...] = ()
+
+
+class OpSchemaKwargs(typing_extensions.TypedDict, total=False):
+    """Typed keyword options accepted by ``OpSchema.__init__`` alongside ``OpSchemaConfig``.
+
+    Attributes:
+        schema_version (int | None): Optional upstream opset/schema version.
+        aliases (Sequence[str]): Secondary alias names resolving to this canonical schema.
+    """
+
+    schema_version: int | None
+    aliases: Sequence[str]
+
+
 class OpSchema(pydantic.BaseModel):
     """Unified operator schema supporting canonical attributes and secondary alias names.
 
@@ -438,7 +463,7 @@ class OpSchema(pydantic.BaseModel):
     schema_version: int | None = None
     aliases: tuple[str, ...] = ()
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         name: str,
         domain: str,
@@ -446,10 +471,10 @@ class OpSchema(pydantic.BaseModel):
         attributes: Sequence[OpAttribute] | Mapping[str, OpAttribute] | None = None,
         inputs: Sequence[str] | None = None,
         outputs: Sequence[str] | None = None,
-        schema_version: int | None = None,
-        aliases: Sequence[str] = (),
+        config: OpSchemaConfig | None = None,
+        **kwargs: typing_extensions.Unpack[OpSchemaKwargs],
     ) -> None:
-        """Initialize OpSchema.
+        """Initialize OpSchema from explicit parameters, ``OpSchemaConfig``, or typed keyword options.
 
         Args:
             name (str): Canonical operator identifier name.
@@ -459,9 +484,17 @@ class OpSchema(pydantic.BaseModel):
                 Sequence or mapping of OpAttribute specifications.
             inputs (Sequence[str] | None): Formal input operand names.
             outputs (Sequence[str] | None): Formal output operand names.
-            schema_version (int | None): Optional upstream opset/schema version.
-            aliases (Sequence[str]): Secondary alias names for secondary index resolution.
+            config (OpSchemaConfig | None): Optional frozen configuration struct for auxiliary fields.
+            **kwargs (typing_extensions.Unpack[OpSchemaKwargs]): Optional ``schema_version`` and ``aliases`` overrides.
         """
+        resolved_schema_version = (
+            kwargs["schema_version"]
+            if "schema_version" in kwargs
+            else (config.schema_version if config is not None else None)
+        )
+        resolved_aliases = (
+            tuple(kwargs["aliases"]) if "aliases" in kwargs else (config.aliases if config is not None else ())
+        )
         super().__init__(
             name=name,
             domain=domain,
@@ -469,8 +502,8 @@ class OpSchema(pydantic.BaseModel):
             attributes=_normalize_op_attributes(attributes),
             inputs=list(inputs) if inputs is not None else [],
             outputs=list(outputs) if outputs is not None else [],
-            schema_version=schema_version,
-            aliases=tuple(aliases),
+            schema_version=resolved_schema_version,
+            aliases=resolved_aliases,
         )
 
     def to_op_schema(self) -> OpSchema:

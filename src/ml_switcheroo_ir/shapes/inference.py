@@ -5,6 +5,7 @@ from __future__ import annotations
 import typing
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import typing_extensions
 
@@ -25,14 +26,17 @@ from ml_switcheroo_ir.shapes.tracker import (
     ShapeMismatchError,
     SymbolicConstraintTracker,
 )
-from ml_switcheroo_ir.typeclasses.algebra import Eq, Semiring
+from ml_switcheroo_ir.typeclasses.algebra import Eq, Monoid, Semigroup, Semiring
 from ml_switcheroo_ir.typeclasses.outcome import Err, Ok, Result
 
 __all__ = [
+    "DEFAULT_SHAPE_RULE_REGISTRY",
     "DIMENSION_EQ",
     "DIMENSION_SEMIRING",
+    "SHAPE_RULE_REGISTRY_MONOID",
     "SHAPE_TRANSFER_REGISTRY",
     "SHAPE_TRANSFER_WITNESSES",
+    "ShapeInferenceRuleRegistry",
     "ShapeNodeProtocol",
     "ShapeTracker",
     "ShapeTransferContext",
@@ -1202,6 +1206,131 @@ SHAPE_TRANSFER_REGISTRY: dict[str, ShapeTransferFn] = {
 }
 
 
+@dataclass(frozen=True)
+class ShapeInferenceRuleRegistry:
+    """Immutable, monoidally extensible operator shape-transfer witness dictionary.
+
+    Allows downstream compilers (e.g. ``ml-switcheroo-compiler``) to layer custom dialect
+    transfer functions atop Tier-0's ``DIMENSION_SEMIRING`` and ``Polynomial`` ``Ring`` engine
+    without mutating global state.
+
+    Attributes:
+        rules (Mapping[str, ShapeTransferFn]): Read-only mapping from op name to transfer rule.
+    """
+
+    rules: Mapping[str, ShapeTransferFn]
+
+    @classmethod
+    def empty(cls) -> ShapeInferenceRuleRegistry:
+        """Return an empty ``ShapeInferenceRuleRegistry``.
+
+        Returns:
+            ShapeInferenceRuleRegistry: Empty immutable rule registry.
+        """
+        empty_map: dict[str, ShapeTransferFn] = {}
+        return cls(rules=MappingProxyType(empty_map))
+
+    @classmethod
+    def from_witnesses(
+        cls,
+        witnesses: Iterable[ShapeTransferWitness],
+    ) -> ShapeInferenceRuleRegistry:
+        """Construct an immutable ``ShapeInferenceRuleRegistry`` from ``ShapeTransferWitness`` items.
+
+        Args:
+            witnesses (Iterable[ShapeTransferWitness]): Witness entries to index.
+
+        Returns:
+            ShapeInferenceRuleRegistry: Populated immutable rule registry.
+        """
+        table: dict[str, ShapeTransferFn] = {
+            str(op): witness.transfer_fn for witness in witnesses for op in witness.op_names
+        }
+        return cls(rules=MappingProxyType(table))
+
+    def __contains__(self, op_type: str) -> bool:
+        """Return True if ``op_type`` has a registered shape transfer function.
+
+        Args:
+            op_type (str): Operator mnemonic to query.
+
+        Returns:
+            bool: True when ``op_type`` is present in ``self.rules``.
+        """
+        return op_type in self.rules
+
+    def __len__(self) -> int:
+        """Return the number of operator mnemonics registered in ``self.rules``.
+
+        Returns:
+            int: Count of registered operator mnemonics.
+        """
+        return len(self.rules)
+
+    def lookup(self, op_type: str) -> ShapeTransferFn | None:
+        """Look up the transfer function registered for ``op_type``.
+
+        Args:
+            op_type (str): Operator mnemonic.
+
+        Returns:
+            ShapeTransferFn | None: Registered transfer callable or ``None``.
+        """
+        return self.rules.get(op_type)
+
+    def with_rule(self, op_type: str, transfer_fn: ShapeTransferFn) -> ShapeInferenceRuleRegistry:
+        """Return a new registry overlaying ``op_type -> transfer_fn`` without mutating ``self``.
+
+        Args:
+            op_type (str): Operator mnemonic to register or override.
+            transfer_fn (ShapeTransferFn): Shape transfer rule function.
+
+        Returns:
+            ShapeInferenceRuleRegistry: Extended immutable registry.
+        """
+        merged = dict(self.rules)
+        merged[op_type] = transfer_fn
+        return ShapeInferenceRuleRegistry(rules=MappingProxyType(merged))
+
+    def extend(self, *extra_witnesses: ShapeTransferWitness) -> ShapeInferenceRuleRegistry:
+        """Return a new registry overlaying ``extra_witnesses`` on top of ``self``.
+
+        Args:
+            *extra_witnesses (ShapeTransferWitness): Additional transfer witnesses.
+
+        Returns:
+            ShapeInferenceRuleRegistry: Merged immutable registry (right-biased on key collision).
+        """
+        merged = dict(self.rules)
+        for witness in extra_witnesses:
+            for op in witness.op_names:
+                merged[str(op)] = witness.transfer_fn
+        return ShapeInferenceRuleRegistry(rules=MappingProxyType(merged))
+
+    def merge(self, other: ShapeInferenceRuleRegistry) -> ShapeInferenceRuleRegistry:
+        """Right-biased associative overlay of ``other`` atop ``self``.
+
+        Args:
+            other (ShapeInferenceRuleRegistry): Override rule registry.
+
+        Returns:
+            ShapeInferenceRuleRegistry: Combined immutable registry.
+        """
+        merged = dict(self.rules)
+        merged.update(other.rules)
+        return ShapeInferenceRuleRegistry(rules=MappingProxyType(merged))
+
+
+DEFAULT_SHAPE_RULE_REGISTRY: typing.Final[ShapeInferenceRuleRegistry] = ShapeInferenceRuleRegistry.from_witnesses(
+    SHAPE_TRANSFER_WITNESSES
+)
+
+SHAPE_RULE_REGISTRY_MONOID: typing.Final[Monoid[ShapeInferenceRuleRegistry]] = Monoid(
+    semigroup=Semigroup(combine=lambda lhs, rhs: lhs.merge(rhs)),
+    empty=ShapeInferenceRuleRegistry.empty,
+)
+
+
 def infer_op_output_shape(
     op_type: str,
     input_shapes: Sequence[tuple[DimensionType, ...] | None],
@@ -1210,8 +1339,9 @@ def infer_op_output_shape(
     node_id: str = "",
     num_outputs: int = 1,
     tracker: SymbolicConstraintTracker | None = None,
+    registry: ShapeInferenceRuleRegistry | None = None,
 ) -> tuple[DimensionType, ...] | None:
-    """Infer output tensor shape for an operator using the unified ``SHAPE_TRANSFER_REGISTRY``.
+    """Infer output tensor shape for an operator using ``registry`` or ``SHAPE_TRANSFER_REGISTRY``.
 
     Args:
         op_type (str): Operator mnemonic (e.g. ``'Add'``, ``'MatMul'``, ``'Reshape'``).
@@ -1220,11 +1350,12 @@ def infer_op_output_shape(
         node_id (str): Optional node identifier for error messages.
         num_outputs (int): Declared output port count.
         tracker (SymbolicConstraintTracker | None): Optional symbolic constraint tracker.
+        registry (ShapeInferenceRuleRegistry | None): Optional custom rule registry witness.
 
     Returns:
         tuple[DimensionType, ...] | None: Inferred output shape tuple or None.
     """
-    rule = SHAPE_TRANSFER_REGISTRY.get(op_type)
+    rule = registry.lookup(op_type) if registry is not None else SHAPE_TRANSFER_REGISTRY.get(op_type)
     if rule is None:
         return None
     ctx = ShapeTransferContext(
@@ -1329,6 +1460,7 @@ def infer_op_output_shape_result(
     node_id: str = "",
     num_outputs: int = 1,
     tracker: SymbolicConstraintTracker | None = None,
+    registry: ShapeInferenceRuleRegistry | None = None,
 ) -> Result[ShapeMismatchError | ValueError | TypeError, tuple[DimensionType, ...] | None]:
     """Total variant of ``infer_op_output_shape`` returning ``Result`` instead of raising.
 
@@ -1339,6 +1471,7 @@ def infer_op_output_shape_result(
         node_id (str): Node identifier for diagnostics.
         num_outputs (int): Declared output count.
         tracker (SymbolicConstraintTracker | None): Optional symbolic constraint tracker.
+        registry (ShapeInferenceRuleRegistry | None): Optional custom rule registry witness.
 
     Returns:
         Result[ShapeMismatchError | ValueError | TypeError, tuple[DimensionType, ...] | None]:
@@ -1353,6 +1486,7 @@ def infer_op_output_shape_result(
                 node_id=node_id,
                 num_outputs=num_outputs,
                 tracker=tracker,
+                registry=registry,
             )
         )
     except (ShapeMismatchError, ValueError, TypeError) as exc:

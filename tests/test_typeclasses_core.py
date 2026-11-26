@@ -31,6 +31,7 @@ from ml_switcheroo_ir.typeclasses import (
     Invalid,
     JsonCodec,
     Monoid,
+    NonEmpty,
     Ok,
     Ord,
     Ordering,
@@ -45,6 +46,7 @@ from ml_switcheroo_ir.typeclasses import (
     and_then,
     ap_validation,
     collect_unit_validations,
+    collect_unit_validations_ne,
     compose_codec,
     contramap_eq,
     contramap_hash,
@@ -56,8 +58,10 @@ from ml_switcheroo_ir.typeclasses import (
     first_semigroup,
     fold_result,
     fold_validation,
+    from_error_sequence,
     frozenset_union_monoid,
     imap_codec,
+    invalid_one,
     last_semigroup,
     lexical_pair_ord,
     list_codec,
@@ -67,6 +71,11 @@ from ml_switcheroo_ir.typeclasses import (
     map_validation_err,
     max_semigroup,
     min_semigroup,
+    nonempty_eq,
+    nonempty_hash,
+    nonempty_ord,
+    nonempty_pretty,
+    nonempty_semigroup,
     optional_codec,
     pair_hash_witness,
     partition_results,
@@ -76,10 +85,13 @@ from ml_switcheroo_ir.typeclasses import (
     result_to_validation,
     traverse_result,
     traverse_validation,
+    traverse_validation_ne,
     tuple_codec,
     tuple_hash_witness,
     tuple_monoid,
+    validation_ne_to_tuple,
     validation_to_result,
+    validation_tuple_to_ne,
     value_or,
     value_or_else,
     zip_validation2,
@@ -476,3 +488,72 @@ def test_recursion_schemes_endorewrite_and_fold() -> None:
         fold_step=lambda n, rec: n.val + sum(rec(c) for c in n.children),
     )
     assert summer.fold(sample) == 10
+
+
+def test_nonempty_and_nonempty_validation_combinators() -> None:
+    """Test NonEmpty methods, witnesses (Semigroup/Eq/Ord/Hash/Pretty), and NonEmpty Validation helpers."""
+    single = NonEmpty.singleton(10)
+    assert len(single) == 1
+    assert list(single) == [10]
+    assert single.to_tuple() == (10,)
+    assert NonEmpty.from_sequence(()) is None
+
+    multi = NonEmpty.from_sequence([1, 2, 3])
+    assert multi == NonEmpty(head=1, tail=(2, 3))
+    assert len(multi) == 3
+    assert list(multi) == [1, 2, 3]
+    assert multi.map(lambda x: x * 10) == NonEmpty(head=10, tail=(20, 30))
+
+    sg: Semigroup[NonEmpty[int]] = nonempty_semigroup()
+    sg_typed = nonempty_semigroup(int)
+    assert sg.combine(single, multi) == NonEmpty(head=10, tail=(1, 2, 3))
+    assert sg_typed.combine(single, single) == NonEmpty(head=10, tail=(10,))
+
+    ne_eq = nonempty_eq(INT_EQ)
+    assert ne_eq.eq(multi, NonEmpty(1, (2, 3))) is True
+    assert ne_eq.eq(multi, single) is False
+    assert ne_eq.eq(multi, NonEmpty(9, (2, 3))) is False
+    assert ne_eq.eq(multi, NonEmpty(1, (2, 9))) is False
+
+    ne_ord = nonempty_ord(INT_ORD)
+    assert ne_ord.compare(NonEmpty(1, (2,)), NonEmpty(2, (0,))) is Ordering.LT
+    assert ne_ord.compare(NonEmpty(1, (5,)), NonEmpty(1, (3,))) is Ordering.GT
+    assert ne_ord.compare(NonEmpty(1, (2,)), NonEmpty(1, (2, 3))) is Ordering.LT
+    assert ne_ord.compare(NonEmpty(1, (2,)), NonEmpty(1, (2,))) is Ordering.EQ
+
+    ne_hash = nonempty_hash(INT_HASH)
+    assert ne_hash.hash_value(multi) == ne_hash.hash_value(NonEmpty(1, (2, 3)))
+
+    ne_pretty = nonempty_pretty(Pretty[int](render=lambda n: f"e{n}"), separator=", ")
+    assert ne_pretty.render(multi) == "e1, e2, e3"
+
+    inv1 = invalid_one("bad1")
+    assert inv1 == Invalid(NonEmpty("bad1"))
+    assert from_error_sequence([], 42) == Valid(42)
+    assert from_error_sequence(["e1", "e2"], 42) == Invalid(NonEmpty("e1", ("e2",)))
+
+    def _check_pos_ne(n: int) -> Validation[NonEmpty[str], int]:
+        """Validate positive integer returning NonEmpty error on failure.
+
+        Args:
+            n (int): Candidate integer.
+
+        Returns:
+            Validation[NonEmpty[str], int]: Valid(n) or singleton Invalid.
+        """
+        return Valid(n) if n > 0 else invalid_one(f"neg:{n}")
+
+    assert traverse_validation_ne([1, 2], _check_pos_ne) == Valid((1, 2))
+    assert traverse_validation_ne([-1, 2, -3], _check_pos_ne) == Invalid(NonEmpty("neg:-1", ("neg:-3",)))
+
+    assert collect_unit_validations_ne((Valid(None), Valid(None))) == Valid(None)
+    assert collect_unit_validations_ne((Valid(None), invalid_one("u1"), invalid_one("u2"))) == Invalid(
+        NonEmpty("u1", ("u2",))
+    )
+
+    assert validation_ne_to_tuple(Valid(5)) == Valid(5)
+    assert validation_ne_to_tuple(Invalid(NonEmpty("a", ("b",)))) == Invalid(("a", "b"))
+
+    assert validation_tuple_to_ne(Valid(5), lambda: "fallback") == Valid(5)
+    assert validation_tuple_to_ne(Invalid(("a", "b")), lambda: "fallback") == Invalid(NonEmpty("a", ("b",)))
+    assert validation_tuple_to_ne(Invalid(()), lambda: "fallback") == Invalid(NonEmpty("fallback"))

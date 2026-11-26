@@ -6,6 +6,7 @@ from ml_switcheroo_ir.validation.core import (
     CORE_MLIR_DIALECTS,
     KNOWN_SYNONYMS,
     VALIDATION_ERRORS_MONOID,
+    VALIDATION_ERRORS_NE_SEMIGROUP,
     VALIDATION_ERRORS_SEMIGROUP,
     VALIDATION_LEVEL_EQ,
     VALIDATION_LEVEL_LATTICE,
@@ -61,6 +62,7 @@ from ml_switcheroo_ir.validation.quantization import (
 )
 from ml_switcheroo_ir.validation.schema_validator import (
     Validator,
+    ValidatorConfig,
     check_attribute_type_value,
 )
 
@@ -88,6 +90,7 @@ __all__ = [
     "SupportsModelDumpProtocol",
     "TargetFileDiscovererProtocol",
     "VALIDATION_ERRORS_MONOID",
+    "VALIDATION_ERRORS_NE_SEMIGROUP",
     "VALIDATION_ERRORS_SEMIGROUP",
     "VALIDATION_LEVEL_EQ",
     "VALIDATION_LEVEL_LATTICE",
@@ -96,6 +99,7 @@ __all__ = [
     "ValidationLevel",
     "ValidationRule",
     "Validator",
+    "ValidatorConfig",
     "WGSL_ISA_SEMANTICS",
     "audit_graph_grounding",
     "check_attribute_type_value",

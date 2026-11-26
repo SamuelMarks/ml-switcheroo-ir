@@ -36,6 +36,7 @@ from ml_switcheroo_ir import (
     export_to_python,
 )
 from ml_switcheroo_ir.types import AttributeValue, DimensionType, InitializerValue
+from tests.conftest import seal_hypothesis_test
 
 valid_identifiers: st.SearchStrategy[str] = st.from_regex(r"[a-zA-Z_][a-zA-Z0-9_]{0,12}", fullmatch=True)
 
@@ -299,6 +300,7 @@ def _assert_graphs_losslessly_equal(expected: LogicalGraph, actual: LogicalGraph
         assert act_node == exp_node
 
 
+@seal_hypothesis_test
 @given(graph=rich_graph_strategy())
 @settings(max_examples=12, deadline=None)
 def test_fuzz_dual_serialization_and_codegen_roundtrip(graph: LogicalGraph) -> None:

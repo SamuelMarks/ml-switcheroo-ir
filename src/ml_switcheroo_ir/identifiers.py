@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typing
 from dataclasses import dataclass
+from enum import Enum
 
 from ml_switcheroo_ir.typeclasses.algebra import (
     INT_HASH,
@@ -38,6 +39,8 @@ __all__ = [
     "DIALECT_DOMAIN_HASH",
     "DIALECT_DOMAIN_ORD",
     "DialectDomain",
+    "IdentifierKind",
+    "IdentifierParseError",
     "MESH_AXIS_NAME_EQ",
     "MESH_AXIS_NAME_HASH",
     "MESH_AXIS_NAME_ORD",
@@ -80,6 +83,43 @@ __all__ = [
 ]
 
 
+class IdentifierKind(str, Enum):
+    """Closed enumeration of refined identifier and integer scalar categories.
+
+    Attributes:
+        NON_NEGATIVE_INT (IdentifierKind): Refined ``NonNegativeInt`` (>= 0, non-bool).
+        POSITIVE_INT (IdentifierKind): Refined ``PositiveInt`` (> 0, non-bool).
+        NODE_ID (IdentifierKind): Graph node identifier ``NodeId``.
+        SSA_VALUE_NAME (IdentifierKind): SSA tensor/value identifier ``SsaValueName``.
+        DIALECT_DOMAIN (IdentifierKind): Dialect namespace ``DialectDomain``.
+        OP_NAME (IdentifierKind): Unqualified operator name ``OpName``.
+        MESH_AXIS_NAME (IdentifierKind): Logical mesh axis name ``MeshAxisName``.
+    """
+
+    NON_NEGATIVE_INT = "non_negative_int"
+    POSITIVE_INT = "positive_int"
+    NODE_ID = "node_id"
+    SSA_VALUE_NAME = "ssa_value_name"
+    DIALECT_DOMAIN = "dialect_domain"
+    OP_NAME = "op_name"
+    MESH_AXIS_NAME = "mesh_axis_name"
+
+
+@dataclass(frozen=True)
+class IdentifierParseError:
+    """Structured smart-constructor failure variant of ``IrDomainError``.
+
+    Attributes:
+        kind (IdentifierKind): Target refined identifier or integer category.
+        raw_value (str | int): Rejected candidate value.
+        reason (str): Human-readable invariant violation explanation.
+    """
+
+    kind: IdentifierKind
+    raw_value: str | int
+    reason: str
+
+
 def is_non_bool_int(val: _CandidateT) -> typing.TypeGuard[NonBoolInt]:
     """Narrow ``val`` to ``NonBoolInt`` iff ``val`` is an ``int`` and NOT a ``bool``.
 
@@ -112,105 +152,159 @@ def require_non_bool_int(val: int, label: str = "value") -> NonBoolInt:
     return val
 
 
-def parse_non_negative_int(val: int) -> Result[str, NonNegativeInt]:
+def parse_non_negative_int(val: int) -> Result[IdentifierParseError, NonNegativeInt]:
     """Total smart constructor validating ``val >= 0`` and ``not isinstance(val, bool)``.
 
     Args:
         val (int): Candidate integer.
 
     Returns:
-        Result[str, NonNegativeInt]: ``Ok(NonNegativeInt)`` or ``Err`` diagnostic message.
+        Result[IdentifierParseError, NonNegativeInt]: ``Ok(NonNegativeInt)`` or ``Err(IdentifierParseError)``.
     """
     if not is_non_bool_int(val):
-        return Err(f"Expected non-boolean int, got {val!r}.")
+        return Err(
+            IdentifierParseError(
+                kind=IdentifierKind.NON_NEGATIVE_INT,
+                raw_value=val,
+                reason=f"Expected non-boolean int, got {val!r}.",
+            )
+        )
     if val < 0:
-        return Err(f"Expected non-negative int (>= 0), got {val}.")
+        return Err(
+            IdentifierParseError(
+                kind=IdentifierKind.NON_NEGATIVE_INT,
+                raw_value=val,
+                reason=f"Expected non-negative int (>= 0), got {val}.",
+            )
+        )
     return Ok(NonNegativeInt(val))
 
 
-def parse_positive_int(val: int) -> Result[str, PositiveInt]:
+def parse_positive_int(val: int) -> Result[IdentifierParseError, PositiveInt]:
     """Total smart constructor validating ``val > 0`` and ``not isinstance(val, bool)``.
 
     Args:
         val (int): Candidate integer.
 
     Returns:
-        Result[str, PositiveInt]: ``Ok(PositiveInt)`` or ``Err`` diagnostic message.
+        Result[IdentifierParseError, PositiveInt]: ``Ok(PositiveInt)`` or ``Err(IdentifierParseError)``.
     """
     if not is_non_bool_int(val):
-        return Err(f"Expected non-boolean int, got {val!r}.")
+        return Err(
+            IdentifierParseError(
+                kind=IdentifierKind.POSITIVE_INT,
+                raw_value=val,
+                reason=f"Expected non-boolean int, got {val!r}.",
+            )
+        )
     if val <= 0:
-        return Err(f"Expected positive int (> 0), got {val}.")
+        return Err(
+            IdentifierParseError(
+                kind=IdentifierKind.POSITIVE_INT,
+                raw_value=val,
+                reason=f"Expected positive int (> 0), got {val}.",
+            )
+        )
     return Ok(PositiveInt(val))
 
 
-def parse_node_id(raw: str) -> Result[str, NodeId]:
+def parse_node_id(raw: str) -> Result[IdentifierParseError, NodeId]:
     """Total smart constructor validating a non-empty ``NodeId``.
 
     Args:
         raw (str): Candidate node identifier string.
 
     Returns:
-        Result[str, NodeId]: ``Ok(NodeId(raw))`` or ``Err`` if empty.
+        Result[IdentifierParseError, NodeId]: ``Ok(NodeId(raw))`` or ``Err(IdentifierParseError)`` if empty.
     """
     if not raw:
-        return Err("NodeId must be a non-empty string.")
+        return Err(
+            IdentifierParseError(
+                kind=IdentifierKind.NODE_ID,
+                raw_value=raw,
+                reason="NodeId must be a non-empty string.",
+            )
+        )
     return Ok(NodeId(raw))
 
 
-def parse_ssa_name(raw: str) -> Result[str, SsaValueName]:
+def parse_ssa_name(raw: str) -> Result[IdentifierParseError, SsaValueName]:
     """Total smart constructor validating a non-empty ``SsaValueName``.
 
     Args:
         raw (str): Candidate SSA value identifier string.
 
     Returns:
-        Result[str, SsaValueName]: ``Ok(SsaValueName(raw))`` or ``Err`` if empty.
+        Result[IdentifierParseError, SsaValueName]: ``Ok(SsaValueName(raw))`` or ``Err(IdentifierParseError)``.
     """
     if not raw:
-        return Err("SsaValueName must be a non-empty string.")
+        return Err(
+            IdentifierParseError(
+                kind=IdentifierKind.SSA_VALUE_NAME,
+                raw_value=raw,
+                reason="SsaValueName must be a non-empty string.",
+            )
+        )
     return Ok(SsaValueName(raw))
 
 
-def parse_dialect_domain(raw: str) -> Result[str, DialectDomain]:
+def parse_dialect_domain(raw: str) -> Result[IdentifierParseError, DialectDomain]:
     """Total smart constructor wrapping a dialect domain namespace string (empty allowed for default domain).
 
     Args:
         raw (str): Raw domain identifier string.
 
     Returns:
-        Result[str, DialectDomain]: ``Ok(DialectDomain(raw))`` or ``Err`` if whitespace-only non-empty.
+        Result[IdentifierParseError, DialectDomain]: ``Ok(DialectDomain(raw))`` or ``Err(IdentifierParseError)``.
     """
     if raw and not raw.strip():
-        return Err("DialectDomain must not be whitespace-only.")
+        return Err(
+            IdentifierParseError(
+                kind=IdentifierKind.DIALECT_DOMAIN,
+                raw_value=raw,
+                reason="DialectDomain must not be whitespace-only.",
+            )
+        )
     return Ok(DialectDomain(raw))
 
 
-def parse_op_name(raw: str) -> Result[str, OpName]:
+def parse_op_name(raw: str) -> Result[IdentifierParseError, OpName]:
     """Total smart constructor validating a non-empty operator name ``OpName``.
 
     Args:
         raw (str): Candidate operator name.
 
     Returns:
-        Result[str, OpName]: ``Ok(OpName(raw))`` or ``Err`` if empty.
+        Result[IdentifierParseError, OpName]: ``Ok(OpName(raw))`` or ``Err(IdentifierParseError)`` if empty.
     """
     if not raw:
-        return Err("OpName must be a non-empty string.")
+        return Err(
+            IdentifierParseError(
+                kind=IdentifierKind.OP_NAME,
+                raw_value=raw,
+                reason="OpName must be a non-empty string.",
+            )
+        )
     return Ok(OpName(raw))
 
 
-def parse_mesh_axis_name(raw: str) -> Result[str, MeshAxisName]:
+def parse_mesh_axis_name(raw: str) -> Result[IdentifierParseError, MeshAxisName]:
     """Total smart constructor validating a non-empty ``MeshAxisName``.
 
     Args:
         raw (str): Candidate mesh axis name.
 
     Returns:
-        Result[str, MeshAxisName]: ``Ok(MeshAxisName(raw))`` or ``Err`` if empty.
+        Result[IdentifierParseError, MeshAxisName]: ``Ok(MeshAxisName(raw))`` or ``Err(IdentifierParseError)``.
     """
     if not raw:
-        return Err("MeshAxisName must be a non-empty string.")
+        return Err(
+            IdentifierParseError(
+                kind=IdentifierKind.MESH_AXIS_NAME,
+                raw_value=raw,
+                reason="MeshAxisName must be a non-empty string.",
+            )
+        )
     return Ok(MeshAxisName(raw))
 
 

@@ -444,3 +444,38 @@ def test_validator_exhaustive_attribute_types_subgraphs_cycles_and_arity() -> No
     )
     assert v_core_custom.validate_edges(isa_g) == []
     _ = v_core_custom.validate_graph(isa_g)
+
+
+def test_op_schema_config_and_validator_config_construction() -> None:
+    """Test OpSchemaConfig and ValidatorConfig construction and keyword override precedence."""
+    from ml_switcheroo_ir import OpSchemaConfig, ValidatorConfig
+
+    cfg_schema = OpSchema(
+        "MyAdd",
+        "ai.onnx",
+        14,
+        [],
+        ["A", "B"],
+        ["C"],
+        config=OpSchemaConfig(schema_version=18, aliases=("AddAlias",)),
+    )
+    assert cfg_schema.schema_version == 18
+    assert cfg_schema.aliases == ("AddAlias",)
+
+    kw_override_schema = OpSchema(
+        "MyAdd",
+        "ai.onnx",
+        config=OpSchemaConfig(schema_version=18, aliases=("Old",)),
+        schema_version=21,
+        aliases=["NewAlias"],
+    )
+    assert kw_override_schema.schema_version == 21
+    assert kw_override_schema.aliases == ("NewAlias",)
+
+    v_cfg = ValidatorConfig(registry={"MyAdd": cfg_schema}, strict=True)
+    v_from_cfg = Validator(v_cfg)
+    assert v_from_cfg.level is ValidationLevel.STRICT
+    assert "MyAdd" in v_from_cfg.registry
+
+    v_overridden = Validator(v_cfg, strict=False, level=ValidationLevel.LENIENT)
+    assert v_overridden.level is ValidationLevel.LENIENT

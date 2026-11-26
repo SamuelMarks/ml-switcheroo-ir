@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typing
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 import typing_extensions
 
@@ -42,7 +43,8 @@ from ml_switcheroo_ir.schema.mlir_registry import (
 )
 from ml_switcheroo_ir.schema.onnx_registry import ONNX_REGISTRY, OpSchema
 from ml_switcheroo_ir.schema.stablehlo import STABLEHLO_REGISTRY
-from ml_switcheroo_ir.typeclasses.outcome import Invalid, Valid, Validation
+from ml_switcheroo_ir.typeclasses.algebra import NonEmpty
+from ml_switcheroo_ir.typeclasses.outcome import Validation, from_error_sequence
 from ml_switcheroo_ir.types import AttributeValue, DType, TensorSpec, describe_value_type
 from ml_switcheroo_ir.validation.core import (
     CORE_MLIR_DIALECTS,
@@ -71,6 +73,8 @@ from ml_switcheroo_ir.validation.quantization import validate_quantization_node
 
 __all__ = [
     "Validator",
+    "ValidatorConfig",
+    "ValidatorKwargs",
     "check_attribute_type_value",
 ]
 
@@ -314,32 +318,81 @@ _SECONDARY_CATALOG_BY_DOMAIN: typing.Final[dict[str, DialectCatalogWitness[OpSch
 }
 
 
+@dataclass(frozen=True)
+class ValidatorConfig:
+    """Immutable configuration struct for ``Validator`` construction.
+
+    Attributes:
+        registry (Mapping[str, OpSchema] | None): Primary ONNX/canonical operator registry.
+        custom_registry (Mapping[str, OpSchema] | None): Custom operator registry override.
+        stablehlo_registry (Mapping[str, OpSchema] | None): StableHLO operator registry override.
+        mlir_registry (Mapping[str, OpSchema] | None): Core MLIR operator registry override.
+        state_registry (Mapping[str, OpSchema] | None): State-mutation operator registry override.
+        level (ValidationLevel): Minimum diagnostic severity threshold.
+        strict (bool): Convenience flag promoting ``level`` to ``ValidationLevel.STRICT``.
+        grounding_validator (GroundingValidator | None): Optional snapshot grounding validator.
+    """
+
+    registry: Mapping[str, OpSchema] | None = None
+    custom_registry: Mapping[str, OpSchema] | None = None
+    stablehlo_registry: Mapping[str, OpSchema] | None = None
+    mlir_registry: Mapping[str, OpSchema] | None = None
+    state_registry: Mapping[str, OpSchema] | None = None
+    level: ValidationLevel = ValidationLevel.WARNING
+    strict: bool = False
+    grounding_validator: GroundingValidator | None = None
+
+
+class ValidatorKwargs(typing_extensions.TypedDict, total=False):
+    """Typed keyword options accepted by ``Validator.__init__`` alongside ``ValidatorConfig``.
+
+    Attributes:
+        registry (Mapping[str, OpSchema] | None): Primary ONNX/canonical operator registry.
+        custom_registry (Mapping[str, OpSchema] | None): Custom operator registry override.
+        stablehlo_registry (Mapping[str, OpSchema] | None): StableHLO operator registry override.
+        mlir_registry (Mapping[str, OpSchema] | None): Core MLIR operator registry override.
+        state_registry (Mapping[str, OpSchema] | None): State-mutation operator registry override.
+        level (ValidationLevel): Minimum diagnostic severity threshold.
+        strict (bool): Convenience flag promoting ``level`` to ``ValidationLevel.STRICT``.
+        grounding_validator (GroundingValidator | None): Optional snapshot grounding validator.
+    """
+
+    registry: Mapping[str, OpSchema] | None
+    custom_registry: Mapping[str, OpSchema] | None
+    stablehlo_registry: Mapping[str, OpSchema] | None
+    mlir_registry: Mapping[str, OpSchema] | None
+    state_registry: Mapping[str, OpSchema] | None
+    level: ValidationLevel
+    strict: bool
+    grounding_validator: GroundingValidator | None
+
+
 class Validator:
     """Validates LogicalGraph and LogicalNode instances against schemas without mutating inputs by default."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
-        registry: Mapping[str, OpSchema] | None = None,
-        custom_registry: Mapping[str, OpSchema] | None = None,
-        stablehlo_registry: Mapping[str, OpSchema] | None = None,
-        mlir_registry: Mapping[str, OpSchema] | None = None,
-        state_registry: Mapping[str, OpSchema] | None = None,
-        level: ValidationLevel = ValidationLevel.WARNING,
-        strict: bool = False,
-        grounding_validator: GroundingValidator | None = None,
+        config: ValidatorConfig | None = None,
+        **kwargs: typing_extensions.Unpack[ValidatorKwargs],
     ) -> None:
-        """Initialize the validator with configurable registries and severity thresholds.
+        """Initialize the validator from ``ValidatorConfig`` and/or typed keyword overrides.
 
         Args:
-            registry (Mapping[str, OpSchema] | None): The operator registry to use (default: ONNX_REGISTRY).
-            custom_registry (Mapping[str, OpSchema] | None): Custom operator registry (default: CUSTOM_OPS_REGISTRY).
-            stablehlo_registry (Mapping[str, OpSchema] | None): StableHLO registry (default: STABLEHLO_REGISTRY).
-            mlir_registry (Mapping[str, OpSchema] | None): Core MLIR registry (default: MLIR_REGISTRY).
-            state_registry (Mapping[str, OpSchema] | None): State mutation registry (default: STATE_OPS_REGISTRY).
-            level (ValidationLevel): Validation severity threshold (default: ValidationLevel.WARNING).
-            strict (bool): Convenience flag; if True, sets level to ValidationLevel.STRICT.
-            grounding_validator (GroundingValidator | None): Optional grounding validator for snapshot verification.
+            config (ValidatorConfig | None): Optional frozen configuration struct.
+            **kwargs (typing_extensions.Unpack[ValidatorKwargs]): Backwards-compatible keyword overrides.
         """
+        base = config if config is not None else ValidatorConfig()
+        registry = kwargs["registry"] if "registry" in kwargs else base.registry
+        custom_registry = kwargs["custom_registry"] if "custom_registry" in kwargs else base.custom_registry
+        stablehlo_registry = kwargs["stablehlo_registry"] if "stablehlo_registry" in kwargs else base.stablehlo_registry
+        mlir_registry = kwargs["mlir_registry"] if "mlir_registry" in kwargs else base.mlir_registry
+        state_registry = kwargs["state_registry"] if "state_registry" in kwargs else base.state_registry
+        level = kwargs["level"] if "level" in kwargs else base.level
+        strict = kwargs["strict"] if "strict" in kwargs else base.strict
+        grounding_validator = (
+            kwargs["grounding_validator"] if "grounding_validator" in kwargs else base.grounding_validator
+        )
+
         self.registry: Mapping[str, OpSchema] = ONNX_REGISTRY if registry is None else registry
         self.custom_registry: Mapping[str, OpSchema] = (
             CUSTOM_OPS_REGISTRY if custom_registry is None else custom_registry
@@ -871,7 +924,7 @@ class Validator:
         self,
         graph: LogicalGraph,
         populate_defaults: bool = False,
-    ) -> Validation[tuple[ValidationError, ...], ProvenGraph[SchemaValidPhase]]:
+    ) -> Validation[NonEmpty[ValidationError], ProvenGraph[SchemaValidPhase]]:
         """Applicatively validate ``graph`` without short-circuiting and mint ``ProvenGraph[SchemaValidPhase]``.
 
         Args:
@@ -879,16 +932,18 @@ class Validator:
             populate_defaults (bool): Whether to populate missing default attributes on the cloned snapshot.
 
         Returns:
-            Validation[tuple[ValidationError, ...], ProvenGraph[SchemaValidPhase]]:
+            Validation[NonEmpty[ValidationError], ProvenGraph[SchemaValidPhase]]:
                 ``Valid`` proven graph when zero diagnostics pass active ``self.level`` filter,
-                or ``Invalid`` tuple of all accumulated ``ValidationError`` items.
+                or ``Invalid`` non-empty batch of all accumulated ``ValidationError`` items.
         """
         cloned = graph.clone()
         composite = combine_rules(self.build_graph_rules(populate_defaults=populate_defaults), name="validate_graph")
         errs = errors_from_validation(composite.run(cloned))
-        if errs:
-            return Invalid(tuple(errs))
-        return Valid(ProvenGraph(graph=cloned, ordered_nodes=tuple(cloned.nodes.values())))
+        proven: ProvenGraph[SchemaValidPhase] = ProvenGraph.mint(
+            cloned,
+            ordered_nodes=tuple(cloned.nodes.values()),
+        )
+        return from_error_sequence(errs, proven)
 
     def validate_vopd_pairing(self, opX: LogicalNode, opY: LogicalNode) -> list[ValidationError]:
         """Validate AMD RDNA3 / GFX11 dual-issue VOPD instruction pairing rules.

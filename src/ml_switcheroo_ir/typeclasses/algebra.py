@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import functools
 import typing
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
 import typing_extensions
 
 _T = typing.TypeVar("_T")
+_U = typing.TypeVar("_U")
 _A = typing.TypeVar("_A")
 _B = typing.TypeVar("_B")
 _K = typing.TypeVar("_K")
@@ -31,6 +32,7 @@ __all__ = [
     "INT_SEMIRING",
     "INT_SUM_MONOID",
     "Monoid",
+    "NonEmpty",
     "Ord",
     "Ordering",
     "Ring",
@@ -52,6 +54,10 @@ __all__ = [
     "lexical_pair_ord",
     "max_semigroup",
     "min_semigroup",
+    "nonempty_eq",
+    "nonempty_hash",
+    "nonempty_ord",
+    "nonempty_semigroup",
     "pair_hash_witness",
     "product_monoid",
     "tuple_hash_witness",
@@ -588,6 +594,207 @@ def min_semigroup(ord_witness: Ord[_T]) -> Semigroup[_T]:
         Semigroup[_T]: Minimum-selecting semigroup witness.
     """
     return Semigroup(combine=ord_witness.min_val)
+
+
+@dataclass(frozen=True)
+class NonEmpty(typing.Generic[_T]):
+    """Guaranteed non-empty immutable sequence corresponding to Haskell ``Data.List.NonEmpty``.
+
+    Makes empty error collections such as ``Invalid(())`` statically unrepresentable.
+
+    Attributes:
+        head (_T): Guaranteed first element.
+        tail (tuple[_T, ...]): Zero or more trailing elements.
+    """
+
+    head: _T
+    tail: tuple[_T, ...] = ()
+
+    def __iter__(self) -> Iterator[_T]:
+        """Yield ``head`` followed by each element of ``tail``.
+
+        Yields:
+            _T: Elements of the non-empty sequence in order.
+        """
+        yield self.head
+        yield from self.tail
+
+    def __len__(self) -> int:
+        """Return the positive element count ``1 + len(self.tail)``.
+
+        Returns:
+            int: Strictly positive length (>= 1).
+        """
+        return 1 + len(self.tail)
+
+    def to_tuple(self) -> tuple[_T, ...]:
+        """Materialize ``(self.head, *self.tail)`` as a standard homogeneous tuple.
+
+        Returns:
+            tuple[_T, ...]: Non-empty tuple representation.
+        """
+        return (self.head, *self.tail)
+
+    @classmethod
+    def singleton(cls, item: _T) -> NonEmpty[_T]:
+        """Construct a single-element ``NonEmpty`` sequence.
+
+        Args:
+            item (_T): Sole element.
+
+        Returns:
+            NonEmpty[_T]: ``NonEmpty(head=item, tail=())``.
+        """
+        return cls(head=item, tail=())
+
+    @classmethod
+    def from_sequence(cls, items: Sequence[_T]) -> NonEmpty[_T] | None:
+        """Construct ``NonEmpty[_T]`` from ``items`` or return ``None`` when ``items`` is empty.
+
+        Args:
+            items (Sequence[_T]): Candidate sequence of elements.
+
+        Returns:
+            NonEmpty[_T] | None: Non-empty wrapper if ``len(items) >= 1``, else ``None``.
+        """
+        if not items:
+            return None
+        return cls(head=items[0], tail=tuple(items[1:]))
+
+    def map(self, fn: Callable[[_T], _U]) -> NonEmpty[_U]:
+        """Covariantly map ``fn`` across ``head`` and ``tail`` (``Functor`` on ``NonEmpty``).
+
+        Args:
+            fn (Callable[[_T], _U]): Pure element transformation function.
+
+        Returns:
+            NonEmpty[_U]: Mapped non-empty sequence of identical length.
+        """
+        return NonEmpty(head=fn(self.head), tail=tuple(fn(x) for x in self.tail))
+
+
+@typing.overload
+def nonempty_semigroup() -> Semigroup[NonEmpty[_T]]:
+    """Construct the free ``Semigroup`` over ``NonEmpty[_T]`` via contextual type inference.
+
+    Returns:
+        Semigroup[NonEmpty[_T]]: Associative non-empty concatenation semigroup witness.
+    """
+
+
+@typing.overload
+def nonempty_semigroup(dummy_type: type[_T]) -> Semigroup[NonEmpty[_T]]:
+    """Construct the free ``Semigroup`` over ``NonEmpty[_T]`` parameterized by ``dummy_type``.
+
+    Args:
+        dummy_type (type[_T]): Phantom element type token guiding static type inference.
+
+    Returns:
+        Semigroup[NonEmpty[_T]]: Associative non-empty concatenation semigroup witness.
+    """
+
+
+def nonempty_semigroup(dummy_type: type[_T] | None = None) -> Semigroup[NonEmpty[_T]]:
+    """Construct the free ``Semigroup`` over ``NonEmpty[_T]`` via concatenation.
+
+    Args:
+        dummy_type (type[_T] | None): Optional phantom element type token guiding static type inference.
+
+    Returns:
+        Semigroup[NonEmpty[_T]]: Associative non-empty concatenation semigroup witness.
+    """
+    del dummy_type
+
+    def _concat_nonempty(lhs: NonEmpty[_T], rhs: NonEmpty[_T]) -> NonEmpty[_T]:
+        """Concatenate two ``NonEmpty`` sequences preserving order.
+
+        Args:
+            lhs (NonEmpty[_T]): Left non-empty sequence.
+            rhs (NonEmpty[_T]): Right non-empty sequence.
+
+        Returns:
+            NonEmpty[_T]: Combined non-empty sequence.
+        """
+        return NonEmpty(head=lhs.head, tail=(*lhs.tail, rhs.head, *rhs.tail))
+
+    return Semigroup(combine=_concat_nonempty)
+
+
+def nonempty_eq(elem_eq: Eq[_T]) -> Eq[NonEmpty[_T]]:
+    """Lift an element ``Eq[_T]`` witness to ``Eq[NonEmpty[_T]]``.
+
+    Args:
+        elem_eq (Eq[_T]): Equivalence witness for individual elements.
+
+    Returns:
+        Eq[NonEmpty[_T]]: Elementwise equivalence witness over ``NonEmpty[_T]``.
+    """
+
+    def _eq_ne(lhs: NonEmpty[_T], rhs: NonEmpty[_T]) -> bool:
+        """Compare two ``NonEmpty`` sequences elementwise.
+
+        Args:
+            lhs (NonEmpty[_T]): Left sequence.
+            rhs (NonEmpty[_T]): Right sequence.
+
+        Returns:
+            bool: True iff lengths match and every corresponding element pair is equal.
+        """
+        if len(lhs.tail) != len(rhs.tail):
+            return False
+        if not elem_eq.eq(lhs.head, rhs.head):
+            return False
+        return all(elem_eq.eq(a, b) for a, b in zip(lhs.tail, rhs.tail))
+
+    return Eq(eq=_eq_ne)
+
+
+def nonempty_ord(elem_ord: Ord[_T]) -> Ord[NonEmpty[_T]]:
+    """Lift an element ``Ord[_T]`` witness to lexicographic ``Ord[NonEmpty[_T]]``.
+
+    Args:
+        elem_ord (Ord[_T]): Total order witness for individual elements.
+
+    Returns:
+        Ord[NonEmpty[_T]]: Lexicographic total order witness over ``NonEmpty[_T]``.
+    """
+
+    def _cmp_ne(lhs: NonEmpty[_T], rhs: NonEmpty[_T]) -> Ordering:
+        """Compare two ``NonEmpty`` sequences lexicographically.
+
+        Args:
+            lhs (NonEmpty[_T]): Left sequence.
+            rhs (NonEmpty[_T]): Right sequence.
+
+        Returns:
+            Ordering: Lexicographic comparison outcome.
+        """
+        head_rel = elem_ord.compare(lhs.head, rhs.head)
+        if head_rel is not Ordering.EQ:
+            return head_rel
+        for a, b in zip(lhs.tail, rhs.tail):
+            step = elem_ord.compare(a, b)
+            if step is not Ordering.EQ:
+                return step
+        return INT_ORD.compare(len(lhs.tail), len(rhs.tail))
+
+    return Ord(eq_witness=nonempty_eq(elem_ord.eq_witness), compare=_cmp_ne)
+
+
+def nonempty_hash(elem_hash: HashableWitness[_T]) -> HashableWitness[NonEmpty[_T]]:
+    """Lift an element ``HashableWitness[_T]`` to ``HashableWitness[NonEmpty[_T]]``.
+
+    Args:
+        elem_hash (HashableWitness[_T]): Hashable witness for individual elements.
+
+    Returns:
+        HashableWitness[NonEmpty[_T]]: Coherent hashable witness over ``NonEmpty[_T]``.
+    """
+    tup_hash = tuple_hash_witness(elem_hash)
+    return HashableWitness(
+        eq_witness=nonempty_eq(elem_hash.eq_witness),
+        hash_value=lambda ne: tup_hash.hash_value(ne.to_tuple()),
+    )
 
 
 @dataclass(frozen=True)

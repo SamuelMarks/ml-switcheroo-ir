@@ -529,3 +529,57 @@ def test_propagate_concat_and_slice_symbolic_negative_branches() -> None:
     res_unshaped = propagate_shapes_and_constants(g_unshaped)
     for nid, _ in unshaped_ops:
         assert res_unshaped.nodes[nid].shape_metadata is None
+
+
+def test_extensible_shape_inference_rule_registry_and_monoid() -> None:
+    """Test ShapeInferenceRuleRegistry, DEFAULT_SHAPE_RULE_REGISTRY, and SHAPE_RULE_REGISTRY_MONOID."""
+    from ml_switcheroo_ir import DimensionValue
+    from ml_switcheroo_ir.identifiers import NonNegativeInt, OpName, require_non_bool_int
+    from ml_switcheroo_ir.shapes import (
+        DEFAULT_SHAPE_RULE_REGISTRY,
+        SHAPE_RULE_REGISTRY_MONOID,
+        ShapeInferenceRuleRegistry,
+        ShapeTransferContext,
+        ShapeTransferWitness,
+        infer_op_output_shape,
+        infer_op_output_shape_result,
+    )
+    from ml_switcheroo_ir.typeclasses import Ok
+
+    sample_dim: DimensionValue = None
+    assert sample_dim is None
+
+    empty_reg = ShapeInferenceRuleRegistry.empty()
+    assert len(empty_reg) == 0
+    assert "Add" not in empty_reg
+    assert empty_reg.lookup("Add") is None
+    assert len(DEFAULT_SHAPE_RULE_REGISTRY) > 0
+    assert "Add" in DEFAULT_SHAPE_RULE_REGISTRY
+    assert DEFAULT_SHAPE_RULE_REGISTRY.lookup("Add") is not None
+
+    def _double_last_dim(ctx: ShapeTransferContext) -> tuple[int, ...] | None:
+        """Double the trailing integer dimension for testing custom shape rules.
+
+        Args:
+            ctx (ShapeTransferContext): Shape transfer context.
+
+        Returns:
+            tuple[int, ...] | None: Doubled shape or None.
+        """
+        first = ctx.input_shapes[0] if ctx.input_shapes else None
+        if first is None or not isinstance(first[0], int) or not isinstance(first[-1], int):
+            return None
+        return (first[0], first[-1] * 2)
+
+    custom_reg = DEFAULT_SHAPE_RULE_REGISTRY.with_rule("CustomDouble", _double_last_dim)
+    witness = ShapeTransferWitness(
+        op_names=(OpName("CustomTriple"),),
+        min_arity=NonNegativeInt(require_non_bool_int(1)),
+        transfer_fn=lambda _ctx: (3, 3, 3),
+    )
+    extended_reg = custom_reg.extend(witness)
+    merged_reg = SHAPE_RULE_REGISTRY_MONOID.combine(SHAPE_RULE_REGISTRY_MONOID.empty(), extended_reg)
+
+    assert infer_op_output_shape("CustomDouble", [(2, 8)], registry=merged_reg) == (2, 16)
+    assert infer_op_output_shape_result("CustomTriple", [(2, 8)], registry=merged_reg) == Ok((3, 3, 3))
+    assert infer_op_output_shape("UnknownCustomOp", [(2, 8)], registry=merged_reg) is None
